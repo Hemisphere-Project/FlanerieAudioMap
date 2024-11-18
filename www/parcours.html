@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="fr" data-bs-theme="dark">
+<head>
+    <title>Flanerie</title>
+    <meta charset="utf-8">
+    <link rel="stylesheet" href="/libs/bootstrap-5.3.3/css/bootstrap.min.css">
+    <link rel="stylesheet" href="/libs/bootstrap-icons-1.11.3/font/bootstrap-icons.css">
+    <link rel="stylesheet" href="/libs/leaflet-1.9.4/leaflet.css">
+    <link rel="stylesheet" href="/assets/client.css">
+
+    <script src="/libs/jquery-3.7.1.min.js"></script>
+    <script src="/libs/bootstrap-5.3.3/js/bootstrap.bundle.min.js"></script>
+    <script src="/libs/leaflet-1.9.4/leaflet.js"></script>
+    <script src="/libs/leaflet.editable.js"></script>
+    <script src="/libs/howler-2.2.4/howler.min.js"></script>
+
+</head>
+<body>
+
+    <!-- Toast -->
+    <div class="position-fixed top-0 end-0 p-3" style="z-index: 1000">
+        <div id="successToast" class="toast hide align-items-center text-white bg-success border-0" role="alert" data-bs-autohide="true" data-bs-delay="2000">
+            <div class="d-flex">
+                <div class="toast-body">Parcours enregistré !</div>
+                <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+            </div>
+        </div>
+        <div id="errorToast" class="toast hide align-items-center text-white bg-danger border-0" role="alert" data-bs-autohide="true" data-bs-delay="2000">
+            <div class="d-flex">
+                <div class="toast-body">Erreur lors de l'enregistrement..</div>
+                <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+            </div>
+        </div>
+    </div>
+
+    
+
+    <div class="row">
+        <div class="col-1"></div>
+        <div class="col-10 text-center p-3"><h1 id="title">Flanerie Parcours</h1></div>
+        <div class="col-1"></div>
+    </div>
+
+
+    <div class="row" style="min-height: 70%;">
+        <div class="col-1"></div>
+        <div class="col-3 p-3">
+
+            <div class="form-group row">
+                <label for="pName" class="col-sm-3 col-form-label">Nom</label>
+                <div class="col-sm-9">
+                    <input type="text" class="form-control" id="pName">
+                </div>
+            </div>
+            <div class="form-group row">
+                <label for="pStatus" class="col-sm-3 col-form-label">Status</label>
+                <div class="col-sm-9">
+                    <input type="text" readonly class="form-control-plaintext" id="pStatus" value="">
+                </div>
+            </div>
+            <div class="form-group row">
+                <label for="pCoords" class="col-sm-3 col-form-label">
+                    <a href="https://www.openstreetmap.org/" id="pCoordsLink" target="_blank">Coords</a>
+                </label>
+                <div class="col-sm-7">
+                    <input type="text" class="form-control" id="pCoords">
+                </div>
+                <div class="col-sm-2">
+                    <button id="setCoords" class="btn btn-sm btn-secondary p-1"><i class="bi bi-arrow-left"></i> set</button>
+                </div>
+            </div>
+            
+            <br />
+            <div class="card" style="width: 18rem;">
+                <div class="card-header">Etapes</div>
+                <ul id="pSteps"  class="list-group list-group-flush">
+                    <!-- <li class="list-group-item">Vestibulum at eros</li> -->
+                </ul>
+            </div>
+            <br />
+            <div class="card" style="width: 18rem;">
+                <div class="card-header">Zones</div>
+                <ul id="pZones"  class="list-group list-group-flush">
+                    <!-- <li class="list-group-item">Cras justo odio</li> -->
+                </ul>
+            </div>
+
+
+        </div>
+        <div class="col-7">
+            <div id="map"></div>
+        </div>
+        <div class="col-1"></div>
+    </div>
+    
+    <div class="row">
+        <div class="col-1"></div>
+        <div class="col-10 text-center p-3"><div id="logs"></div></div>
+        <div class="col-1"></div>
+    </div>
+    
+    
+    
+
+    <script src="/assets/common.js"></script>
+    <script src="/assets/parcours.js"></script>
+</body>
+</html>

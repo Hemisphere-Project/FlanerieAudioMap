@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="fr" data-bs-theme="dark">
+<head>
+    <title>Flanerie</title>
+    <meta charset="utf-8">
+    <link rel="stylesheet" href="/libs/bootstrap-5.3.3/css/bootstrap.min.css">
+    <link rel="stylesheet" href="/libs/leaflet-1.9.4/leaflet.css">
+    <link rel="stylesheet" href="/assets/client.css">
+
+    <script src="/libs/jquery-3.7.1.min.js"></script>
+    <script src="/libs/bootstrap-5.3.3/js/bootstrap.bundle.min.js"></script>
+    <script src="/libs/leaflet-1.9.4/leaflet.js"></script>
+    <script src="/libs/howler-2.2.4/howler.min.js"></script>
+
+</head>
+<body>
+    <div id="title">
+        <h1>Flanerie Parcours</h1>
+    </div>
+    
+    <div id="main">
+        <button id="refresh" class="btn btn-primary">Start and calibrate</button>
+        <button id="setstart" class="btn btn-secondary">Set starting point</button>
+
+        <table>
+            <tr><th>Time</th><td><span id="time"></span></td></tr>
+            <tr><th>Coords</th><td><span id="lat"></span> / <span id="long"></span></td></tr>
+            <tr><th>Accuracy</th><td><span id="prec"></span></td></tr>
+            <tr><th>Distance</th><td><span id="distance"></span></td></tr>
+            <tr><th>Speed</th><td><span id="speed"></span></td></tr>
+        </table>
+    </div>
+
+    <div id="logs"></div>
+
+    <div id="map"></div>
+
+    <div id="players">
+        <table id="players">
+            <tr><td>Instrumental 1</td><td><span id="instru1-volume"></span></td></tr>
+            <tr><td>Instrumental 2</td><td><span id="instru2-volume"></span></td></tr>
+            <tr><td>Voice</td><td><span id="voice-volume"></span></td></tr>
+        </table>
+    </div>
+
+    <script src="/assets/common.js"></script>
+    <script src="/assets/client.js"></script>
+</body>
+</html>

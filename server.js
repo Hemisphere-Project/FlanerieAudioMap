@@ -20,14 +20,88 @@ app.use(express.static(path.join(__dirname, 'www')));
 app.use('/media', express.static(path.join(__dirname, 'media')));
 
 // Default endpoint
-app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'www', 'index.html'));
+app.get('/control', (req, res) => {
+    res.sendFile(path.join(__dirname, 'www', 'list.html'));
 }); 
+
+// Proto endpoint
+app.get('/proto', (req, res) => {
+    res.sendFile(path.join(__dirname, 'www', 'proto.html'));
+});
+
+// List parcours
+app.get('/list', (req, res) => {
+  // list of parcours name and status based on json files in parcours folder
+  const parcoursFolder = './parcours/';
+  const parcours = [];
+  fs.readdirSync(parcoursFolder).forEach(file => {
+    const parcoursFileName = file.split('.json')[0];
+    const parcoursContent = JSON.parse(fs.readFileSync(parcoursFolder + file, 'utf8'));
+    parcours.push({file: parcoursFileName, name: parcoursContent.name, status: parcoursContent.status});
+  });
+  res.json(parcours);  
+})
+
+// new parcours
+app.post('/newParcours', express.json(), (req, res) => {
+  const name = req.body.name;
+  const fileName = name.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+
+  if (fileName.length < 3) {
+    res.status(400).json({error: 'Name too short'});
+    return;
+  }
+
+  const filePath = './parcours/' + fileName + '.json';
+
+
+  const content = {name: name, status: 'draft'};
+
+  fs.writeFileSync(filePath, JSON.stringify(content));
+  res.status(200).send();
+})
+
+// delete parcours
+app.post('/deleteParcours', express.json(), (req, res) => {
+  const fileName = req.body.file;
+  const filePath = './parcours/' + fileName + '.json';
+  fs.unlinkSync(filePath);
+  res.status(200).send();
+})
+
+// edit parcours
+app.get('/control/p/:file', (req, res) => {
+  const fileName = req.params.file;
+  const filePath = './parcours/' + fileName + '.json';
+  const content = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  res.sendFile(path.join(__dirname, 'www', 'parcours.html'));
+})
+
+// get parcours json
+app.get('/control/p/:file/json', (req, res) => {
+  const fileName = req.params.file;
+  const filePath = './parcours/' + fileName + '.json';
+  const content = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  res.json(content);
+})
+
+// save parcours json
+app.post('/control/p/:file/json', express.json(), (req, res) => {
+  try {
+    const fileName = req.params.file;
+    const filePath = './parcours/' + fileName + '.json';
+    const content = req.body;
+    fs.writeFileSync(filePath, JSON.stringify(content));
+    res.status(200).send();
+  } catch (error) {
+    res.status(500).json({error: error.message});
+  }
+})
 
 // Start the server
 https.createServer({
     key: fs.readFileSync('certs/server.key'),
-    cert: fs.readFileSync('certs/server.cert')
+    cert: fs.readFileSync('certs/server.crt')
   }, app).listen(port, () => {
     console.log('Listening on port ' + port);
 })
