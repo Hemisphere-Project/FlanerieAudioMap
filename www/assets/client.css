@@ -31,6 +31,7 @@ html, body {
 
 h1 {
     margin-top: 0;
+    line-height: 1;
 }
 
 #refresh, #setstart {
@@ -48,4 +49,25 @@ th, td {
 .round-icon {
     border-radius: 50%;
     background-color: red;
+}
+
+path.leaflet-interactive:focus {
+    outline: none;
+}
+
+path.leaflet-interactive.selected {
+    outline: rgb(0, 0, 0) dotted 1px;
+}
+
+#pZones li .btn, #pSteps li .btn {
+    display: none;
+}
+
+#pZones li.active .btn, #pSteps li.active .btn {
+    display: inline-block;
+}
+
+#pZones li.active, #pSteps li.active {
+    background-color: #555;
+    border: 0px;
 }

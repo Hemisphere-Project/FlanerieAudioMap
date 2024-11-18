@@ -24,8 +24,7 @@ function toastError(txt) {
 // current file from url
 const parcoursID = window.location.pathname.split('/').pop()
 var parcours = {}
-var markersSTEPS = []
-var markersZONES = []
+var markers = []
 
 // LOAD
 //
@@ -51,13 +50,13 @@ function load() {
                 }
                 else document.getElementById('pCoords').value = ''
                 document.getElementById('pCoordsLink').href = 'https://www.openstreetmap.org/#map=' + data.coords 
+
+                // remove all markers from map
+                for (let i = 0; i < markers.length; i++) map.removeLayer(markers[i])
+                markers = []
                 
                 if (data.zones) {
                     document.getElementById('pZones').innerHTML = ""
-
-                    // remove all markers from map
-                    for (let i = 0; i < markersZONES.length; i++) map.removeLayer(markersZONES[i])
-                    markersZONES = []
 
                     data.zones.forEach( (zone, i) => {
 
@@ -65,8 +64,46 @@ function load() {
                         const li = document.createElement('li')
                         li.classList.add('list-group-item')
                         li.innerHTML = `Zone ${i}`
-                        li.onclick = () => gotoPoint(zone.lat, zone.lon)
+                        li.onclick = () => {
+                            gotoPoint(zone.lat, zone.lon)
+                            selectPoint('zones', i)
+                        }
                         document.getElementById('pZones').appendChild(li)
+
+                        // add delete button
+                        const button = document.createElement('button')
+                        button.classList.add('btn', 'btn-sm', 'btn-danger', 'float-end', 'p-1')
+                        button.innerHTML = '<i class="bi bi-trash"></i>'
+                        button.onclick = () => {
+                            if (confirm('Supprimer la zone ' + i + ' ?')) {
+                                parcours.zones.splice(i, 1)
+                                save().then(load)
+                            }
+                        }
+                        li.appendChild(button)
+
+                        // add up/down buttons
+                        const buttonUp = document.createElement('button')
+                        buttonUp.classList.add('btn', 'btn-sm', 'btn-info', 'float-end', 'p-1', 'me-1')
+                        buttonUp.innerHTML = '<i class="bi bi-arrow-up"></i>'
+                        buttonUp.onclick = () => {
+                            if (i > 0) {
+                                [parcours.zones[i], parcours.zones[i - 1]] = [parcours.zones[i - 1], parcours.zones[i]]
+                                save().then(load).then(() => selectPoint('zones', i - 1))
+                            }
+                        }
+                        li.appendChild(buttonUp)
+
+                        const buttonDown = document.createElement('button')
+                        buttonDown.classList.add('btn', 'btn-sm', 'btn-info', 'float-end', 'p-1', 'me-1')
+                        buttonDown.innerHTML = '<i class="bi bi-arrow-down"></i>'
+                        buttonDown.onclick = () => {
+                            if (i < parcours.zones.length - 1) {
+                                [parcours.zones[i], parcours.zones[i + 1]] = [parcours.zones[i + 1], parcours.zones[i]]
+                                save().then(load).then(() => selectPoint('zones', i + 1))
+                            }
+                        }
+                        li.appendChild(buttonDown)                     
 
                         // Add zones markers on map
                         const marker = L.circle([zone.lat, zone.lon],
@@ -77,11 +114,13 @@ function load() {
                                 radius: zone.radius,
                                 type: 'zones',
                                 index: i,
+                                selected: false,
                             })
                             .addTo(map)
                         marker.enableEdit()
                         marker.bindTooltip("Zone " + i);
-                        markersZONES.push(marker)
+                        marker.on('click', () => { selectPoint('zones', i) })
+                        markers.push(marker)
                     })
                 }
 
@@ -89,18 +128,52 @@ function load() {
 
                     document.getElementById('pSteps').innerHTML = ""
 
-                    // remove all markers from map
-                    for (let i = 0; i < markersSTEPS.length; i++) map.removeLayer(markersSTEPS[i])
-                    markersSTEPS = []
-
                     data.steps.forEach( (step, i) => {
 
                         // Fill steps list
                         const li = document.createElement('li')
                         li.classList.add('list-group-item')
                         li.innerHTML = `Etape ${i}`
-                        li.onclick = () => gotoPoint(step.lat, step.lon)
+                        li.onclick = () => {
+                            gotoPoint(step.lat, step.lon)
+                            selectPoint('steps', i)
+                        }
                         document.getElementById('pSteps').appendChild(li)
+
+                        // add delete button
+                        const button = document.createElement('button')
+                        button.classList.add('btn', 'btn-sm', 'btn-danger', 'float-end', 'p-1')
+                        button.innerHTML = '<i class="bi bi-trash"></i>'
+                        button.onclick = () => {
+                            if (confirm('Supprimer l\'étape ' + i + ' ?')) {
+                                parcours.steps.splice(i, 1)
+                                save().then(load)
+                            }
+                        }
+                        li.appendChild(button)
+
+                        // add up/down buttons
+                        const buttonUp = document.createElement('button')
+                        buttonUp.classList.add('btn', 'btn-sm', 'btn-info', 'float-end', 'p-1', 'me-1')
+                        buttonUp.innerHTML = '<i class="bi bi-arrow-up"></i>'
+                        buttonUp.onclick = () => {
+                            if (i > 0) {
+                                [parcours.steps[i], parcours.steps[i - 1]] = [parcours.steps[i - 1], parcours.steps[i]]
+                                save().then(load).then(() => selectPoint('steps', i - 1))
+                            }
+                        }
+                        li.appendChild(buttonUp)
+
+                        const buttonDown = document.createElement('button')
+                        buttonDown.classList.add('btn', 'btn-sm', 'btn-info', 'float-end', 'p-1', 'me-1')
+                        buttonDown.innerHTML = '<i class="bi bi-arrow-down"></i>'
+                        buttonDown.onclick = () => {
+                            if (i < parcours.steps.length - 1) {
+                                [parcours.steps[i], parcours.steps[i + 1]] = [parcours.steps[i + 1], parcours.steps[i]]
+                                save().then(load).then(() => selectPoint('steps', i + 1))
+                            }
+                        }
+                        li.appendChild(buttonDown)
 
                         // Add steps markers on map
                         const marker = L.circle([step.lat, step.lon],
@@ -111,11 +184,13 @@ function load() {
                                 radius: step.radius,
                                 type: 'steps',
                                 index: i,
+                                selected: false,
                             })
                             .addTo(map)
                         marker.enableEdit()
                         marker.bindTooltip("Etape " + i);
-                        markersSTEPS.push(marker)
+                        marker.on('click', () => { selectPoint('steps', i) })
+                        markers.push(marker)
                     })
 
                 }
@@ -189,7 +264,11 @@ map.on('editable:vertex:dragend', function (e) {
     try {
         parcours[marker.options.type][marker.options.index].lat = marker.getLatLng().lat
         parcours[marker.options.type][marker.options.index].lon = marker.getLatLng().lng
+        parcours[marker.options.type][marker.options.index].radius = marker.getRadius()
         save()
+
+        // select the marker
+        selectPoint(marker.options.type, marker.options.index)
     }
     catch (error) {
         console.error(error)
@@ -197,6 +276,7 @@ map.on('editable:vertex:dragend', function (e) {
         load()
     }
 });
+
 
 map.doubleClickZoom.disable(); // disable double click zoom
 
@@ -264,6 +344,31 @@ function addZone(lat, lon) {
 // Goto point
 function gotoPoint(lat, lon) {
     map.setView([lat, lon], 19)
+}
+
+// Select point
+function selectPoint(type, index) {
+    
+    // unsellect all
+    markers.forEach(marker => { 
+        marker.options.selected = false
+        L.DomUtil.removeClass(marker._path, 'selected');
+    })
+    
+    // select the one
+    markers.filter(marker => marker.options.type == type && marker.options.index == index)[0].options.selected = true
+    L.DomUtil.addClass(markers.filter(marker => marker.options.type == type && marker.options.index == index)[0]._path, 'selected');
+
+    // update list
+    document.getElementById('pZones').childNodes.forEach(li => {
+        li.classList.remove('active')
+    })
+    document.getElementById('pSteps').childNodes.forEach(li => {
+        li.classList.remove('active')
+    })
+
+    document.getElementById('p' + type.charAt(0).toUpperCase() + type.slice(1)).childNodes[index].classList.add('active')
+
 }
 
 // // Start point marker
