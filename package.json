@@ -12,6 +12,7 @@
   "dependencies": {
     "dotenv": "^16.4.5",
     "express": "^4.21.0",
+    "express-github-webhook": "^1.0.6",
     "nanoid": "^5.0.7"
   }
 }

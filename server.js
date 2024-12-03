@@ -13,6 +13,9 @@ const app = express();
 // Set the port
 const port = process.env.PORT || 3000;
 
+// Apply Github Hooks
+require('./modules/github-hook.js')(app);
+
 // Set the static path
 app.use(express.static(path.join(__dirname, 'www')));
 
