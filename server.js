@@ -23,6 +23,12 @@ app.use(express.static(path.join(__dirname, 'www')));
 app.use('/media', express.static(path.join(__dirname, 'media')));
 
 // Default endpoint
+// return Hello Flanerie
+app.get("/", (req, res) => {
+    res.send("Hello Flanerie");
+})
+
+// Default endpoint
 app.get('/control', (req, res) => {
     res.sendFile(path.join(__dirname, 'www', 'list.html'));
 }); 
