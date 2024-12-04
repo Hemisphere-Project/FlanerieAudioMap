@@ -324,7 +324,7 @@ function addStep(lat, lon) {
     const step = {
         lat: lat,
         lon: lon,
-        radius: 3,
+        radius: 10,
     }
     if (!parcours.steps) parcours.steps = []
     parcours.steps.push(step)
@@ -336,7 +336,7 @@ function addZone(lat, lon) {
     const zone = {
         lat: lat,
         lon: lon,
-        radius: 10,
+        radius: 3,
     }
     if (!parcours.zones) parcours.zones = []
     parcours.zones.push(zone)

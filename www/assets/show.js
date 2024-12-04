@@ -1,3 +1,20 @@
+// VARS
+
+const ZOOM = 19
+const CROSSFADE_DISTANCE = 10
+const CROSSFADE_DUMP = 4
+const CALIBRATION_TIME = 2
+
+var refreshTimer = null
+var watchId = null
+var firstMeasure = null
+var initialPosition = null
+var lastPosition = null
+var lastTrackPosition = null
+var initializing = true
+
+var instru1 = null
+
 // title click -> back to control
 document.getElementById('title').addEventListener('click', () => {
     window.location.href = '/';
@@ -10,6 +27,7 @@ var markers = []
 
 // LOAD
 //
+
 // Get parcours json
 function load(pID) {
     if (!pID) pID = parcoursID
@@ -94,6 +112,137 @@ map.doubleClickZoom.disable(); // disable double click zoom
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19,
 }).addTo(map)
+
+
+// GEOLOC
+//
+
+// Track line
+var polyline = L.polyline([], {color: 'blue'}).addTo(map)
+
+function startGeoloc() 
+{   
+    if (!instru1) instru1 = new Howl({src: ['/media/instru1.wav'], loop: true})
+
+    document.getElementById('logs').innerHTML = 'Recherche de la position en cours...'
+
+    // load instrumentals , set volume at 0
+    instru1.play()
+    instru1.volume(0)
+
+    if (navigator.geolocation) 
+    {
+        firstMeasure = null
+        initialPosition = null
+        lastPosition = null
+        lastTrackPosition = null
+        initializing = true
+        polyline.setLatLngs([])
+        
+        if (!watchId) watchId = navigator.geolocation.watchPosition(successCallback, errorCallback, {
+            enableHighAccuracy: true,
+            timeout: 10000,
+            maximumAge: 0,
+        })
+    }
+    else document.getElementById('logs').innerHTML = 'La géolocalisation n\'est pas supportée par votre navigateur'
+}
+
+function successCallback(position) 
+{
+    document.getElementById('lat').innerHTML = position.coords.latitude
+    document.getElementById('long').innerHTML = position.coords.longitude
+    document.getElementById('prec').innerHTML = Math.round(position.coords.accuracy, 2) + ' m'
+    document.getElementById('speed').innerHTML = Math.round(position.coords.speed, 2) + ' m/s'
+    document.getElementById('time').innerHTML = new Date(position.timestamp).toLocaleTimeString()
+    
+    // first measure
+    if (!firstMeasure) {
+        firstMeasure = position
+        initialPosition = position
+    }
+    lastPosition = position
+
+    if (!lastTrackPosition || distance(lastTrackPosition, position) > 1) {
+        lastTrackPosition = position
+        polyline.addLatLng([position.coords.latitude, position.coords.longitude])
+    }
+
+    // adjusting initial position during first 10 seconds if accuracy is better
+    if (firstMeasure.timestamp + CALIBRATION_TIME*1000 > position.timestamp) 
+    {
+        if (position.coords.accuracy < initialPosition.coords.accuracy) initialPosition = position
+        document.getElementById('distance').innerHTML = "<i>-</i>"
+        document.getElementById('logs').innerHTML = 'Initialisation en cours..'
+    }
+    // getting distance
+    else {
+
+        // first run
+        if (initializing) {
+            initializing = false
+            document.getElementById('logs').innerHTML = 'Initialisation terminée'
+
+            markerStart.setLatLng([position.coords.latitude, position.coords.longitude])
+            map.setView([position.coords.latitude, position.coords.longitude], ZOOM)
+
+            // On map move: initMap with new map center
+            map.off('move')
+            map.on('move', function() {
+                initialPosition = {
+                    coords: {
+                        latitude: map.getCenter().lat,
+                        longitude: map.getCenter().lng,
+                    }
+                }
+                markerStart.setLatLng([initialPosition.coords.latitude, initialPosition.coords.longitude])
+            })
+
+            // map opacity
+            document.getElementById('map').style.opacity = 1
+            document.getElementById('setstart').style.display = 'block'
+        }
+
+        markerPosition.setLatLng([position.coords.latitude, position.coords.longitude])
+        document.getElementById('logs').innerHTML = 'Position mise à jour'
+
+
+        document.getElementById('distance').innerHTML = Math.round(distance(initialPosition, position), 2) + ' m'
+
+        // set volume according to distance
+        var crossfadeDistance = CROSSFADE_DISTANCE
+        var dist = distance(initialPosition, position)
+        
+        var vol1 = Math.min(1, Math.max(0, 1 - (dist-1) / crossfadeDistance))
+        var vol2 = Math.min(1, Math.max(0, (dist-1) / crossfadeDistance))
+
+        // slow fade
+        var crossFadeDump = CROSSFADE_DUMP
+        vol1 = Math.min(1, Math.max(0, instru1.volume() + (vol1 - instru1.volume()) / crossFadeDump))
+
+
+        instru1.volume(vol1)
+
+        document.getElementById('instru1-volume').innerHTML = Math.round(instru1.volume() * 100) + '%'
+    }
+}
+
+function errorCallback(error) {
+    switch (error.code) {
+      case error.PERMISSION_DENIED:
+        document.getElementById('logs').innerHTML = 'L\'utilisateur a refusé la demande de géolocalisation'
+        break
+      case error.POSITION_UNAVAILABLE:
+        document.getElementById('logs').innerHTML = 'L\'emplacement de l\'utilisateur n\'a pas pu être déterminé'
+        break
+      case error.TIMEOUT:
+        document.getElementById('logs').innerHTML = 'Le service n\'a pas répondu à temps';
+        break
+    }
+    setTimeout(startGeoloc, 5000)
+}
+
+document.getElementById('start').addEventListener('click', startGeoloc)
 
 
 // INIT

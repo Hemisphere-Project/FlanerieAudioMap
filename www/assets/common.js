@@ -1,3 +1,21 @@
+// copy console.log and console.error to $('#logs')
+console._log = console.log
+console.log = function(message) {
+    console._log(message)
+    if (typeof message === 'object') {
+        message = JSON.stringify(message)
+    }
+    $('#logs').append('<p>' + message + '</p>')
+}
+console._error = console.error
+console.error = function(message) {
+    console._error(message) 
+    if (typeof message === 'object') {
+        message = JSON.stringify(message)
+    }
+    $('#logs').append('<p style="color:red">' + message + '</p>')
+}
+
 function post(path, data) {
     return fetch(path, {
         method: 'POST',
