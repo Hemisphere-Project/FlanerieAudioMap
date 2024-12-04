@@ -34,7 +34,7 @@ function load(pID) {
     
     return get('/control/p/' + pID + '/json')
         .then(data => {
-            console.log(data)          
+            // console.log(data)          
             
             if (data && 'name' in data) {
                 parcours = data
@@ -128,25 +128,37 @@ var markerPosition = L.marker([45.7663, 4], {
     }),
 }).addTo(map)
 
-function startGeoloc() 
-{   
-    if (!instru1) instru1 = new Howl({src: ['/media/instru1.wav'], loop: true})
-
+function initGeoloc() 
+{
     console.log('Recherche de la position en cours...')
 
+    // remove already exisitn map move event
+    map.off('move')
+
+    // stop existing geoloc
+    if (watchId) navigator.geolocation.clearWatch(watchId)
+    watchId = null
+
+    firstMeasure = null
+    initialPosition = null
+    lastPosition = null
+    lastTrackPosition = null
+    initializing = true
+    polyline.setLatLngs([])
+
     // load instrumentals , set volume at 0
+    if (!instru1) instru1 = new Howl({src: ['/media/instru1.wav'], loop: true})
     instru1.play()
     instru1.volume(0)
+}
+
+
+function startGeoloc() 
+{   
+    initGeoloc()
 
     if (navigator.geolocation) 
-    {
-        firstMeasure = null
-        initialPosition = null
-        lastPosition = null
-        lastTrackPosition = null
-        initializing = true
-        polyline.setLatLngs([])
-        
+    {   
         if (!watchId) watchId = navigator.geolocation.watchPosition(successCallback, errorCallback, {
             enableHighAccuracy: true,
             timeout: 10000,
@@ -155,6 +167,31 @@ function startGeoloc()
     }
     else console.error('La géolocalisation n\'est pas supportée par votre navigateur')
 }
+
+function simulateGeoloc()
+{
+    initGeoloc()
+
+    // call successCallback with map center on map move
+    map.on('move', function() {
+        successCallback({
+            coords: {
+                latitude: map.getCenter().lat,
+                longitude: map.getCenter().lng,
+                accuracy: 10,
+                speed: 0,
+            },
+            timestamp: Date.now(),
+            simulate: true,
+        })
+    })
+
+    // trigger first move
+    map.fire('move')
+
+    console.log('>> Mode Simulation basée sur le déplacement de la carte !')
+}
+
 
 function successCallback(position) 
 {
@@ -169,15 +206,9 @@ function successCallback(position)
         firstMeasure = position
         initialPosition = position
     }
-    lastPosition = position
-
-    if (!lastTrackPosition || distance(lastTrackPosition, position) > 1) {
-        lastTrackPosition = position
-        polyline.addLatLng([position.coords.latitude, position.coords.longitude])
-    }
 
     // adjusting initial position during first 10 seconds if accuracy is better
-    if (firstMeasure.timestamp + CALIBRATION_TIME*1000 > position.timestamp) 
+    if (!position.simulate && firstMeasure.timestamp + CALIBRATION_TIME*1000 > position.timestamp) 
     {
         if (position.coords.accuracy < initialPosition.coords.accuracy) initialPosition = position
         document.getElementById('distance').innerHTML = "<i>-</i>"
@@ -191,13 +222,16 @@ function successCallback(position)
             initializing = false
             console.log('Initialisation terminée')
         }
+
+        // track
+        if (!lastTrackPosition || distance(lastTrackPosition, position) > 3) {
+            lastTrackPosition = position
+            polyline.addLatLng([position.coords.latitude, position.coords.longitude])
+        }
         
-        // follow position
+        // map follow position
         map.setView([position.coords.latitude, position.coords.longitude], map.getZoom())
         markerPosition.setLatLng([position.coords.latitude, position.coords.longitude])
-
-        console.log('Position mise à jour')
-
 
         document.getElementById('distance').innerHTML = Math.round(distance(initialPosition, position), 2) + ' m'
 
@@ -216,25 +250,28 @@ function successCallback(position)
         // instru1.volume(vol1)
         // console.log('Volume: ' + vol1)
     }
+
+    // next measure
+    lastPosition = position
 }
 
 function errorCallback(error) {
     switch (error.code) {
       case error.PERMISSION_DENIED:
-        document.getElementById('logs').innerHTML = 'L\'utilisateur a refusé la demande de géolocalisation'
+        console.error('L\'utilisateur a refusé la demande de géolocalisation')
         break
       case error.POSITION_UNAVAILABLE:
-        document.getElementById('logs').innerHTML = 'L\'emplacement de l\'utilisateur n\'a pas pu être déterminé'
+        console.error('L\'emplacement de l\'utilisateur n\'a pas pu être déterminé')
         break
       case error.TIMEOUT:
-        document.getElementById('logs').innerHTML = 'Le service n\'a pas répondu à temps';
+        console.error('Le service n\'a pas répondu à temps')
         break
     }
-    setTimeout(startGeoloc, 5000)
+    // setTimeout(startGeoloc, 5000)
 }
 
 document.getElementById('start').addEventListener('click', startGeoloc)
-
+document.getElementById('simulate').addEventListener('click', simulateGeoloc)
 
 // INIT
 //

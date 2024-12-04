@@ -1,3 +1,6 @@
+// LOGS functions
+//
+
 // copy console.log and console.error to $('#logs')
 console._log = console.log
 console.log = function(message) {
@@ -5,7 +8,9 @@ console.log = function(message) {
     if (typeof message === 'object') {
         message = JSON.stringify(message)
     }
-    $('#logs').append('<p>' + message + '</p>')
+    $('#logs').append(message + '<br/>')
+    $('#logs').parent().parent().scrollTop($('#logs').parent()[0].scrollHeight)
+
 }
 console._error = console.error
 console.error = function(message) {
@@ -13,8 +18,12 @@ console.error = function(message) {
     if (typeof message === 'object') {
         message = JSON.stringify(message)
     }
-    $('#logs').append('<p style="color:red">' + message + '</p>')
+    $('#logs').append('<span style="color:red">' + message + '</span><br/>')
+    $('#logs').parent().parent().scrollTop($('#logs').parent()[0].scrollHeight)
 }
+
+// FETCH functions
+//
 
 function post(path, data) {
     return fetch(path, {

@@ -36,10 +36,12 @@
     
     <div class="row">
         <div class="col-1"></div>
-        <div class="col-1 text-center p-3">
-            <button id="start" class="btn btn-primary">Start</button>
+        <div class="col-2 p-3">
+            <button id="start" class="btn btn-primary mb-3">Start</button> <br>
+            <button id="simulate" class="btn btn-warning mb-3">Simulate</button> <br>
+
         </div>
-        <div class="col-8 text-left p-3">
+        <div class="col-8 p-3">
             <table class="table">
                 <tr><th>Time</th><td><span id="time"></span></td></tr>
                 <tr><th>Coords</th><td><span id="lat"></span> / <span id="long"></span></td></tr>
@@ -50,7 +52,7 @@
         </div>
     </div>
 
-    <div class="row">
+    <div class="row" style="max-height: 20%; overflow-y: scroll;">
         <div class="col-1"></div>
         <div class="col-9">
             <div id="logs"></div>
