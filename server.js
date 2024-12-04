@@ -2,7 +2,7 @@
 require('dotenv').config();
 
 // Import express
-const https = require('https')
+const http = require('http')
 const express = require('express');
 const path = require('path');
 const fs = require('fs')
@@ -14,7 +14,7 @@ const app = express();
 const port = process.env.PORT || 3000;
 
 // Apply Github Hooks
-require('./modules/github-hook.js')(app);
+require('./modules/github-hook.js')(app, '/webhook', process.env.GITHOOK_SECRET);
 
 // Set the static path
 app.use(express.static(path.join(__dirname, 'www')));
@@ -102,9 +102,8 @@ app.post('/control/p/:file/json', express.json(), (req, res) => {
 })
 
 // Start the server
-https.createServer({
-    key: fs.readFileSync('certs/server.key'),
-    cert: fs.readFileSync('certs/server.crt')
-  }, app).listen(port, () => {
-    console.log('Listening on port ' + port);
-})
+const server = http.createServer(app);
+server.listen(port, () => {
+    console.log(`Server running on port ${port}`);
+});
+
