@@ -3,16 +3,17 @@
 
 // copy console.log and console.error to $('#logs')
 console._log = console.log
+if ($('#logs').length) 
 console.log = function(message) {
     console._log(message)
     if (typeof message === 'object') {
         message = JSON.stringify(message)
     }
     $('#logs').append(message + '<br/>')
-    $('#logs').parent().parent().scrollTop($('#logs').parent()[0].scrollHeight)
-
+   $('#logs').parent().parent().scrollTop($('#logs').parent()[0].scrollHeight)
 }
 console._error = console.error
+if ($('#logs').length) 
 console.error = function(message) {
     console._error(message) 
     if (typeof message === 'object') {
