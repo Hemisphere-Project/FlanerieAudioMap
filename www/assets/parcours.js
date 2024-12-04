@@ -22,15 +22,17 @@ function toastError(txt) {
 }
 
 // current file from url
-const parcoursID = window.location.pathname.split('/').pop()
+var parcoursID = window.location.pathname.split('/').pop()
 var parcours = {}
 var markers = []
 
 // LOAD
 //
 // Get parcours json
-function load() {
-    return get('/control/p/' + parcoursID + '/json')
+function load(pID) {
+    if (!pID) pID = parcoursID
+    
+    return get('/control/p/' + pID + '/json')
         .then(data => {
             console.log(data)
             

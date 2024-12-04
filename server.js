@@ -22,10 +22,9 @@ app.use(express.static(path.join(__dirname, 'www')));
 // static audio files
 app.use('/media', express.static(path.join(__dirname, 'media')));
 
-// Default endpoint
-// return Hello Flanerie
+// Default endpoint: redirect to /list
 app.get("/", (req, res) => {
-    res.send("Hello Flanerie");
+  res.redirect('/control');
 })
 
 // Default endpoint
@@ -66,7 +65,8 @@ app.post('/newParcours', express.json(), (req, res) => {
 
   const content = {name: name, status: 'draft'};
 
-  fs.writeFileSync(filePath, JSON.stringify(content));
+  // write beautiful json file
+  fs.writeFileSync(filePath, JSON.stringify(content, null, 2));
   res.status(200).send();
 })
 
@@ -80,9 +80,6 @@ app.post('/deleteParcours', express.json(), (req, res) => {
 
 // edit parcours
 app.get('/control/p/:file', (req, res) => {
-  const fileName = req.params.file;
-  const filePath = './parcours/' + fileName + '.json';
-  const content = JSON.parse(fs.readFileSync(filePath, 'utf8'));
   res.sendFile(path.join(__dirname, 'www', 'parcours.html'));
 })
 
@@ -100,11 +97,16 @@ app.post('/control/p/:file/json', express.json(), (req, res) => {
     const fileName = req.params.file;
     const filePath = './parcours/' + fileName + '.json';
     const content = req.body;
-    fs.writeFileSync(filePath, JSON.stringify(content));
+    fs.writeFileSync(filePath, JSON.stringify(content, null, 2));
     res.status(200).send();
   } catch (error) {
     res.status(500).json({error: error.message});
   }
+})
+
+// Show parcours
+app.get('/show/:file', (req, res) => {
+  res.sendFile(path.join(__dirname, 'www', 'show.html'));
 })
 
 // Start the server

@@ -23,10 +23,19 @@ function refreshList() {
             tdStatus.innerHTML = parcours.status;
             tr.appendChild(tdStatus);
             const tdLink = document.createElement('td');
+            
+            // show button
+            const buttonShow = document.createElement('button');
+            buttonShow.classList.add('btn', 'btn-warning', 'btn-sm', 'mr-1');
+            buttonShow.innerHTML = 'Show';
+            buttonShow.addEventListener('click', () => {
+                window.location.href = '/show/' + parcours.file;
+            })
+            tdLink.appendChild(buttonShow);
 
             // button edit
             const buttonEdit = document.createElement('button');
-            buttonEdit.classList.add('btn', 'btn-primary', 'btn-sm');
+            buttonEdit.classList.add('btn', 'btn-primary', 'btn-sm', 'mr-1');
             buttonEdit.innerHTML = 'Edit';
             buttonEdit.addEventListener('click', () => {
                 window.location.href = '/control/p/' + parcours.file;
@@ -35,7 +44,7 @@ function refreshList() {
 
             // button delete
             const buttonDelete = document.createElement('button');
-            buttonDelete.classList.add('btn', 'btn-danger', 'btn-sm', 'ml-1');
+            buttonDelete.classList.add('btn', 'btn-danger', 'btn-sm', 'mr-1');
             buttonDelete.innerHTML = 'Delete';
             buttonDelete.addEventListener('click', () => { 
                 if (confirm('Supprimer le parcours ' + parcours.name + ' ?')) deleteParcours(parcours.file) 
