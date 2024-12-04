@@ -120,11 +120,19 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
 // Track line
 var polyline = L.polyline([], {color: 'blue'}).addTo(map)
 
+// Position marker: round style
+var markerPosition = L.marker([45.7663, 4], {
+    icon: L.divIcon({
+        className: 'round-icon',
+        html: '<div class="round-icon"></div>',
+    }),
+}).addTo(map)
+
 function startGeoloc() 
 {   
     if (!instru1) instru1 = new Howl({src: ['/media/instru1.wav'], loop: true})
 
-    document.getElementById('logs').innerHTML = 'Recherche de la position en cours...'
+    console.log('Recherche de la position en cours...')
 
     // load instrumentals , set volume at 0
     instru1.play()
@@ -145,7 +153,7 @@ function startGeoloc()
             maximumAge: 0,
         })
     }
-    else document.getElementById('logs').innerHTML = 'La géolocalisation n\'est pas supportée par votre navigateur'
+    else console.error('La géolocalisation n\'est pas supportée par votre navigateur')
 }
 
 function successCallback(position) 
@@ -173,7 +181,7 @@ function successCallback(position)
     {
         if (position.coords.accuracy < initialPosition.coords.accuracy) initialPosition = position
         document.getElementById('distance').innerHTML = "<i>-</i>"
-        document.getElementById('logs').innerHTML = 'Initialisation en cours..'
+        console.log('Initialisation en cours..')
     }
     // getting distance
     else {
@@ -181,49 +189,32 @@ function successCallback(position)
         // first run
         if (initializing) {
             initializing = false
-            document.getElementById('logs').innerHTML = 'Initialisation terminée'
-
-            markerStart.setLatLng([position.coords.latitude, position.coords.longitude])
-            map.setView([position.coords.latitude, position.coords.longitude], ZOOM)
-
-            // On map move: initMap with new map center
-            map.off('move')
-            map.on('move', function() {
-                initialPosition = {
-                    coords: {
-                        latitude: map.getCenter().lat,
-                        longitude: map.getCenter().lng,
-                    }
-                }
-                markerStart.setLatLng([initialPosition.coords.latitude, initialPosition.coords.longitude])
-            })
-
-            // map opacity
-            document.getElementById('map').style.opacity = 1
-            document.getElementById('setstart').style.display = 'block'
+            console.log('Initialisation terminée')
         }
-
+        
+        // follow position
+        map.setView([position.coords.latitude, position.coords.longitude], map.getZoom())
         markerPosition.setLatLng([position.coords.latitude, position.coords.longitude])
-        document.getElementById('logs').innerHTML = 'Position mise à jour'
+
+        console.log('Position mise à jour')
 
 
         document.getElementById('distance').innerHTML = Math.round(distance(initialPosition, position), 2) + ' m'
 
-        // set volume according to distance
-        var crossfadeDistance = CROSSFADE_DISTANCE
-        var dist = distance(initialPosition, position)
+        // // set volume according to distance
+        // var crossfadeDistance = CROSSFADE_DISTANCE
+        // var dist = distance(initialPosition, position)
         
-        var vol1 = Math.min(1, Math.max(0, 1 - (dist-1) / crossfadeDistance))
-        var vol2 = Math.min(1, Math.max(0, (dist-1) / crossfadeDistance))
+        // var vol1 = Math.min(1, Math.max(0, 1 - (dist-1) / crossfadeDistance))
+        // var vol2 = Math.min(1, Math.max(0, (dist-1) / crossfadeDistance))
 
-        // slow fade
-        var crossFadeDump = CROSSFADE_DUMP
-        vol1 = Math.min(1, Math.max(0, instru1.volume() + (vol1 - instru1.volume()) / crossFadeDump))
+        // // slow fade
+        // var crossFadeDump = CROSSFADE_DUMP
+        // vol1 = Math.min(1, Math.max(0, instru1.volume() + (vol1 - instru1.volume()) / crossFadeDump))
 
 
-        instru1.volume(vol1)
-
-        document.getElementById('instru1-volume').innerHTML = Math.round(instru1.volume() * 100) + '%'
+        // instru1.volume(vol1)
+        // console.log('Volume: ' + vol1)
     }
 }
 
