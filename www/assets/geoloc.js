@@ -1,4 +1,4 @@
-function distance(pos1, pos2) {
+function geo_distance(pos1, pos2) {
     if ((pos1.coords.latitude == pos2.coords.latitude) && (pos1.coords.longitude == pos2.coords.longitude)) {
         return 0;
     }

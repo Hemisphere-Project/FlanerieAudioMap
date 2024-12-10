@@ -80,12 +80,12 @@ app.post('/deleteParcours', express.json(), (req, res) => {
 })
 
 // edit parcours
-app.get('/control/p/:file', (req, res) => {
-  res.sendFile(path.join(__dirname, 'www', 'parcours.html'));
+app.get('/edit/:file', (req, res) => {
+  res.sendFile(path.join(__dirname, 'www', 'edit.html'));
 })
 
 // get parcours json
-app.get('/control/p/:file/json', (req, res) => {
+app.get('/edit/:file/json', (req, res) => {
   const fileName = req.params.file;
   const filePath = './parcours/' + fileName + '.json';
   const content = JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -93,7 +93,7 @@ app.get('/control/p/:file/json', (req, res) => {
 })
 
 // save parcours json
-app.post('/control/p/:file/json', express.json(), (req, res) => {
+app.post('/edit/:file/json', express.json(), (req, res) => {
   try {
     const fileName = req.params.file;
     const filePath = './parcours/' + fileName + '.json';

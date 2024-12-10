@@ -38,7 +38,7 @@ function refreshList() {
             buttonEdit.classList.add('btn', 'btn-primary', 'btn-sm', 'mr-1');
             buttonEdit.innerHTML = 'Edit';
             buttonEdit.addEventListener('click', () => {
-                window.location.href = '/control/p/' + parcours.file;
+                window.location.href = '/edit/' + parcours.file;
             })
             tdLink.appendChild(buttonEdit);
 

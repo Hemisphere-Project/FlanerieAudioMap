@@ -23,7 +23,8 @@ document.getElementById('title').addEventListener('click', () => {
 // current file from url
 var parcoursID = window.location.pathname.split('/').pop()
 var parcours = {}
-var markers = []
+var spots = []
+
 
 // LOAD
 //
@@ -32,7 +33,7 @@ var markers = []
 function load(pID) {
     if (!pID) pID = parcoursID
     
-    return get('/control/p/' + pID + '/json')
+    return get('/edit/' + pID + '/json')
         .then(data => {
             // console.log(data)          
             
@@ -48,29 +49,16 @@ function load(pID) {
                     map.setView([lat, lon], zoom)  
                 }
 
-                // remove all markers from map
-                for (let i = 0; i < markers.length; i++) map.removeLayer(markers[i])
-                markers = []
+                // Clear previous spots
+                for (let i = 0; i < spots.length; i++) spots[i].clear()
+                spots = []
                 
                 // Draw zones
                 if (data.zones) 
                 {
                     data.zones.forEach( (zone, i) => {
-                        // Add zones markers on map
-                        const marker = L.circle([zone.lat, zone.lon],
-                            {
-                                color: 'green',
-                                fillColor: '#0f0',
-                                fillOpacity: 0.3,
-                                radius: zone.radius,
-                                type: 'zones',
-                                index: i,
-                                selected: false,
-                            })
-                            .addTo(map)
-                        marker.bindTooltip("Zone " + i);
-                        // marker.on('click', () => { selectPoint('zones', i) })
-                        markers.push(marker)
+                        var z = new Zone(zone, map, i)
+                        spots.push(z)
                     })
                 }
 
@@ -78,21 +66,8 @@ function load(pID) {
                 if (data.steps) 
                 {
                     data.steps.forEach( (step, i) => {
-                        // Add steps markers on map
-                        const marker = L.circle([step.lat, step.lon],
-                            {
-                                color: 'red',
-                                fillColor: '#f03',
-                                fillOpacity: 0.5,
-                                radius: step.radius,
-                                type: 'steps',
-                                index: i,
-                                selected: false,
-                            })
-                            .addTo(map)
-                        marker.bindTooltip("Etape " + i);
-                        // marker.on('click', () => { selectPoint('steps', i) })
-                        markers.push(marker)
+                        var s = new Step(step, map, i)
+                        spots.push(s)
                     })
                 }
             }
@@ -128,6 +103,7 @@ var markerPosition = L.marker([45.7663, 4], {
     }),
 }).addTo(map)
 
+// Init 
 function initGeoloc() 
 {
     console.log('Recherche de la position en cours...')
@@ -152,14 +128,14 @@ function initGeoloc()
     instru1.volume(0)
 }
 
-
+// Start real geoloc
 function startGeoloc() 
 {   
     initGeoloc()
 
     if (navigator.geolocation) 
     {   
-        if (!watchId) watchId = navigator.geolocation.watchPosition(successCallback, errorCallback, {
+        if (!watchId) watchId = navigator.geolocation.watchPosition(updatePosition, errorCallback, {
             enableHighAccuracy: true,
             timeout: 10000,
             maximumAge: 0,
@@ -168,13 +144,14 @@ function startGeoloc()
     else console.error('La géolocalisation n\'est pas supportée par votre navigateur')
 }
 
+// Start simulated geoloc
 function simulateGeoloc()
 {
     initGeoloc()
 
-    // call successCallback with map center on map move
+    // call updatePosition with map center on map move
     map.on('move', function() {
-        successCallback({
+        updatePosition({
             coords: {
                 latitude: map.getCenter().lat,
                 longitude: map.getCenter().lng,
@@ -192,9 +169,10 @@ function simulateGeoloc()
     console.log('>> Mode Simulation basée sur le déplacement de la carte !')
 }
 
-
-function successCallback(position) 
-{
+// On move callback
+function updatePosition(position) 
+{   
+    // Update position on screen
     document.getElementById('lat').innerHTML = position.coords.latitude
     document.getElementById('long').innerHTML = position.coords.longitude
     document.getElementById('prec').innerHTML = Math.round(position.coords.accuracy, 2) + ' m'
@@ -207,7 +185,7 @@ function successCallback(position)
         initialPosition = position
     }
 
-    // adjusting initial position during first 10 seconds if accuracy is better
+    // adjusting initial position during CALIBRATION_TIME if accuracy is better
     if (!position.simulate && firstMeasure.timestamp + CALIBRATION_TIME*1000 > position.timestamp) 
     {
         if (position.coords.accuracy < initialPosition.coords.accuracy) initialPosition = position
@@ -220,24 +198,34 @@ function successCallback(position)
         // first run
         if (initializing) {
             initializing = false
+
+            // create spots players
+            spots.forEach(spot => spot.load())
+
             console.log('Initialisation terminée')
         }
 
         // track
-        if (!lastTrackPosition || distance(lastTrackPosition, position) > 3) {
+        if (!lastTrackPosition || geo_distance(lastTrackPosition, position) > 3) {
             lastTrackPosition = position
             polyline.addLatLng([position.coords.latitude, position.coords.longitude])
         }
         
         // map follow position
-        map.setView([position.coords.latitude, position.coords.longitude], map.getZoom())
+        if (!position.simulate)
+            map.setView([position.coords.latitude, position.coords.longitude], map.getZoom())
+        
+        // marker follow position
         markerPosition.setLatLng([position.coords.latitude, position.coords.longitude])
 
-        document.getElementById('distance').innerHTML = Math.round(distance(initialPosition, position), 2) + ' m'
+        document.getElementById('distance').innerHTML = Math.round(geo_distance(initialPosition, position), 2) + ' m'
+
+        // update spots
+        spots.forEach(spot => spot.updatePosition(position))
 
         // // set volume according to distance
         // var crossfadeDistance = CROSSFADE_DISTANCE
-        // var dist = distance(initialPosition, position)
+        // var dist = geo_distance(initialPosition, position)
         
         // var vol1 = Math.min(1, Math.max(0, 1 - (dist-1) / crossfadeDistance))
         // var vol2 = Math.min(1, Math.max(0, (dist-1) / crossfadeDistance))

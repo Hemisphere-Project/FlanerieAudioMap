@@ -21,7 +21,7 @@ var instru2 = null
 var voice = null
 
 
-function distance(pos1, pos2) {
+function geo_distance(pos1, pos2) {
     if ((pos1.coords.latitude == pos2.coords.latitude) && (pos1.coords.longitude == pos2.coords.longitude)) {
         return 0;
     }
@@ -89,7 +89,7 @@ function successCallback(position) {
     }
     lastPosition = position
 
-    if (!lastTrackPosition || distance(lastTrackPosition, position) > 1) {
+    if (!lastTrackPosition || geo_distance(lastTrackPosition, position) > 1) {
         lastTrackPosition = position
         polyline.addLatLng([position.coords.latitude, position.coords.longitude])
     }
@@ -133,11 +133,11 @@ function successCallback(position) {
         document.getElementById('logs').innerHTML = 'Position mise à jour'
 
 
-        document.getElementById('distance').innerHTML = Math.round(distance(initialPosition, position), 2) + ' m'
+        document.getElementById('distance').innerHTML = Math.round(geo_distance(initialPosition, position), 2) + ' m'
 
         // set volume according to distance
         var crossfadeDistance = CROSSFADE_DISTANCE
-        var dist = distance(initialPosition, position)
+        var dist = geo_distance(initialPosition, position)
         
         var vol1 = Math.min(1, Math.max(0, 1 - (dist-1) / crossfadeDistance))
         var vol2 = Math.min(1, Math.max(0, (dist-1) / crossfadeDistance))

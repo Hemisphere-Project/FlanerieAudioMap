@@ -1,9 +1,11 @@
 // LOGS functions
 //
 
+const FRONT_LOGS = false
+
 // copy console.log and console.error to $('#logs')
 console._log = console.log
-if ($('#logs').length) 
+if ($('#logs').length && FRONT_LOGS) 
 console.log = function(message) {
     console._log(message)
     if (typeof message === 'object') {
@@ -13,7 +15,7 @@ console.log = function(message) {
    $('#logs').parent().parent().scrollTop($('#logs').parent()[0].scrollHeight)
 }
 console._error = console.error
-if ($('#logs').length) 
+if ($('#logs').length && FRONT_LOGS) 
 console.error = function(message) {
     console._error(message) 
     if (typeof message === 'object') {

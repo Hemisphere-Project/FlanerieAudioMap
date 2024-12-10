@@ -32,7 +32,7 @@ var markers = []
 function load(pID) {
     if (!pID) pID = parcoursID
     
-    return get('/control/p/' + pID + '/json')
+    return get('/edit/' + pID + '/json')
         .then(data => {
             console.log(data)
             
@@ -214,7 +214,7 @@ function save() {
     parcours.name = document.getElementById('pName').value
     parcours.coords = document.getElementById('pCoords').value
 
-    return post('/control/p/' + parcoursID + '/json', parcours)
+    return post('/edit/' + parcoursID + '/json', parcours)
         .then(() => {
             console.log('saved')
             toastSuccess('Parcours enregistré !')
