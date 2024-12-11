@@ -24,7 +24,6 @@ function toastError(txt) {
 // current file from url
 var parcoursID = window.location.pathname.split('/').pop()
 var parcours = {}
-var markers = []
 
 // LOAD
 //
@@ -53,151 +52,150 @@ function load(pID) {
                 else document.getElementById('pCoords').value = ''
                 document.getElementById('pCoordsLink').href = 'https://www.openstreetmap.org/#map=' + data.coords 
 
-                // remove all markers from map
-                for (let i = 0; i < markers.length; i++) map.removeLayer(markers[i])
-                markers = []
+                // Clear previous spots
+                clearSpots()
                 
+                // Etapes
+                //
+                if (data.steps) {
+                    document.getElementById('pSteps').innerHTML = ""
+
+                    data.steps.forEach( (step, i) => {
+
+                        // Add steps markers on map
+                        var s = new Step(step, map, i)
+                        s.editable()
+
+                        // Fill steps list
+                        const li = $('<li class="list-group-item spots-edit steps-edit">')
+                        li.appendTo('#pSteps')
+                        
+                        // header div : title + buttons
+                        const header = $('<div>').addClass('edit-header').appendTo(li)
+                        header.append($('<span>').addClass('badge bg-danger me-3').text(i + 1))
+                        header.append($('<span>').addClass('edit-media me-1').text(step.media))
+
+                        // body: audio select
+                        const body = $('<div>').addClass('edit-body').appendTo(li)
+                        body.append($('<span>').addClass('badge bg-danger me-1').text(i + 1))
+                        const select = $('<select>').addClass('form-select').appendTo(body)
+                            .change(() => {
+                                step.media = select.val()
+                                save().then(load).then(() => selectSpot('steps', i))
+                            })
+                            .append($('<option>').attr('value', '').text('-').val(''))
+
+                        // buttons
+                        body.append($('<button>').addClass('btn btn-sm btn-danger btn-sm float-end p-1 me-1').html('<i class="bi bi-trash"></i>').click(() => {
+                            if (confirm('Supprimer l\'étape ' + i + ' ?')) {
+                                parcours.steps.splice(i, 1)
+                                save().then(load)
+                            }
+                        }))
+                        body.append($('<button>').addClass('btn btn-sm btn-info btn-sm float-end p-1 me-1').html('<i class="bi bi-arrow-up"></i>').click(() => {
+                            if (i > 0) {
+                                [parcours.steps[i], parcours.steps[i - 1]] = [parcours.steps[i - 1], parcours.steps[i]]
+                                save().then(load).then(() => selectSpot('steps', i - 1))
+                            }
+                        }))
+                        body.append($('<button>').addClass('btn btn-sm btn-info btn-sm float-end p-1 me-1').html('<i class="bi bi-arrow-down"></i>').click(() => {
+                            if (i < parcours.steps.length - 1) {
+                                [parcours.steps[i], parcours.steps[i + 1]] = [parcours.steps[i + 1], parcours.steps[i]]
+                                save().then(load).then(() => selectSpot('steps', i + 1))
+                            }
+                        }))
+
+                        // fill select with media list from folder 'Etapes'
+                        if (MEDIALIST && MEDIALIST['Etape '+i]) {
+                            MEDIALIST['Etape '+i].forEach(media => {
+                                const option = $('<option>').attr('value', media).text(media).val(media)
+                                if (media == step.media) option.attr('selected', 'selected')
+                                select.append(option)
+                            })
+                        }
+
+                        // Add click event
+                        li.click(() => s.select().center())
+
+                        // on select
+                        s.on('selected', () => li.addClass('active'))
+                        s.on('unselected', () => li.removeClass('active'))
+
+                    })
+                }
+
+                // Objets
+                //
                 if (data.zones) {
                     document.getElementById('pZones').innerHTML = ""
 
                     data.zones.forEach( (zone, i) => {
 
-                        // Fill zones list
-                        const li = document.createElement('li')
-                        li.classList.add('list-group-item')
-                        li.innerHTML = `Zone ${i}`
-                        li.onclick = () => {
-                            gotoPoint(zone.lat, zone.lon)
-                            selectPoint('zones', i)
-                        }
-                        document.getElementById('pZones').appendChild(li)
+                        // Add zones markers on map
+                        var z = new Zone(zone, map, i)
+                        z.editable()
 
-                        // add delete button
-                        const button = document.createElement('button')
-                        button.classList.add('btn', 'btn-sm', 'btn-danger', 'float-end', 'p-1')
-                        button.innerHTML = '<i class="bi bi-trash"></i>'
-                        button.onclick = () => {
-                            if (confirm('Supprimer la zone ' + i + ' ?')) {
+                        // Fill zones list
+                        // const li = document.createElement('li')
+                        const li = $('<li class="list-group-item spots-edit zones-edit">')
+                        li.appendTo('#pZones')
+                        
+                        // header div : title + buttons
+                        const header = $('<div>').addClass('edit-header').appendTo(li)
+                        header.append($('<span>').addClass('badge bg-info me-3').text(i + 1))
+                        header.append($('<span>').addClass('edit-media me-1').text(zone.media))
+                        
+
+                        // body: audio select 
+                        const body = $('<div>').addClass('edit-body').appendTo(li)
+                        body.append($('<span>').addClass('badge bg-info me-1').text(i + 1))
+                        const select = $('<select>').addClass('form-select').appendTo(body)
+                            .change(() => {
+                                zone.media = select.val()
+                                save().then(load).then(() => selectSpot('zones', i))
+                            })
+                            .append($('<option>').attr('value', '').text('-').val(''))
+
+                        // buttons
+                        body.append($('<button>').addClass('btn btn-sm btn-danger btn-sm float-end p-1 me-1').html('<i class="bi bi-trash"></i>').click(() => {
+                            if (confirm('Supprimer l\'objet ' + i + ' ?')) {
                                 parcours.zones.splice(i, 1)
                                 save().then(load)
                             }
-                        }
-                        li.appendChild(button)
-
-                        // add up/down buttons
-                        const buttonUp = document.createElement('button')
-                        buttonUp.classList.add('btn', 'btn-sm', 'btn-info', 'float-end', 'p-1', 'me-1')
-                        buttonUp.innerHTML = '<i class="bi bi-arrow-up"></i>'
-                        buttonUp.onclick = () => {
+                        }))
+                        body.append($('<button>').addClass('btn btn-sm btn-info btn-sm float-end p-1 me-1').html('<i class="bi bi-arrow-up"></i>').click(() => {
                             if (i > 0) {
                                 [parcours.zones[i], parcours.zones[i - 1]] = [parcours.zones[i - 1], parcours.zones[i]]
-                                save().then(load).then(() => selectPoint('zones', i - 1))
+                                save().then(load).then(() => selectSpot('zones', i - 1))
                             }
-                        }
-                        li.appendChild(buttonUp)
-
-                        const buttonDown = document.createElement('button')
-                        buttonDown.classList.add('btn', 'btn-sm', 'btn-info', 'float-end', 'p-1', 'me-1')
-                        buttonDown.innerHTML = '<i class="bi bi-arrow-down"></i>'
-                        buttonDown.onclick = () => {
+                        }))
+                        body.append($('<button>').addClass('btn btn-sm btn-info btn-sm float-end p-1 me-1').html('<i class="bi bi-arrow-down"></i>').click(() => {
                             if (i < parcours.zones.length - 1) {
                                 [parcours.zones[i], parcours.zones[i + 1]] = [parcours.zones[i + 1], parcours.zones[i]]
-                                save().then(load).then(() => selectPoint('zones', i + 1))
+                                save().then(load).then(() => selectSpot('zones', i + 1))
                             }
-                        }
-                        li.appendChild(buttonDown)                     
-
-                        // Add zones markers on map
-                        const marker = L.circle([zone.lat, zone.lon],
-                            {
-                                color: 'green',
-                                fillColor: '#0f0',
-                                fillOpacity: 0.3,
-                                radius: zone.radius,
-                                type: 'zones',
-                                index: i,
-                                selected: false,
+                        }))
+                            
+                        
+                        // fill select with media list from folder 'Objets'
+                        if (MEDIALIST && MEDIALIST['Objets']) {
+                            MEDIALIST['Objets'].forEach(media => {
+                                const option = $('<option>').attr('value', media).text(media).val(media)
+                                if (media == zone.media) option.attr('selected', 'selected')
+                                select.append(option)
                             })
-                            .addTo(map)
-                        marker.enableEdit()
-                        marker.bindTooltip("Zone " + i);
-                        marker.on('click', () => { selectPoint('zones', i) })
-                        markers.push(marker)
+                        }
+
+                        
+                        // Add click event
+                        li.click(() => z.select().center())
+
+                        // on select
+                        z.on('selected', () => li.addClass('active'))
+                        z.on('unselected', () => li.removeClass('active'))
+
                     })
-                }
-
-                if (data.steps) {
-
-                    document.getElementById('pSteps').innerHTML = ""
-
-                    data.steps.forEach( (step, i) => {
-
-                        // Fill steps list
-                        const li = document.createElement('li')
-                        li.classList.add('list-group-item')
-                        li.innerHTML = `Etape ${i}`
-                        li.onclick = () => {
-                            gotoPoint(step.lat, step.lon)
-                            selectPoint('steps', i)
-                        }
-                        document.getElementById('pSteps').appendChild(li)
-
-                        // add delete button
-                        const button = document.createElement('button')
-                        button.classList.add('btn', 'btn-sm', 'btn-danger', 'float-end', 'p-1')
-                        button.innerHTML = '<i class="bi bi-trash"></i>'
-                        button.onclick = () => {
-                            if (confirm('Supprimer l\'étape ' + i + ' ?')) {
-                                parcours.steps.splice(i, 1)
-                                save().then(load)
-                            }
-                        }
-                        li.appendChild(button)
-
-                        // add up/down buttons
-                        const buttonUp = document.createElement('button')
-                        buttonUp.classList.add('btn', 'btn-sm', 'btn-info', 'float-end', 'p-1', 'me-1')
-                        buttonUp.innerHTML = '<i class="bi bi-arrow-up"></i>'
-                        buttonUp.onclick = () => {
-                            if (i > 0) {
-                                [parcours.steps[i], parcours.steps[i - 1]] = [parcours.steps[i - 1], parcours.steps[i]]
-                                save().then(load).then(() => selectPoint('steps', i - 1))
-                            }
-                        }
-                        li.appendChild(buttonUp)
-
-                        const buttonDown = document.createElement('button')
-                        buttonDown.classList.add('btn', 'btn-sm', 'btn-info', 'float-end', 'p-1', 'me-1')
-                        buttonDown.innerHTML = '<i class="bi bi-arrow-down"></i>'
-                        buttonDown.onclick = () => {
-                            if (i < parcours.steps.length - 1) {
-                                [parcours.steps[i], parcours.steps[i + 1]] = [parcours.steps[i + 1], parcours.steps[i]]
-                                save().then(load).then(() => selectPoint('steps', i + 1))
-                            }
-                        }
-                        li.appendChild(buttonDown)
-
-                        // Add steps markers on map
-                        const marker = L.circle([step.lat, step.lon],
-                            {
-                                color: 'red',
-                                fillColor: '#f03',
-                                fillOpacity: 0.5,
-                                radius: step.radius,
-                                type: 'steps',
-                                index: i,
-                                selected: false,
-                            })
-                            .addTo(map)
-                        marker.enableEdit()
-                        marker.bindTooltip("Etape " + i);
-                        marker.on('click', () => { selectPoint('steps', i) })
-                        markers.push(marker)
-                    })
-
-                }
-
-               
+                }               
 
             }
             else throw new Error('No data')
@@ -264,13 +262,14 @@ var map = L.map('map', {editable: true}).setView(startPoint, 16)
 map.on('editable:vertex:dragend', function (e) {
     let marker = e.layer; // marker that was dragged
     try {
+        console.log('dragend', marker.options.type, marker.options.index, parcours)
         parcours[marker.options.type][marker.options.index].lat = marker.getLatLng().lat
         parcours[marker.options.type][marker.options.index].lon = marker.getLatLng().lng
         parcours[marker.options.type][marker.options.index].radius = marker.getRadius()
         save()
 
         // select the marker
-        selectPoint(marker.options.type, marker.options.index)
+        selectSpot(marker.options.type, marker.options.index)
     }
     catch (error) {
         console.error(error)
@@ -312,7 +311,7 @@ function onMapDblClick(e) {
         .setLatLng(e.latlng)
         .setContent("\
             <button class='btn btn-sm btn-info' onclick='addStep(" + e.latlng.lat + "," + e.latlng.lng + "); popupNewStep.remove();'>Etape</button> \
-            <button class='btn btn-sm btn-info' onclick='addZone(" + e.latlng.lat + "," + e.latlng.lng + "); popupNewStep.remove();'>Zone</button> \
+            <button class='btn btn-sm btn-info' onclick='addZone(" + e.latlng.lat + "," + e.latlng.lng + "); popupNewStep.remove();'>Objet</button> \
         ")
         .openOn(map);
 }
@@ -348,47 +347,18 @@ function gotoPoint(lat, lon) {
     map.setView([lat, lon], 19)
 }
 
-// Select point
-function selectPoint(type, index) {
-    
-    // unsellect all
-    markers.forEach(marker => { 
-        marker.options.selected = false
-        L.DomUtil.removeClass(marker._path, 'selected');
-    })
-    
-    // select the one
-    markers.filter(marker => marker.options.type == type && marker.options.index == index)[0].options.selected = true
-    L.DomUtil.addClass(markers.filter(marker => marker.options.type == type && marker.options.index == index)[0]._path, 'selected');
-
-    // update list
-    document.getElementById('pZones').childNodes.forEach(li => {
-        li.classList.remove('active')
-    })
-    document.getElementById('pSteps').childNodes.forEach(li => {
-        li.classList.remove('active')
-    })
-
-    document.getElementById('p' + type.charAt(0).toUpperCase() + type.slice(1)).childNodes[index].classList.add('active')
-
-}
-
-// // Start point marker
-// var markerStart = L.marker([45.7663, 4]).addTo(map)
-
-// // Track line
-// var polyline = L.polyline([], {color: 'blue'}).addTo(map)
-
-// // Position marker: round style
-// var markerPosition = L.marker([45.7663, 4], {
-//     icon: L.divIcon({
-//         className: 'round-icon',
-//         html: '<div class="round-icon"></div>',
-//     }),
-// }).addTo(map)
-
-
 
 // INIT
 //
-load().then(loadMap)
+
+// first get media list json tree
+var MEDIALIST = null
+get('/mediaList')
+    .then(data => { MEDIALIST = data })
+    .catch(error => {
+        console.error(error)
+        toastError('Erreur lors du chargement des médias..')
+    })
+    .then(load)
+    .then(loadMap)
+

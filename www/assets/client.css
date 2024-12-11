@@ -59,15 +59,29 @@ path.leaflet-interactive.selected {
     outline: rgb(0, 0, 0) dotted 1px;
 }
 
-#pZones li .btn, #pSteps li .btn {
-    display: none;
+.edit-header {
+    margin: 10px;
 }
 
-#pZones li.active .btn, #pSteps li.active .btn {
-    display: inline-block;
+.edit-body {
+    display: none;
+    margin: 10px;
+}
+
+li.active > .edit-body{
+    display: block;
+}
+
+li.active > .edit-header {
+    display: none;
 }
 
 #pZones li.active, #pSteps li.active {
     background-color: #555;
     border: 0px;
+}
+
+.edit-body select {
+    width: 66%;
+    display: inline-block;
 }

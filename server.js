@@ -105,6 +105,29 @@ app.post('/edit/:file/json', express.json(), (req, res) => {
   }
 })
 
+// Media json file tree (one deep) with folders as keys and files as values list
+app.get('/mediaList', (req, res) => {
+
+  // validExt : audio and video
+  const validExt = ['mp3', 'wav', 'ogg', 'm4a', 'mp4', 'webm', 'ogg', 'ogv', 'mov', 'avi', 'mkv', 'flv', 'wmv', 'm4v'];
+
+  const mediaFolder = './media/';
+  const media = {'.':[]};
+  fs.readdirSync(mediaFolder).forEach(folder => {
+    if (fs.lstatSync(mediaFolder + folder).isDirectory())
+      media[folder] = fs.readdirSync(mediaFolder + folder)
+          .filter(file => !fs.lstatSync(mediaFolder + folder + '/' + file).isDirectory())
+          .filter(file => validExt.includes(file.split('.').pop()))
+    else 
+      if (validExt.includes(folder.split('.').pop()))
+        media['.'].push(folder);
+  });
+  res.json(media);
+})  
+
+
+
+
 // Show parcours
 app.get('/show/:file', (req, res) => {
   res.sendFile(path.join(__dirname, 'www', 'show.html'));

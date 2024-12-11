@@ -1,9 +1,42 @@
+var ALLSPOTS = []
 
-// Generic class Spot
-class Spot 
+function registerSpot(spot) {
+    ALLSPOTS.push(spot)
+}
+
+function clearSpots() {
+    ALLSPOTS.map(s => s.clear())
+    ALLSPOTS = []
+}
+
+function findSpot(type, index) {
+    return ALLSPOTS.find(s => s.marker().options.type === type && s.marker().options.index === index)
+}
+
+function unselectSpots() {
+    ALLSPOTS.map(s => s.unselect())
+}
+
+function selectSpot(type, index, exclusive = true)
 {
-    constructor(spot, map, index, color)
+    // unsellect all
+    if (exclusive) unselectSpots()
+    
+    // select the one
+    let spot = findSpot(type, index)
+    if (!spot) return 
+
+    spot.select()
+}
+
+
+
+// Generic class Spot, implementing Events
+class Spot extends EventEmitter
+{
+    constructor(spot, map, index, color, type)
     {
+        super()
         this._spot = spot
         this._map = map
         this._index = index
@@ -15,15 +48,19 @@ class Spot
                 fillColor: color,
                 fillOpacity: 0.3,
                 radius: spot.radius,
-                type: 'spots',
+                type: type,
                 index: index,
                 selected: false,
             })
             .addTo(map)
+
+        // Register
+        registerSpot(this)
+
     }
 
-    clear() {
-        this._map.removeLayer(this._marker)
+    marker() {
+        return this._marker
     }
 
     distance(pos) {
@@ -34,9 +71,49 @@ class Spot
         return this.distance(pos) < this._spot.radius
     }
 
+    editable() {
+        this._marker.enableEdit()
+        this._marker.on('click', () => this.select())
+        return this
+    }
+
+    center() {
+        map.setView([this._spot.lat, this._spot.lon], 19)
+        return this
+    }
+
+    clear() {
+        this._map.removeLayer(this._marker)
+    }
+    
+    select(exclusive = true) {
+        if (exclusive) unselectSpots()
+        
+        this._marker.options.selected = true
+        L.DomUtil.addClass(this._marker._path, 'selected');
+
+        this.emit('selected')
+        return this
+    }
+
+    unselect() {
+        if (this._marker.options.selected) 
+        {
+            L.DomUtil.removeClass(this._marker._path, 'selected');
+            this._marker.options.selected = false
+            this.emit('unselected')
+        }
+        return this
+    }
+
+    loadAudio() {
+        // to be implemented by children
+    }
+
     updatePosition(pos) {
         // to be implemented by children
     }
+    
 
 
 }
@@ -47,19 +124,16 @@ class Zone extends Spot
     constructor(zone, map, index) 
     {
         // Call parent constructor
-        super(zone, map, index, 'yellow')
-
-        // fake
-        this._spot.media = 'instru1.wav'
+        super(zone, map, index, '#17a2b8', 'zones')
 
         // player
         this.sound = null
 
         // Leaflet Tooltip
-        this._marker.bindTooltip("Zone " + index)
+        this._marker.bindTooltip(this._spot.media)
     }
 
-    load() {
+    loadAudio() {
         if (this.sound !== null) return
 
         // Howler Player
@@ -122,11 +196,11 @@ class Step extends Spot
     constructor(step, map, index) 
     {
         // Call parent constructor
-        super(step, map, index, 'red')
-        
-        // fake
-        this._spot.media = {voice: 'instru1.wav', music: 'instru2.wav', ambiant: 'instru3.wav'}
+        super(step, map, index, 'red', 'steps')
 
+        if (!this._spot.folder) 
+            this._spot.folder = 'Etape '+index
+        
         // player
         this.sound = null
 
@@ -134,7 +208,7 @@ class Step extends Spot
         this._marker.bindTooltip("Etape " + index)
     }
 
-    load() {
+    loadAudio() {
         if (this.sound !== null) return
 
         // Add to allSteps

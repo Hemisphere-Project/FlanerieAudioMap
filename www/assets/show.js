@@ -200,7 +200,7 @@ function updatePosition(position)
             initializing = false
 
             // create spots players
-            spots.forEach(spot => spot.load())
+            spots.forEach(spot => spot.loadAudio())
 
             console.log('Initialisation terminée')
         }
