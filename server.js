@@ -4,11 +4,14 @@ require('dotenv').config();
 // Import express
 const http = require('http')
 const express = require('express');
+const multer = require('multer');
 const path = require('path');
 const fs = require('fs')
 
 // Create express app
 const app = express();
+const upload = multer({ dest: 'media/' })
+
 
 // Set the port
 const port = process.env.PORT || 3000;
@@ -106,12 +109,12 @@ app.post('/edit/:file/json', express.json(), (req, res) => {
 })
 
 // Media json file tree (one deep) with folders as keys and files as values list
-app.get('/mediaList', (req, res) => {
+app.get('/mediaList/:parcours', (req, res) => {
 
   // validExt : audio and video
   const validExt = ['mp3', 'wav', 'ogg', 'm4a', 'mp4', 'webm', 'ogg', 'ogv', 'mov', 'avi', 'mkv', 'flv', 'wmv', 'm4v'];
 
-  const mediaFolder = './media/';
+  const mediaFolder = './media/'+req.params.parcours+'/';
   const media = {'.':[]};
   fs.readdirSync(mediaFolder).forEach(folder => {
     if (fs.lstatSync(mediaFolder + folder).isDirectory())
@@ -124,6 +127,16 @@ app.get('/mediaList', (req, res) => {
   });
   res.json(media);
 })  
+
+// Upload media file with folder argument from file argument
+app.post('/mediaUpload/:parcours/:folder', upload.single('file'), (req, res) => {
+
+  const mediaFolder = './media/' + req.params.parcours + '/' + req.params.folder + '/';
+  const filePath = mediaFolder + req.file.originalname;
+
+  fs.renameSync(req.file.path, filePath);
+  res.status(200).send();
+})
 
 
 

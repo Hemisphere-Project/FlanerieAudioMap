@@ -85,3 +85,8 @@ li.active > .edit-header {
     width: 66%;
     display: inline-block;
 }
+
+option[value=\*] { 
+    /* italic */
+    font-style: italic;
+}

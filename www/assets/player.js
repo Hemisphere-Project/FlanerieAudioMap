@@ -1,8 +1,9 @@
 class PlayerSimple extends EventEmitter
 {
-    constructor(loop = false) {
+    constructor(loop = false, fadetime = 1500) {
         super()
         this._loop = loop
+        this._fadeTime = fadetime 
         this._player = null
         this.isGoingOut = null
     }
@@ -17,12 +18,23 @@ class PlayerSimple extends EventEmitter
         })
         this._player.on('end', () => {
             this.emit('end', this._player._src)
+            console.log('PlayerSimple end:', this._player._src)
+        })
+        this._player.on('stop', () => {
+            this.emit('stop', this._player._src)
+            console.log('PlayerSimple stop:', this._player._src)
         })
         this._player.on('play', () => {
             this.emit('play', this._player._src)
+            console.log('PlayerSimple play:', this._player._src)
+        })
+        this._player.on('pause', () => {
+            this.emit('pause', this._player._src)
+            console.log('PlayerSimple pause:', this._player._src)
         })
         this._player.on('load', () => {
             this.emit('load', this._player._src)
+            console.log('PlayerSimple load:', this._player._src)
         })
         console.log('PlayerSimple loaded:', src)
     }
@@ -43,17 +55,21 @@ class PlayerSimple extends EventEmitter
         return this._loop
     }
 
-    play(seek=0) {
+    play(seek=0, volume=1) {
         if (this.isGoingOut) clearTimeout(this.isGoingOut)
         else if (this._player.playing()) return
 
         if (seek >= 0) this._player.seek(seek)
         this._player.play()
-        this._player.fade(this._player.volume(), 1, 1500)
+
+        if (volume < 0) volume = this._player.volume()
+
+        if (this._fadeTime > 0) this._player.fade(0, volume, this._fadeTime)
+        else this._player.volume(volume)
     }
 
-    resume() {
-        this.play(-1)
+    resume(volume=1) {
+        this.play(-1, volume)
     }
 
     stop() {
@@ -70,10 +86,11 @@ class PlayerSimple extends EventEmitter
     }
 
     isPlaying() {
-        return this._player.playing()
+        return this._player.playing() && !this.isGoingOut
     }
 
-    stopOut(d=1500) {
+    stopOut(d=-1) {
+        if (d < 0) d = this._fadeTime
         if (this.isGoingOut) clearTimeout(this.isGoingOut)
         if (!this._player.playing()) return
 
@@ -85,7 +102,8 @@ class PlayerSimple extends EventEmitter
         }, d+10)
     }
 
-    pauseOut(d=1500) {
+    pauseOut(d=-1) {
+        if (d < 0) d = this._fadeTime
         if (!this._player.playing() || this.isGoingOut) return
 
         this._player.fade(this._player.volume(), 0, d)
@@ -100,15 +118,22 @@ class PlayerSimple extends EventEmitter
 
 
 
-class PlayerTri extends EventEmitter 
+class PlayerStep extends EventEmitter 
 {
     constructor() {
         super()
         this.voice   = new PlayerSimple()
         this.music   = new PlayerSimple()
         this.ambiant = new PlayerSimple(true)
-        this.offlimit = new PlayerSimple()
+        this.offlimit = new PlayerSimple(true, 500)
         this.state = 'off'
+
+        this.voice.on('end', () => {
+            if (this.state == 'play') this.state = 'afterplay'
+        })
+        this.music.on('end', () => {
+            if (this.state == 'play') this.state = 'afterplay'
+        })
     }
 
     load(src) {
@@ -139,7 +164,7 @@ class PlayerTri extends EventEmitter
         this.voice.stopOut()
         this.music.stopOut()
         this.ambiant.stopOut()
-        this.offlimit.stopOut(500)
+        this.offlimit.stopOut()
         this.state = 'stop'
     }
 
@@ -151,11 +176,11 @@ class PlayerTri extends EventEmitter
     }
 
     isPlaying() {
-        return this.voice.isPlaying() || this.music.isPlaying() || this.offlimit.isPlaying()
+        return this.state !== 'stop'
     }
 
-    didPlay() {
-        return this.ambiant.isPlaying() && !(this.voice.isPlaying() || this.music.isPlaying())
+    isOfflimit() {
+        return this.state == 'offlimit'
     }
 
     crossLimit(out=true) 
@@ -167,7 +192,7 @@ class PlayerTri extends EventEmitter
             this.state = 'offlimit'
         }
         else if (!out && this.state == 'offlimit') {
-            this.offlimit.stopOut(500)
+            this.offlimit.stopOut()
             this.voice.resume()
             this.music.resume()
             this.state = 'play'

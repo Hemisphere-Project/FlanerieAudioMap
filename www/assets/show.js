@@ -189,7 +189,6 @@ function updatePosition(position)
     if (!position.simulate && firstMeasure.timestamp + CALIBRATION_TIME*1000 > position.timestamp) 
     {
         if (position.coords.accuracy < initialPosition.coords.accuracy) initialPosition = position
-        document.getElementById('distance').innerHTML = "<i>-</i>"
         console.log('Initialisation en cours..')
     }
     // getting distance
@@ -218,25 +217,10 @@ function updatePosition(position)
         // marker follow position
         markerPosition.setLatLng([position.coords.latitude, position.coords.longitude])
 
-        document.getElementById('distance').innerHTML = Math.round(geo_distance(initialPosition, position), 2) + ' m'
+        // document.getElementById('distance').innerHTML = Math.round(geo_distance(initialPosition, position), 2) + ' m'
 
         // update spots
         spots.forEach(spot => spot.updatePosition(position))
-
-        // // set volume according to distance
-        // var crossfadeDistance = CROSSFADE_DISTANCE
-        // var dist = geo_distance(initialPosition, position)
-        
-        // var vol1 = Math.min(1, Math.max(0, 1 - (dist-1) / crossfadeDistance))
-        // var vol2 = Math.min(1, Math.max(0, (dist-1) / crossfadeDistance))
-
-        // // slow fade
-        // var crossFadeDump = CROSSFADE_DUMP
-        // vol1 = Math.min(1, Math.max(0, instru1.volume() + (vol1 - instru1.volume()) / crossFadeDump))
-
-
-        // instru1.volume(vol1)
-        // console.log('Volume: ' + vol1)
     }
 
     // next measure

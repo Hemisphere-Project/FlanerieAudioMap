@@ -134,6 +134,7 @@ function load(pID) {
                         // Add zones markers on map
                         var z = new Zone(zone, map, i)
                         z.editable()
+                        z.loadAudio()
 
                         // Fill zones list
                         // const li = document.createElement('li')
@@ -150,11 +151,54 @@ function load(pID) {
                         const body = $('<div>').addClass('edit-body').appendTo(li)
                         body.append($('<span>').addClass('badge bg-info me-1').text(i + 1))
                         const select = $('<select>').addClass('form-select').appendTo(body)
-                            .change(() => {
-                                zone.media = select.val()
-                                save().then(load).then(() => selectSpot('zones', i))
-                            })
                             .append($('<option>').attr('value', '').text('-').val(''))
+                            .append($('<option>').attr('value', '*').text(':: upload ::').val('*'))
+                            .change(() => {
+                                
+                                if (select.val() == '*') {
+                                    // upload media
+                                    const input = $('<input class="ms-5">').attr('type', 'file').attr('accept', 'audio/*').appendTo(body)
+                                    input.change(() => {
+                                        const file = input[0].files[0]
+                                        if (file) {
+                                            // add enctype="multipart/form-data"
+                                            const formData = new FormData()
+                                            formData.append('file', file)
+                                            console.log('uploading', file)
+                                            postFile('/mediaUpload/' + parcoursID + '/Objets', formData)
+                                                .then(() => {
+                                                    input.remove()
+                                                    select.val(file.name)
+                                                    save()
+                                                        .then(loadMediaList)
+                                                        .then(load)
+                                                        .then(() => selectSpot('zones', i))
+                                                })
+                                                .catch(error => {
+                                                    console.error(error)
+                                                    toastError('Erreur lors de l\'upload du fichier..')
+                                                })
+                                        }
+                                    })
+                                    input.click()
+                                }
+                                else {
+                                    zone.media = select.val()
+                                    save().then(load).then(() => selectSpot('zones', i))
+                                }
+                                
+                            })
+
+                        // audio play/stop button
+                        const play = $('<button>').addClass('btn btn-sm btn-secondary btn-sm p-1 me-1').html('<i class="bi bi-play btn-play"></i>').click(() => {
+                            if (z.player.isPlaying()) z.player.pause()
+                            else z.player.resume(1)
+                        })
+                        z.player.on('play', () => play.html('<i class="bi bi-pause btn-play"></i>'))
+                        z.player.on('pause', () => play.html('<i class="bi bi-play btn-play"></i>'))
+                        z.player.on('stop', () => play.html('<i class="bi bi-play btn-play"></i>'))
+                        z.player.on('end', () => play.html('<i class="bi bi-play btn-play"></i>'))
+                        body.append(play)
 
                         // buttons
                         body.append($('<button>').addClass('btn btn-sm btn-danger btn-sm float-end p-1 me-1').html('<i class="bi bi-trash"></i>').click(() => {
@@ -191,8 +235,14 @@ function load(pID) {
                         li.click(() => z.select().center())
 
                         // on select
-                        z.on('selected', () => li.addClass('active'))
-                        z.on('unselected', () => li.removeClass('active'))
+                        z.on('selected', () => {
+                            if (!li.hasClass('active')) z.player.resume(1)
+                            li.addClass('active')
+                        })
+                        z.on('unselected', () => {
+                            li.removeClass('active')
+                            z.player.stop()
+                        })
 
                     })
                 }               
@@ -205,6 +255,12 @@ function load(pID) {
             toastError('Erreur lors du chargement du parcours..')
         })
 }
+
+$('body').on('click', (e) => {
+    if ($(e.target).hasClass('base-layer')) {
+        unselectSpots()
+    }
+})
 
 // SAVE
 //
@@ -335,7 +391,7 @@ function addZone(lat, lon) {
     const zone = {
         lat: lat,
         lon: lon,
-        radius: 3,
+        radius: 10,
     }
     if (!parcours.zones) parcours.zones = []
     parcours.zones.push(zone)
@@ -347,18 +403,22 @@ function gotoPoint(lat, lon) {
     map.setView([lat, lon], 19)
 }
 
+function loadMediaList() {
+    return get('/mediaList/'+ parcoursID)
+        .then(data => { MEDIALIST = data })
+        .catch(error => {
+            console.error(error)
+            toastError('Erreur lors du chargement des médias..')
+        })
+}
+
 
 // INIT
 //
 
 // first get media list json tree
 var MEDIALIST = null
-get('/mediaList')
-    .then(data => { MEDIALIST = data })
-    .catch(error => {
-        console.error(error)
-        toastError('Erreur lors du chargement des médias..')
-    })
+loadMediaList()
     .then(load)
     .then(loadMap)
 
