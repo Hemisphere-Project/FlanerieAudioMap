@@ -40,6 +40,7 @@ class Spot extends EventEmitter
         this._spot = spot
         this._map = map
         this._index = index
+        this._player = null
 
         // Leaflet Circle
         this._marker = L.circle([spot.lat, spot.lon],
@@ -126,65 +127,29 @@ class Zone extends Spot
         // Call parent constructor
         super(zone, map, index, '#17a2b8', 'zones')
 
-        // player
-        this.sound = null
-
         // Leaflet Tooltip
         this._marker.bindTooltip(this._spot.media)
+
+        // player
+        this.player = new PlayerSimple(true)
     }
 
     loadAudio() {
-        if (this.sound !== null) return
-
-        // Howler Player
-        this.sound = new Howl({
-            src: '/media/' + this._spot.media,
-            loop: true,
-            autoplay: false,
-            volume: 0
-        })
-        this.sound.on('end', () => {
-            console.log('Finished playing ' + this.sound._src)
-        })
-        this.sound.on('play', () => {
-            console.log('Playing ' + this.sound._src)
-        })
-        this.sound.on('load', () => {
-            console.log('Loaded ' + this.sound._src)
-        })
+        this.player.load('/media/Objets/' + this._spot.media)        
     }
 
     updatePosition(position) {
-        if (this.sound === null) return
-
         if (this.inside(position)) {
             let vol = 1 - this.distance(position) / this._spot.radius
-            this.sound.volume(vol)
-            if (!this.isPlaying()) this.play()
+            this.player.volume(vol)
+            this.player.resume()
         }
-        else if (this.isPlaying()) 
-            this.pause()
+        else this.player.pause()
     }
 
     clear() {
         super.clear()
-        if (this.sound) this.sound.stop()
-    }
-
-    isPlaying() {
-        return this.sound !== null && this.sound.playing()
-    }
-
-    stop() {
-        if (this.sound !== null) this.sound.stop()
-    }
-
-    play() {
-        if (this.sound !== null) this.sound.play()
-    }
-
-    pause() {
-        if (this.sound !== null) this.sound.pause()
+        this.player.stop()
     }
 }    
 
@@ -202,97 +167,57 @@ class Step extends Spot
             this._spot.folder = 'Etape '+index
         
         // player
-        this.sound = null
+        this.player = new PlayerTri()
 
         // Leaflet Tooltip
         this._marker.bindTooltip("Etape " + index)
     }
 
     loadAudio() {
-        if (this.sound !== null) return
-
         // Add to allSteps
+        allSteps = allSteps.filter(s => s._index !== this._index)
         allSteps.push(this)
 
         // Players
-        this.sound = {
-            voice: new Howl({
-                src: '/media/' + this._spot.media.voice,
-                loop: false,
-                autoplay: false,
-                volume: 1
-            }),
-            music: new Howl({
-                src: '/media/' + this._spot.media.music,
-                loop: false,
-                autoplay: false,
-                volume: 1
-            }),
-            ambiant: new Howl({
-                src: '/media/' + this._spot.media.ambiant,
-                loop: true,
-                autoplay: false,
-                volume: 1
-            })
-        }
-
-        // Events
-        for (let key in this.sound) {
-            this.sound[key].on('end', () => {
-                console.log('Finished playing ' + this.sound[key]._src)
-            })
-            this.sound[key].on('play', () => {
-                console.log('Playing ' + this.sound[key]._src)
-            })
-            this.sound[key].on('load', () => {
-                console.log('Loaded ' + this.sound[key]._src)
-            })
-        }
+        this.player.load({
+            voice: '/media/' + this._spot.folder + '/VOICE.mp3',
+            music: '/media/' + this._spot.folder + '/MUSIC.mp3',
+            ambiant: '/media/' + this._spot.folder + '/AMBIANT.mp3',
+            offlimit: '/media/' + this._spot.folder + '/OFF.mp3',
+        })
     }
 
     updatePosition(position) {
         if (this.sound === null) return
 
         // If inside
-        if (this.inside(position) && !this.isPlaying()) {
-            
+        if (this.inside(position) && !this.player.isPlaying()) 
+        {
             // Stop all other steps
-            allSteps.map(s => {
-                if (s !== this && s.isPlaying(true)) s.stop()
-            })
+            allSteps.filter(s => s._index !== this._index).map( s => s.player.stop() )
             
             // Play
-            this.play()
+            this.player.play()
+        }
+
+        // If too far
+        if (this.player.isPlaying() && this.distance(position) > this._spot.radius*3) 
+        {
+            this.player.crossLimit(true)
+        }
+
+        // If back inside
+        if (this.player.didPlay() && this.distance(position) < this._spot.radius*3)
+        {
+            this.player.crossLimit(false)
         }
     }
 
     clear() {
         super.clear()
-        if (this.sound) this.sound.stop()
+        this.player.clear()
         
         // Remove from allSteps
         allSteps = allSteps.filter(s => s._index !== this._index)
-    }
-
-    isPlaying(full=false) {
-        return this.sound !== null &&
-            (this.sound.voice.playing() || this.sound.music.playing()) ||
-            (full && this.sound.ambiant.playing())
-    }
-
-    stop() {
-        if (this.sound !== null) {
-            this.sound.voice.stop()
-            this.sound.music.stop()
-            this.sound.ambiant.stop()
-        }
-    }
-
-    play() {
-        if (this.sound !== null) {
-            this.sound.ambiant.play()
-            this.sound.voice.play()
-            this.sound.music.play()
-        }
     }
 }
