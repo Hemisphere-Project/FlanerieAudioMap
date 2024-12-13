@@ -244,8 +244,11 @@ function errorCallback(error) {
 
 document.getElementById('start').addEventListener('click', startGeoloc)
 document.getElementById('simulate').addEventListener('click', simulateGeoloc)
-document.getElementById('stop').addEventListener('click', () => {
+document.getElementById('mediaload').addEventListener('click', () => {
     spots.forEach(spot => spot.loadAudio())
+})
+document.getElementById('reload').addEventListener('click', () => {
+    location.reload()
 })
 
 // INIT
