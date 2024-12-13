@@ -176,6 +176,10 @@ app.get('/mediaList/:parcours', (req, res) => {
   const validExt = ['mp3', 'wav', 'ogg', 'm4a', 'mp4', 'webm', 'ogg', 'ogv', 'mov', 'avi', 'mkv', 'flv', 'wmv', 'm4v'];
 
   const mediaFolder = './media/'+req.params.parcours+'/';
+
+  // Create folder if not exists
+  if (!fs.existsSync(mediaFolder)) fs.mkdirSync(mediaFolder);
+
   const media = {'.':[]};
   fs.readdirSync(mediaFolder).forEach(folder => {
     if (fs.lstatSync(mediaFolder + folder).isDirectory())
