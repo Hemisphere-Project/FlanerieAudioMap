@@ -3,6 +3,10 @@ document.getElementById('title').addEventListener('click', () => {
     window.location.href = '/control';
 })
 
+$(document).bind('mousedown selectstart', function(e) {
+    return $(e.target).is('input, textarea, select, option, html');
+});
+
 // Toast
 var toastElList = [].slice.call(document.querySelectorAll('.toast'))
 var toastList = toastElList.map(function (toastEl) {
@@ -65,6 +69,7 @@ function load(pID) {
                         // Add steps markers on map
                         var s = new Step(step, map, i)
                         s.editable()
+                        s.loadAudio()
 
                         // Fill steps list
                         const li = $('<li class="list-group-item spots-edit steps-edit">')
@@ -72,22 +77,29 @@ function load(pID) {
                         
                         // header div : title + buttons
                         const header = $('<div>').addClass('edit-header').appendTo(li)
-                        header.append($('<span>').addClass('badge bg-danger me-3').text(i + 1))
-                        header.append($('<span>').addClass('edit-media me-1').text(step.media))
+                        header.append($('<span>').addClass('badge bg-danger me-3').text(i))
+                        header.append($('<span>').addClass('edit-media me-1').text(step.folder))
 
-                        // body: audio select
+                        // body: audio name edit
                         const body = $('<div>').addClass('edit-body').appendTo(li)
-                        body.append($('<span>').addClass('badge bg-danger me-1').text(i + 1))
-                        const select = $('<select>').addClass('form-select').appendTo(body)
+                        body.append($('<span>').addClass('badge bg-danger me-1').text(i))
+                        // const select = $('<select>').addClass('form-select').appendTo(body)
+                        //     .change(() => {
+                        //         step.media = select.val()
+                        //         save().then(load).then(() => selectSpot('steps', i))
+                        //     })
+                        //     .append($('<option>').attr('value', '').text('-').val(''))
+                        const editname = $('<input>').addClass('form-control').val(step.name).appendTo(body)
                             .change(() => {
-                                step.media = select.val()
+                                step.name = editname.val()
                                 save().then(load).then(() => selectSpot('steps', i))
                             })
-                            .append($('<option>').attr('value', '').text('-').val(''))
 
                         // buttons
                         body.append($('<button>').addClass('btn btn-sm btn-danger btn-sm float-end p-1 me-1').html('<i class="bi bi-trash"></i>').click(() => {
-                            if (confirm('Supprimer l\'étape ' + i + ' ?')) {
+                            if (confirm('Supprimer ' + s.name() + ' ?')) 
+                            {
+                                findSpot('steps', i).delete()
                                 parcours.steps.splice(i, 1)
                                 save().then(load)
                             }
@@ -105,14 +117,60 @@ function load(pID) {
                             }
                         }))
 
-                        // fill select with media list from folder 'Etapes'
-                        if (MEDIALIST && MEDIALIST['Etape '+i]) {
-                            MEDIALIST['Etape '+i].forEach(media => {
-                                const option = $('<option>').attr('value', media).text(media).val(media)
-                                if (media == step.media) option.attr('selected', 'selected')
-                                select.append(option)
-                            })
-                        }
+                        const media = $('<div>').addClass('edit-media mt-2').appendTo(body)
+                        const mediaList = step.media ? Object.keys(step.media) : []
+
+                        mediaList.forEach(m => {
+                            const div = $('<div>').addClass('edit-media mt-2').appendTo(media)
+
+                            // upload button
+                            div.append($('<button>').addClass('btn btn-sm btn-secondary btn-sm float-start p-1 me-1').html('<i class="bi bi-upload"></i>').click(() => {
+                                // remove previous input
+                                div.find('input').remove()
+                                const input = $('<input class="ms-5">').attr('type', 'file').attr('accept', 'audio/*').appendTo(div)
+                                input.change(() => {
+                                    const file = input[0].files[0]
+                                    if (file) {
+                                        const formData = new FormData()
+                                        formData.append('file', file)
+                                        postFile('/mediaUpload/' + parcoursID + '/' + step.folder, formData)
+                                            .then(() => {
+                                                input.remove()
+                                                step.media[m] = file.name
+                                                save().then(load).then(() => selectSpot('steps', i))
+                                            })
+                                            .catch(error => {
+                                                console.error(error)
+                                                toastError('Erreur lors de l\'upload du fichier..')
+                                            })
+                                    }
+                                })
+                                input.click()
+                            }))
+
+                            // badge with media type fixed width
+                            div.append($('<span>').addClass('badge bg-danger me-1').text(m).css('width', '63px'))
+                            
+                            // media button
+                            if (step.media && step.media[m] != '-') {
+                                div.append($('<span>').addClass('edit-media me-1').text(step.media[m].substring(0, 25)))
+                                div.append($('<button>').addClass('btn btn-sm btn-danger btn-sm float-end p-1 me-1').html('<i class="bi bi-trash"></i>').click(() => {
+                                    if (confirm('Supprimer ' + step.folder + '/' +step.media[m] + ' ?')) {
+                                        get('/mediaRemove/' + parcoursID + '/' + step.folder + '/' + step.media[m])
+                                        step.media[m] = '-'
+                                        save().then(load).then(() => selectSpot('steps', i))
+                                    }
+                                }))
+                                div.append($('<button>').addClass('btn btn-sm btn-secondary btn-sm float-end p-1 me-1 btn-preview').html('<i class="bi bi-play"></i>').click(() => {
+                                    if (s.player[m].isPlaying()) s.player[m].pause()
+                                    else s.player[m].resume(1)
+                                }))
+                                s.player[m].on('play', () => div.find('.btn-preview').html('<i class="bi bi-pause"></i>'))
+                                s.player[m].on('pause', () => div.find('.btn-preview').html('<i class="bi bi-play"></i>'))
+                                s.player[m].on('stop', () => div.find('.btn-preview').html('<i class="bi bi-play"></i>'))
+                                s.player[m].on('end', () => div.find('.btn-preview').html('<i class="bi bi-play"></i>'))
+                            }
+                        })
 
                         // Add click event
                         li.click(() => s.select().center())
@@ -143,13 +201,13 @@ function load(pID) {
                         
                         // header div : title + buttons
                         const header = $('<div>').addClass('edit-header').appendTo(li)
-                        header.append($('<span>').addClass('badge bg-info me-3').text(i + 1))
+                        header.append($('<span>').addClass('badge bg-info me-3').text(i))
                         header.append($('<span>').addClass('edit-media me-1').text(zone.media))
                         
 
                         // body: audio select 
                         const body = $('<div>').addClass('edit-body').appendTo(li)
-                        body.append($('<span>').addClass('badge bg-info me-1').text(i + 1))
+                        body.append($('<span>').addClass('badge bg-info me-1').text(i))
                         const select = $('<select>').addClass('form-select').appendTo(body)
                             .append($('<option>').attr('value', '').text('-').val(''))
                             .append($('<option>').attr('value', '*').text(':: upload ::').val('*'))
@@ -202,7 +260,7 @@ function load(pID) {
 
                         // buttons
                         body.append($('<button>').addClass('btn btn-sm btn-danger btn-sm float-end p-1 me-1').html('<i class="bi bi-trash"></i>').click(() => {
-                            if (confirm('Supprimer l\'objet ' + i + ' ?')) {
+                            if (confirm('Supprimer ' + z.name() + ' ?')) {
                                 parcours.zones.splice(i, 1)
                                 save().then(load)
                             }

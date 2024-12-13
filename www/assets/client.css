@@ -25,6 +25,8 @@ html, body {
 
 #map {
     height: 100%;
+    width: 100%;
+    min-height: 500px;
     /* opacity: 0; */
     border: 1px solid #333;
 }
@@ -81,8 +83,8 @@ li.active > .edit-header {
     border: 0px;
 }
 
-.edit-body select {
-    width: 66%;
+.edit-body select, .edit-body input {
+    width: 60%;
     display: inline-block;
 }
 

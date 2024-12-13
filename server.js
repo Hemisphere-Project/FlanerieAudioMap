@@ -100,10 +100,71 @@ app.post('/edit/:file/json', express.json(), (req, res) => {
   try {
     const fileName = req.params.file;
     const filePath = './parcours/' + fileName + '.json';
-    const content = req.body;
+    var content = req.body;
+
+    // Objets Media folders exists
+    if (!fs.existsSync('./media/' + fileName + '/Objets'))
+      fs.mkdirSync('./media/' + fileName + '/Objets');
+
+    // Objets name update
+    if (content.zones)
+      content.zones.forEach((objet, i) => {
+        if (!objet.name || objet.name.startsWith('Objet')) content.zones[i].name = 'Objet ' + i;
+      });
+
+    // Steps Media folders renaming
+    if (content.steps)
+      content.steps.forEach((step, i) => 
+      {
+        if (!step.folder) content.steps[i].folder = 'Etape';
+        if (!step.name || step.name.startsWith('Etape')) content.steps[i].name = 'Etape ' + i;
+
+        var oldFolder = './media/' + fileName + '/' + step.folder;
+        var newFolder = './media/' + fileName + '/' + step.name;
+        
+        if (oldFolder === newFolder && fs.existsSync(newFolder)) return;
+
+        // add _ to folder name if already exists
+        while(fs.existsSync(newFolder)) {
+          newFolder += '_';
+          content.steps[i].name += '_';
+        }
+
+        if (fs.existsSync(oldFolder)) {
+          console.log('oldFolder exists, rename to newFolder', oldFolder, newFolder);
+          fs.renameSync(oldFolder, newFolder);
+          content.steps[i].folder = content.steps[i].name;
+        }
+        else {
+          console.log('no folder, create newFolder', newFolder);
+          fs.mkdirSync(newFolder); 
+          content.steps[i].folder = content.steps[i].name;
+        }
+      });
+
+    // Rename folder with trailing space in media/
+    fs.readdirSync('./media/' + fileName).forEach(folder => {
+      if (folder.endsWith('_')) {
+        const basePath = './media/' + fileName + '/';
+        var newFolder = folder.replace(/^\_+|\_+$/g, '');
+        while(fs.existsSync(basePath+newFolder)) newFolder += '_';
+        fs.renameSync(basePath+folder, basePath+newFolder);
+        console.log('rename folder', folder, newFolder);
+        // apply to content
+        if (content.steps) content.steps.forEach((objet, i) => {
+          if (objet.folder === folder) {
+            content.steps[i].folder = newFolder;
+            content.steps[i].name = newFolder;
+          }
+        });
+      }
+    })
+
+    // write beautiful json file
     fs.writeFileSync(filePath, JSON.stringify(content, null, 2));
-    res.status(200).send();
-  } catch (error) {
+    res.json(content);
+  } 
+  catch (error) {
     res.status(500).json({error: error.message});
   }
 })
@@ -129,16 +190,37 @@ app.get('/mediaList/:parcours', (req, res) => {
 })  
 
 // Upload media file with folder argument from file argument
-app.post('/mediaUpload/:parcours/:folder', upload.single('file'), (req, res) => {
+app.post('/mediaUpload/:parcours/:folder/:name?', upload.single('file'), (req, res) => 
+{
+  const filename = req.params.name ? req.params.name + '.' + req.file.originalname.split('.').pop() : req.file.originalname;
 
   const mediaFolder = './media/' + req.params.parcours + '/' + req.params.folder + '/';
-  const filePath = mediaFolder + req.file.originalname;
+  const filePath = mediaFolder + filename;
 
   fs.renameSync(req.file.path, filePath);
   res.status(200).send();
 })
 
+// Remove media file
+app.get('/mediaRemove/:parcours/:folder/:file', (req, res) => {
+  const mediaFolder = './media/' + req.params.parcours + '/' + req.params.folder + '/';
+  const filePath = mediaFolder + req.params.file;
+  fs.unlinkSync(filePath, (err) => {
+    if (err) console.error(err);
+  })
+  res.status(200).send();
+})
 
+// Remove folder and all files inside
+app.get('/mediaRemoveFolder/:parcours/:folder', (req, res) => {
+  const mediaFolder = './media/' + req.params.parcours + '/' + req.params.folder
+  if (req.params.folder)
+    fs.rm(mediaFolder, { recursive: true }, (err) => {
+      if (err) console.error(err);
+    })
+  console.log('mediaRemoveFolder', mediaFolder);
+  res.status(200).send();
+})
 
 
 // Show parcours

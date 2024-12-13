@@ -31,6 +31,20 @@ function selectSpot(type, index, exclusive = true)
     spot.select()
 }
 
+function removeSpot(type, index)
+{
+    let spot = findSpot(type, index)
+    if (spot) spot.clear()
+
+    ALLSPOTS = ALLSPOTS.filter(s => s !== spot)
+    
+    // reindex (rename) higher indexes
+    ALLSPOTS.filter(s => s.marker().options.type === type && s._index > index)
+        .map(s => s.index(s._index-1))
+
+    // reindex 
+}
+
 
 
 // Generic class Spot, implementing Events
@@ -64,6 +78,19 @@ class Spot extends EventEmitter
 
     marker() {
         return this._marker
+    }
+
+    index(i) {
+        if (i !== undefined) {
+            this._index = i
+            this._marker.options.index = i
+        }
+        return this
+    }
+
+    name(name) {
+        if (name !== undefined) this._spot.name = name
+        return this._spot.name
     }
 
     distance(pos) {
@@ -134,6 +161,15 @@ class Zone extends Spot
         // Call parent constructor
         super(zone, map, index, '#17a2b8', 'zones')
 
+        if (!this._spot.folder) 
+            this._spot.folder = 'Objets'
+
+        if (!this._spot.name) 
+            this._spot.name = 'Objet '+index
+
+        if (!this._spot.media) 
+            this._spot.media = '-'
+
         // Leaflet Tooltip
         this._marker.bindTooltip(this._spot.media)
 
@@ -141,8 +177,16 @@ class Zone extends Spot
         this.player = new PlayerSimple(true, 0)
     }
 
+    index(i) {
+        if (i !== undefined) {
+            super.index(i)
+            this._spot.name = 'Objet '+i
+        }
+        return this._index
+    }
+
     loadAudio() {
-        this.player.load('/media/'+ parcoursID +'/Objets/' + this._spot.media)        
+        this.player.load('/media/'+ parcoursID +'/' + this._spot.folder + '/' + this._spot.media)        
     }
 
     updatePosition(position) {
@@ -166,13 +210,33 @@ class Step extends Spot
         super(step, map, index, 'red', 'steps')
 
         if (!this._spot.folder) 
-            this._spot.folder = 'Etape '+index
-        
+            this._spot.folder = ''
+
+        if (!this._spot.name) 
+            this._spot.name = 'Etape '+index
+
+        if (!this._spot.media) 
+            this._spot.media = {
+                voice: '-',
+                music: '-',
+                ambiant: '-',
+                offlimit: '-',
+            }
+
         // player
         this.player = new PlayerStep()
 
         // Leaflet Tooltip
-        this._marker.bindTooltip("Etape " + index)
+        this._marker.bindTooltip(this._spot.name)
+    }
+
+    index(i) {
+        if (i !== undefined) {
+            super.index(i)
+            if (this._spot.name.startsWith('Etape'))
+                this._spot.name = 'Etape '+i
+        }
+        return this._index
     }
 
     loadAudio() {
@@ -182,10 +246,10 @@ class Step extends Spot
 
         // Players
         this.player.load({
-            voice: '/media/' + parcoursID + '/' + this._spot.folder + '/VOICE.mp3',
-            music: '/media/' + parcoursID + '/' + this._spot.folder + '/MUSIC.mp3',
-            ambiant: '/media/' + parcoursID + '/' + this._spot.folder + '/AMBIANT.mp3',
-            offlimit: '/media/' + parcoursID + '/' + this._spot.folder + '/OFF.mp3',
+            voice: '/media/' + parcoursID + '/' + this._spot.folder + '/' + this._spot.media.voice,
+            music: '/media/' + parcoursID + '/' + this._spot.folder + '/' + this._spot.media.music,
+            ambiant: '/media/' + parcoursID + '/' + this._spot.folder + '/' + this._spot.media.ambiant,
+            offlimit: '/media/' + parcoursID + '/' + this._spot.folder + '/' + this._spot.media.offlimit,
         })
     }
 
@@ -213,6 +277,16 @@ class Step extends Spot
         {
             this.player.crossLimit(false)
         }
+    }
+
+    delete() {
+        // Destroy folder
+        if (this._spot.folder && this._spot.folder !== 'Objets') 
+            get('/mediaRemoveFolder/' + parcoursID + '/' + this._spot.folder)
+                .then(console.log)
+                .catch(console.error)
+
+        this.clear()
     }
 
     clear() {
