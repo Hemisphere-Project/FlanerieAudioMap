@@ -198,9 +198,6 @@ function updatePosition(position)
         if (initializing) {
             initializing = false
 
-            // create spots players
-            spots.forEach(spot => spot.loadAudio())
-
             console.log('Initialisation terminée')
         }
 
@@ -244,7 +241,17 @@ function errorCallback(error) {
 
 document.getElementById('start').addEventListener('click', startGeoloc)
 document.getElementById('simulate').addEventListener('click', simulateGeoloc)
+document.getElementById('stop').addEventListener('click', () => {
+    spots.forEach(spot => spot.loadAudio())
+})
 
 // INIT
 //
 load()
+
+$('.overlay').click(() => {
+    $('.overlay').hide()
+
+    // load spots players
+    spots.forEach(spot => spot.loadAudio())
+})
