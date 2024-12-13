@@ -1,8 +1,11 @@
-- Etapes : sequentiel
-    one time trigger, triple player
-        - voix 
-        - musique
-        - ambiance
 
-- Objets :  
-    loop d'interêt, à la videogame
+- Volume per track 
+- Etape qui se chevauche => higher index wins
+- Etape polygone
+
+- Edit fade in/out time par étape
+
+- autosave -> history -> ctrl-z
+- export / import backup
+
+
