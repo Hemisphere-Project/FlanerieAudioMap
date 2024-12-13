@@ -43,17 +43,20 @@
     
     <div class="row">
         <div class="col-1"></div>
-        <div class="col-2 p-3">
+        <div class="col-10 p-3">
             <span class="status status-geoloc"><i class="bi bi-geo-alt-fill"></i></span>
-            <button id="start" class="btn btn-lg btn-primary mb-3">Geoloc</button> <br>
+            <button id="start" class="btn btn-lg btn-primary mb-3 me-5">Geoloc</button> 
 
             <span class="status status-simulate"><i class="bi bi-radar"></i></span>
-            <button id="simulate" class="btn btn-lg btn-warning mb-3">Simulate</button> <br>    
+            <button id="simulate" class="btn btn-lg btn-warning mb-3 me-5">Simulate</button>    
             
-            <button id="stop" class="btn btn-lg btn-danger mb-3">Reload</button> <br>
+            <button id="stop" class="btn btn-lg btn-danger mb-3 me-5">Reload</button> 
 
         </div>
-        <div class="col-8 p-3">
+    </div>
+    <div class="row">
+        <div class="col-1"></div>
+        <div class="col-3 p-3">
             <table class="table">
                 <tr><th>Time</th><td><span id="time"></span></td></tr>
                 <tr><th>Coords</th><td><span id="lat"></span> / <span id="long"></span></td></tr>
@@ -61,14 +64,12 @@
                 <tr><th>Speed</th><td><span id="speed"></span></td></tr>
             </table>
         </div>
-    </div>
-
-    <div class="row" style="max-height: 20%; overflow-y: scroll;">
-        <div class="col-1"></div>
-        <div class="col-9">
-            <div id="logs"></div>
+        <div class="col-8">
+            <div id="logs" style="max-height: 20%; overflow-y: scroll;"></div>
         </div>
     </div>
+
+
 
 
 
