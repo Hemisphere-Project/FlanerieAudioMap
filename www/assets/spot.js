@@ -279,16 +279,6 @@ class Step extends Spot
         }
     }
 
-    delete() {
-        // Destroy folder
-        if (this._spot.folder && this._spot.folder !== 'Objets') 
-            get('/mediaRemoveFolder/' + parcoursID + '/' + this._spot.folder)
-                .then(console.log)
-                .catch(console.error)
-
-        this.clear()
-    }
-
     clear() {
         super.clear()
         

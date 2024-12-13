@@ -17,29 +17,34 @@ class PlayerSimple extends EventEmitter
             volume: 0
         })
         this._player.on('end', () => {
-            if (this._player)
-            this.emit('end', this._player._src)
-            console.log('PlayerSimple end:', this._player._src)
+            if (this._player) {
+                this.emit('end', this._player._src)
+                console.log('PlayerSimple end:', this._player._src)
+            }
         })
         this._player.on('stop', () => {
-            if (this._player)
-            this.emit('stop', this._player._src)
-            console.log('PlayerSimple stop:', this._player._src)
+            if (this._player) {
+                this.emit('stop', this._player._src)
+                console.log('PlayerSimple stop:', this._player._src)
+            }
         })
         this._player.on('play', () => {
-            if (this._player)
-            this.emit('play', this._player._src)
-            console.log('PlayerSimple play:', this._player._src)
+            if (this._player) {
+                this.emit('play', this._player._src)
+                console.log('PlayerSimple play:', this._player._src)
+            }
         })
         this._player.on('pause', () => {
-            if (this._player)
-            this.emit('pause', this._player._src)
-            console.log('PlayerSimple pause:', this._player._src)
+            if (this._player) {
+                this.emit('pause', this._player._src)
+                console.log('PlayerSimple pause:', this._player._src)
+            }
         })
         this._player.on('load', () => {
-            if (this._player)
-            this.emit('load', this._player._src)
-            console.log('PlayerSimple load:', this._player._src)
+            if (this._player) {
+                this.emit('load', this._player._src)
+                console.log('PlayerSimple load:', this._player._src)
+            }
         })
         console.log('PlayerSimple loaded:', src)
     }

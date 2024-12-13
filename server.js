@@ -160,6 +160,24 @@ app.post('/edit/:file/json', express.json(), (req, res) => {
       }
     })
 
+    // Remove unused Objets media
+    fs.readdirSync('./media/' + fileName + '/Objets').forEach(file => {
+      if (!content.zones || !content.zones.find(objet => objet.media === file)) {
+        fs.unlinkSync('./media/' + fileName + '/Objets/' + file);
+        console.log('remove unused media', file);
+      }
+    });
+
+    // Remove unused Steps folder
+    fs.readdirSync('./media/' + fileName).forEach(folder => {
+      // ignore Objets folder
+      if (folder === 'Objets') return;
+      if (!content.steps || !content.steps.find(step => step.folder === folder)) {
+        fs.rmSync('./media/' + fileName + '/' + folder, { recursive: true });
+      }
+    });
+    
+
     // write beautiful json file
     fs.writeFileSync(filePath, JSON.stringify(content, null, 2));
     res.json(content);

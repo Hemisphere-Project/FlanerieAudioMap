@@ -99,7 +99,6 @@ function load(pID) {
                         body.append($('<button>').addClass('btn btn-sm btn-danger btn-sm float-end p-1 me-1').html('<i class="bi bi-trash"></i>').click(() => {
                             if (confirm('Supprimer ' + s.name() + ' ?')) 
                             {
-                                findSpot('steps', i).delete()
                                 parcours.steps.splice(i, 1)
                                 save().then(load)
                             }
@@ -226,7 +225,7 @@ function load(pID) {
                                             postFile('/mediaUpload/' + parcoursID + '/Objets', formData)
                                                 .then(() => {
                                                     input.remove()
-                                                    select.val(file.name)
+                                                    zone.media = file.name
                                                     save()
                                                         .then(loadMediaList)
                                                         .then(load)
