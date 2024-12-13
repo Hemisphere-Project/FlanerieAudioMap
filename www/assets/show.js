@@ -110,6 +110,7 @@ function initGeoloc()
 
     // remove already exisitn map move event
     map.off('move')
+    $('.status').hide()
 
     // stop existing geoloc
     if (watchId) navigator.geolocation.clearWatch(watchId)
@@ -132,6 +133,7 @@ function initGeoloc()
 function startGeoloc() 
 {   
     initGeoloc()
+    $('.status-geoloc').show()
 
     if (navigator.geolocation) 
     {   
@@ -148,6 +150,7 @@ function startGeoloc()
 function simulateGeoloc()
 {
     initGeoloc()
+    $('.status-simulate').show()
 
     // call updatePosition with map center on map move
     map.on('move', function() {

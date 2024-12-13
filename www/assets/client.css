@@ -115,3 +115,7 @@ option[value=\*] {
     background-color: #333;
     color: white;
 }
+
+.status {
+    display: none;
+}
