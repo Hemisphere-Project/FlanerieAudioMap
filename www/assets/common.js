@@ -13,7 +13,7 @@ console.log = function(...message) {
         message = JSON.stringify(message)
     }
     $('#logs').append(message + '<br/>')
-   $('#logs').parent().parent().scrollTop($('#logs').parent()[0].scrollHeight)
+   $('#logs').scrollTop($('#logs')[0].scrollHeight)
 }
 console._error = console.error
 if ($('#logs').length && FRONT_LOGS) 
@@ -23,7 +23,7 @@ console.error = function(...message) {
         message = JSON.stringify(message)
     }
     $('#logs').append('<span style="color:red">' + message + '</span><br/>')
-    $('#logs').parent().parent().scrollTop($('#logs').parent()[0].scrollHeight)
+    $('#logs').scrollTop($('#logs')[0].scrollHeight)
 }
 
 // FETCH functions
