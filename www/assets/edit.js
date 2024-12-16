@@ -32,10 +32,8 @@ var parcours = {}
 // LOAD
 //
 // Get parcours json
-function load(pID) {
-    if (!pID) pID = parcoursID
-    
-    return get('/edit/' + pID + '/json')
+function load() {
+    return get('/edit/' + parcoursID + '/json')
         .then(data => {
             console.log(data)
             
@@ -83,17 +81,15 @@ function load(pID) {
                         // body: audio name edit
                         const body = $('<div>').addClass('edit-body').appendTo(li)
                         body.append($('<span>').addClass('badge bg-danger me-1').text(i))
-                        // const select = $('<select>').addClass('form-select').appendTo(body)
-                        //     .change(() => {
-                        //         step.media = select.val()
-                        //         save().then(load).then(() => selectSpot('steps', i))
-                        //     })
-                        //     .append($('<option>').attr('value', '').text('-').val(''))
+
                         const editname = $('<input>').addClass('form-control').val(step.name).appendTo(body)
                             .change(() => {
                                 step.name = editname.val()
                                 save().then(load).then(() => selectSpot('steps', i))
                             })
+
+                        const media = $('<div>').addClass('edit-media mt-2').appendTo(body)
+                        const mediaList = step.media ? Object.keys(step.media) : []
 
                         // buttons
                         body.append($('<button>').addClass('btn btn-sm btn-danger btn-sm float-end p-1 me-1').html('<i class="bi bi-trash"></i>').click(() => {
@@ -116,8 +112,17 @@ function load(pID) {
                             }
                         }))
 
-                        const media = $('<div>').addClass('edit-media mt-2').appendTo(body)
-                        const mediaList = step.media ? Object.keys(step.media) : []
+                        // +/- buttons increment/ decrement each master
+                        body.append($('<button>').addClass('btn btn-sm btn-secondary btn-sm float-end p-1 me-1').html('<i class="bi bi-plus"></i>').click(() => {
+                            if (step.media && mediaList.some(m => step.media[m].master >= 1)) return
+                            mediaList.forEach(m => s.player[m].masterInc(0.01))
+                            save().then(load).then(() => selectSpot('steps', i))
+                        }))
+                        body.append($('<button>').addClass('btn btn-sm btn-secondary btn-sm float-end p-1 me-1').html('<i class="bi bi-dash"></i>').click(() => {
+                            if (step.media && mediaList.some(m => step.media[m].master <= 0)) return
+                            mediaList.forEach(m => s.player[m].masterDec(0.01))
+                            save().then(load).then(() => selectSpot('steps', i))
+                        }))
 
                         mediaList.forEach(m => {
                             const div = $('<div>').addClass('edit-media mt-2').appendTo(media)
@@ -172,10 +177,13 @@ function load(pID) {
                                 
                                 
                                 // volume integer input
-                                div.append($('<input class="input-volume float-end me-1 ">').attr('type', 'number').attr('min', 0).attr('max', 100).attr('step', 1).val(step.media[m].master*100).change(() => {
-                                    step.media[m].master = div.find('input').val()/100.0
-                                    save().then(load).then(() => selectSpot('steps', i))
-                                }))
+                                div.append($('<input class="input-volume float-end me-1 ">').attr('type', 'number').attr('min', 0).attr('max', 100).attr('step', 1)
+                                    .val( Math.round(step.media[m].master*100) )
+                                    .change(() => {
+                                        s.player[m].master(div.find('.input-volume').val()/100.0)
+                                        save().then(load).then(() => selectSpot('steps', i))
+                                    }))
+                                s.player[m].on('master', (vol) => div.find('.input-volume').val(Math.round(vol*100)))
                             }
 
                         })
@@ -286,6 +294,11 @@ function load(pID) {
                             }
                         }))
                             
+                        // volume integer input
+                        body.append($('<input class="input-volume float-end me-1 ">').attr('type', 'number').attr('min', 0).attr('max', 100).attr('step', 1).val(zone.media.master*100).change(() => {
+                            zone.media.master = body.find('input').val()/100.0
+                            save().then(load).then(() => selectSpot('zones', i))
+                        }))
                         
                         // fill select with media list from folder 'Objets'
                         if (MEDIALIST && MEDIALIST['Objets']) {
@@ -330,19 +343,31 @@ $('body').on('click', (e) => {
 
 // SAVE
 //
+var scheduledSave = null
 function save() {
     parcours.name = document.getElementById('pName').value
     parcours.coords = document.getElementById('pCoords').value
 
-    return post('/edit/' + parcoursID + '/json', parcours)
-        .then(() => {
-            console.log('saved')
-            toastSuccess('Parcours enregistré !')
-        })
-        .catch(error => {
-            console.error(error)
-            toastError('Erreur lors de l\'enregistrement du parcours..')
-        })
+    return new Promise((resolve, reject) => {
+        if (scheduledSave) {
+            clearTimeout(scheduledSave)
+            scheduledSave = null
+        }
+        scheduledSave = setTimeout(() => {
+            post('/edit/' + parcoursID + '/json', parcours)
+                .then(data => {
+                    console.log(data)
+                    toastSuccess('Sauvegardé')
+                    resolve(data)
+                })
+                .catch(error => {
+                    console.error(error)
+                    toastError('Erreur lors de la sauvegarde..')
+                    reject(error)
+                })
+        }, 1000)
+    })
+        
 }
 
 // Name on change => save

@@ -175,7 +175,6 @@ class Zone extends Spot
 
         // player
         this.player = new PlayerSimple(true, 0)
-        this.player.master( this._spot.master )
     }
 
     index(i) {
@@ -262,17 +261,22 @@ class Step extends Spot
             this.player.play()
         }
 
-        // If too far
-        if (this.player.isPlaying() && this.distance(position) > this._spot.radius + 5) 
+        // Handle Offlimit (if media exists)
+        if (this._spot.media.offlimit.src !== '-') 
         {
-            this.player.crossLimit(true)
+            // If too far
+            if (this.player.isPlaying() && this.distance(position) > this._spot.radius + 5) 
+            {
+                this.player.crossLimit(true)
+            }
+    
+            // If back inside
+            if (this.player.isOfflimit() && this.distance(position) < this._spot.radius + 5)
+            {
+                this.player.crossLimit(false)
+            }
         }
 
-        // If back inside
-        if (this.player.isOfflimit() && this.distance(position) < this._spot.radius + 5)
-        {
-            this.player.crossLimit(false)
-        }
     }
 
     clear() {

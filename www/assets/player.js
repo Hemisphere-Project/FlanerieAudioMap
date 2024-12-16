@@ -6,12 +6,15 @@ class PlayerSimple extends EventEmitter
         this._fadeTime = fadetime 
         this._player = null
         this.isGoingOut = null
-        this._master = 1
         this._volume = 0
+
+        this._media = null
     }
 
     load(basepath, media) {
         this.clear()
+
+        this._media = media
 
         this._player = new Howl({
             src: basepath + media.src,
@@ -84,7 +87,7 @@ class PlayerSimple extends EventEmitter
         
         if (this._fadeTime > 0) {
             this._volume = volume
-            this._player.fade(this._player.volume() , this._volume * this._master, this._fadeTime)
+            this._player.fade(this._player.volume() , this._volume * this._media.master, this._fadeTime)
         }
         else this.volume(volume)
     }
@@ -106,18 +109,31 @@ class PlayerSimple extends EventEmitter
     volume(value) {
         if (value !== undefined) {
             this._volume = value
-            this._player.volume(this._volume * this._master)
-            // this._player.fade(this._volume * this._master, this._volume * this._master, 0)  // cancel other fade
+            this._player.volume(this._volume * this._media.master)
+            // this._player.fade(this._volume * this._media.master, this._volume * this._media.master, 0)  // cancel other fade
         }
         return this._volume
     }
 
     master(value) {
         if (value !== undefined) {
-            this._master = value
-            this._player.volume(this._volume * this._master)
+            value = Math.round(value * 100) / 100
+            if (value < 0) value = 0
+            if (value > 1) value = 1
+            let didChange = this._media.master !== value
+            this._media.master = value
+            this._player.volume(this._volume * this._media.master)
+            if (didChange) this.emit('master', this._media.master)
         }
-        return this._master
+        return this._media.master
+    }
+
+    masterDec(value = 0.01) {
+        this.master(this._media.master - value)
+    }
+
+    masterInc(value = 0.01) {
+        this.master(this._media.master + value)
     }
 
     isPlaying() {
