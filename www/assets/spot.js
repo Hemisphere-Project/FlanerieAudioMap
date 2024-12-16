@@ -383,13 +383,13 @@ class Step extends Spot
         }
 
         // If too far
-        if (this.player.isPlaying() && this.distanceToBorder(position) > 5) 
+        if (this.player.isPlaying() && this.distanceToBorder(position) > 20) 
         {
             this.player.crossLimit(true)
         }
 
         // If back inside
-        if (this.player.isOfflimit() && this.distanceToBorder(position) < 5)
+        if (this.player.isOfflimit() && this.distanceToBorder(position) < 20)
         {
             this.player.crossLimit(false)
         }
