@@ -128,6 +128,9 @@ function startGeoloc()
     initGeoloc()
     $('.status-geoloc').show()
 
+    // Disable map draggable
+    map.dragging.disable()
+
     if (navigator.geolocation) 
     {   
         if (!watchId) watchId = navigator.geolocation.watchPosition(updatePosition, errorCallback, {
@@ -144,6 +147,9 @@ function simulateGeoloc()
 {
     initGeoloc()
     $('.status-simulate').show()
+
+    // Enable map draggable
+    map.dragging.enable()
 
     // call updatePosition with map center on map move
     map.on('move', function() {
@@ -252,5 +258,5 @@ $('.overlay').click(() => {
     $('.overlay').hide()
 
     // load spots players
-    spots.forEach(spot => spot.loadAudio())
+    // spots.forEach(spot => spot.loadAudio())
 })

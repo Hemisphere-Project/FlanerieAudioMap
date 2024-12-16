@@ -67,6 +67,7 @@ class PlayerSimple extends EventEmitter
     }
 
     loop(value) {
+        if (!this._player) return
         if (value !== undefined) {
             this._loop = value
             this._player.loop(value)
@@ -75,6 +76,7 @@ class PlayerSimple extends EventEmitter
     }
 
     play(seek=0, volume=1.0) {
+        if (!this._player) return
         if (this.isGoingOut) {
             clearTimeout(this.isGoingOut)
             this.isGoingOut = null
@@ -97,10 +99,13 @@ class PlayerSimple extends EventEmitter
     }
 
     stop() {
+        if (!this._player) return
+        if (!this._player.playing()) return
         this._player.stop()
     }
 
     pause() {
+        if (!this._player) return
         if (!this._player.playing()) return
         if (this.isGoingOut) return
         this._player.pause()
@@ -109,7 +114,8 @@ class PlayerSimple extends EventEmitter
     volume(value) {
         if (value !== undefined) {
             this._volume = value
-            this._player.volume(this._volume * this._media.master)
+            if (this._player)
+                this._player.volume(this._volume * this._media.master)
             // this._player.fade(this._volume * this._media.master, this._volume * this._media.master, 0)  // cancel other fade
         }
         return this._volume
@@ -122,7 +128,8 @@ class PlayerSimple extends EventEmitter
             if (value > 1) value = 1
             let didChange = this._media.master !== value
             this._media.master = value
-            this._player.volume(this._volume * this._media.master)
+            if (this._player)
+                this._player.volume(this._volume * this._media.master)
             if (didChange) this.emit('master', this._media.master)
         }
         return this._media.master
@@ -138,6 +145,10 @@ class PlayerSimple extends EventEmitter
 
     isPlaying() {
         return this._player.playing() && !this.isGoingOut
+    }
+
+    isLoaded() {
+        return this._player !== null
     }
 
     stopOut(d=-1) {
@@ -234,6 +245,10 @@ class PlayerStep extends EventEmitter
 
     isPlaying() {
         return this.state !== 'stop'
+    }
+
+    isLoaded() {
+        return this.voice.isLoaded() && this.music.isLoaded() && this.ambiant.isLoaded() && this.offlimit.isLoaded()
     }
 
     isOfflimit() {

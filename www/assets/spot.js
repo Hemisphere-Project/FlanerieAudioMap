@@ -42,7 +42,6 @@ function removeSpot(type, index)
     ALLSPOTS.filter(s => s.marker().options.type === type && s._index > index)
         .map(s => s.index(s._index-1))
 
-    // reindex 
 }
 
 
@@ -50,23 +49,129 @@ function removeSpot(type, index)
 // Generic class Spot, implementing Events
 class Spot extends EventEmitter
 {
-    constructor(spot, map, index, type)
+    constructor(spot, map, index, type, color = 'blue')
     {
         super()
         this._spot = spot
         this._map = map
         this._index = index
         this._type = type
+        this._color = color
 
         this.player = null
+
+        // Marker
+        this.createMarker()
 
         // Register
         registerSpot(this)
 
     }
 
+    createMarker() {
+
+        // Leaflet Circle
+        if (typeof this._spot.radius === 'number') {
+            this._marker = L.circle([this._spot.lat, this._spot.lon],
+                {
+                    color: this._color,
+                    fillColor: this._color,
+                    fillOpacity: 0.3,
+                    radius: this._spot.radius,
+                    type: this._type,
+                    index: this._index,
+                    selected: false,
+                })
+                .addTo(map)
+        }
+
+        // Leaflet Polygon.
+        else {
+            this._marker = L.polygon(this._spot.radius,
+                {
+                    color: this._color,
+                    fillColor: this._color,
+                    fillOpacity: 0.3,
+                    type: this._type,
+                    index: this._index,
+                    selected: false,
+                })
+                .addTo(map)
+        }
+
+        // Editable
+        if (this._editable) this.editable()
+    }
+
     marker() {
         return this._marker
+    }
+
+    inside(position) {
+        if (typeof this._spot.radius === 'number') {
+            return this._marker.getLatLng().distanceTo([position.coords.latitude, position.coords.longitude]) < this._spot.radius
+        }
+        else 
+        {
+            // Ray-casting algorithm
+            let x = position.coords.latitude
+            let y = position.coords.longitude
+            let inside = false
+
+            for (let i = 0, j = this._spot.radius.length - 1; i < this._spot.radius.length; j = i++) {
+                let xi = this._spot.radius[i][0], yi = this._spot.radius[i][1]
+                let xj = this._spot.radius[j][0], yj = this._spot.radius[j][1]
+
+                let intersect = ((yi > y) != (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)
+                if (intersect) inside = !inside
+            }
+            
+            return inside
+        }
+    }
+
+    getCenterPosition() {
+        if (typeof this._spot.radius === 'number')
+            return this._marker.getLatLng()
+        else
+            return this._marker.getBounds().getCenter()
+    }
+
+    getRadius() {
+        if (typeof this._spot.radius === 'number')
+            return this._marker.getRadius()
+        else
+            return this._marker.getLatLngs()[0].map(c => [c.lat, c.lng])
+    }
+
+    convertToPolygon() {
+        if (typeof this._spot.radius !== 'number') return
+        
+        let radius = this._spot.radius / 111111
+
+        this._spot.radius = [
+            [this._spot.lat + radius/1.4, this._spot.lon + radius],
+            [this._spot.lat + radius/1.4, this._spot.lon - radius],
+            [this._spot.lat - radius/1.4, this._spot.lon - radius],
+            [this._spot.lat - radius/1.4, this._spot.lon + radius],
+        ]
+
+        this._map.removeLayer(this._marker)
+        this.createMarker()
+    }
+
+    convertToCircle() {
+        if (typeof this._spot.radius === 'number') return
+        
+        // Max distance between center and corners
+        let radius = Math.max(...this._spot.radius.map(c => 
+            this.distanceToCenter({coords: {latitude: c[0], longitude: c[1]}})
+        ))
+
+        this._spot.radius = radius
+
+        this._map.removeLayer(this._marker)
+        this.createMarker()
     }
 
     index(i) {
@@ -82,15 +187,34 @@ class Spot extends EventEmitter
         return this._spot.name
     }
 
-    distance(pos) {
-        return geo_distance(pos, {coords: {latitude: this._spot.lat, longitude: this._spot.lon}})
+    distanceToCenter(pos) {
+        if (typeof this._spot.radius === 'number')
+            return this._marker.getLatLng().distanceTo([pos.coords.latitude, pos.coords.longitude])
+        else
+            return geo_distance(pos, this.getCenterPosition())
     }
 
-    inside(pos) {
-        return this.distance(pos) < this._spot.radius
+    distanceToBorder(pos) {
+        if (typeof this._spot.radius === 'number') {
+            return this.distanceToCenter(pos) - this._spot.radius
+        }
+        else {
+            // For each segment of the polygon, calcultate the distance to the segment, keep the minimum
+            let min = 1000
+            for (let i = 0; i < this._spot.radius.length; i++) {
+                let j = (i+1) % this._spot.radius.length
+                let d = geo_distance_to_segment(pos, this._spot.radius[i], this._spot.radius[j])
+                if (d < min) min = d
+            }
+            // return geo_distance_to_segment(pos, this._spot.radius[0], this._spot.radius[1])
+            if (this.inside(pos)) min = -min
+            return min
+        }
     }
+
 
     editable() {
+        this._editable = true
         this._marker.enableEdit()
         this._marker.on('click', () => {
             // this.emit('click')
@@ -134,11 +258,13 @@ class Spot extends EventEmitter
         // to be implemented by children
     }
 
-    updatePosition(pos) {
+    updatePosition(pos) 
+    {
+        // Near: load if not loaded
+        if (this.player && !this.player.isLoaded() && this.distanceToBorder(pos) < 10) this.loadAudio()
+
         // to be implemented by children
     }
-    
-
 
 }
 
@@ -148,20 +274,7 @@ class Zone extends Spot
     constructor(zone, map, index) 
     {
         // Call parent constructor
-        super(zone, map, index, 'zones')
-
-        // Leaflet Circle
-        this._marker = L.circle([zone.lat, zone.lon],
-            {
-                color: '#17a2b8',
-                fillColor: '#17a2b8',
-                fillOpacity: 0.3,
-                radius: zone.radius,
-                type: this._type,
-                index: index,
-                selected: false,
-            })
-            .addTo(map)
+        super(zone, map, index, 'zones', '#17a2b8' )
 
         if (!this._spot.folder) 
             this._spot.folder = 'Objets'
@@ -178,6 +291,7 @@ class Zone extends Spot
         // player
         this.player = new PlayerSimple(true, 0)
     }
+    
 
     index(i) {
         if (i !== undefined) {
@@ -191,9 +305,13 @@ class Zone extends Spot
         this.player.load('/media/'+ parcoursID +'/' + this._spot.folder + '/', this._spot.media)        
     }
 
-    updatePosition(position) {
+    updatePosition(position) 
+    {
+        super.updatePosition(position)
+
+        // Inside: play with volume crossfade
         if (this.inside(position)) {
-            let vol = 1 - this.distance(position) / this._spot.radius
+            let vol = 1 - this.distanceToCenter(position) / this._spot.radius
             this.player.volume(vol)
             this.player.resume(vol)
         }
@@ -209,20 +327,7 @@ class Step extends Spot
     constructor(step, map, index) 
     {
         // Call parent constructor
-        super(step, map, index, 'steps')
-
-        // Leaflet Circle
-        this._marker = L.circle([step.lat, step.lon],
-            {
-                color: 'red',
-                fillColor: 'red',
-                fillOpacity: 0.3,
-                radius: step.radius,
-                type: this._type,
-                index: index,
-                selected: false,
-            })
-            .addTo(map)
+        super(step, map, index, 'steps', 'red' )       
 
         if (!this._spot.folder) 
             this._spot.folder = ''
@@ -263,8 +368,9 @@ class Step extends Spot
         this.player.load( '/media/' + parcoursID + '/' + this._spot.folder + '/', this._spot.media ) 
     }
 
-    updatePosition(position) {
-        if (this.sound === null) return
+    updatePosition(position) 
+    {
+        super.updatePosition(position)
 
         // If inside
         if (this.inside(position) && !this.player.isPlaying()) 
@@ -276,22 +382,17 @@ class Step extends Spot
             this.player.play()
         }
 
-        // Handle Offlimit (if media exists)
-        if (this._spot.media.offlimit.src !== '-') 
+        // If too far
+        if (this.player.isPlaying() && this.distanceToBorder(position) > 5) 
         {
-            // If too far
-            if (this.player.isPlaying() && this.distance(position) > this._spot.radius + 5) 
-            {
-                this.player.crossLimit(true)
-            }
-    
-            // If back inside
-            if (this.player.isOfflimit() && this.distance(position) < this._spot.radius + 5)
-            {
-                this.player.crossLimit(false)
-            }
+            this.player.crossLimit(true)
         }
 
+        // If back inside
+        if (this.player.isOfflimit() && this.distanceToBorder(position) < 5)
+        {
+            this.player.crossLimit(false)
+        }
     }
 
     clear() {

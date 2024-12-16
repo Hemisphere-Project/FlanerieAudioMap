@@ -9,3 +9,11 @@
 - export / import backup
 
 
+=> Geoloc:
+    - wait for user GO to start
+    - prepare Geoloc on start ?
+
+=> On GO:
+    - sequential media load list (distance sorted)
+
+    

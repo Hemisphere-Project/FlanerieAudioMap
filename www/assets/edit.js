@@ -124,6 +124,14 @@ function load() {
                             save().then(load).then(() => selectSpot('steps', i))
                         }))
 
+                        // button switch to Circle/Polygon
+                        body.append($('<button>').addClass('btn btn-sm btn-secondary btn-sm float-end p-1 me-1').html('<i class="bi bi-circle"></i>').click(() => {
+                            s.convertToCircle()
+                        }))
+                        body.append($('<button>').addClass('btn btn-sm btn-secondary btn-sm float-end p-1 me-1').html('<i class="bi bi-pentagon"></i>').click(() => {
+                            s.convertToPolygon()
+                        }))
+
                         mediaList.forEach(m => {
                             const div = $('<div>').addClass('edit-media mt-2').appendTo(media)
 
@@ -371,7 +379,7 @@ function save() {
                     toastError('Erreur lors de la sauvegarde..')
                     reject(error)
                 })
-        }, 1000)
+        }, 300)
     })
         
 }
@@ -414,11 +422,15 @@ var map = L.map('map', {editable: true}).setView(startPoint, 16)
 // Drag marker
 map.on('editable:vertex:dragend', function (e) {
     let marker = e.layer; // marker that was dragged
+    // find spot
+    let spot = findSpot(marker.options.type, marker.options.index)
+
     try {
         console.log('dragend', marker.options.type, marker.options.index, parcours)
-        parcours[marker.options.type][marker.options.index].lat = marker.getLatLng().lat
-        parcours[marker.options.type][marker.options.index].lon = marker.getLatLng().lng
-        parcours[marker.options.type][marker.options.index].radius = marker.getRadius()
+        parcours[marker.options.type][marker.options.index].lat = spot.getCenterPosition().lat
+        parcours[marker.options.type][marker.options.index].lon = spot.getCenterPosition().lng
+        parcours[marker.options.type][marker.options.index].radius = spot.getRadius()
+
         save()
 
         // select the marker
