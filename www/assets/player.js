@@ -177,7 +177,7 @@ class PlayerSimple extends EventEmitter
 
         this.isGoingOut = setTimeout(() => {
             this._player.pause()
-            this._player.seek(this._player.seek() - d/1000)
+            this._player.seek(this._player.seek() - d*2/1000)
             this.isGoingOut = null
             // console.log('PlayerSimple pauseOut done')
         }, d+10)
