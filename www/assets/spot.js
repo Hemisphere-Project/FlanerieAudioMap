@@ -382,17 +382,22 @@ class Step extends Spot
             this.player.play()
         }
 
-        // If too far
-        if (this.player.isPlaying() && this.distanceToBorder(position) > 20) 
+        // Handle Offlimit (if media exists)
+        if (this._spot.media.offlimit.src !== '-') 
         {
-            this.player.crossLimit(true)
+            // If too far
+            if (this.player.isPlaying() && this.distanceToBorder(position) > 15) 
+            {
+                this.player.crossLimit(true)
+            }
+    
+            // If back inside
+            if (this.player.isOfflimit() && this.distanceToBorder(position) < 15)
+            {
+                this.player.crossLimit(false)
+            }
         }
 
-        // If back inside
-        if (this.player.isOfflimit() && this.distanceToBorder(position) < 20)
-        {
-            this.player.crossLimit(false)
-        }
     }
 
     clear() {

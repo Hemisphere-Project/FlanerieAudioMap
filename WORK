@@ -1,7 +1,5 @@
 
-- Volume per track 
 - Etape qui se chevauche => higher index wins
-- Etape polygone
 
 - Edit fade in/out time par étape
 
@@ -9,11 +7,11 @@
 - export / import backup
 
 
+- Etape ne peut jouer avant la précédente
+
 => Geoloc:
     - wait for user GO to start
     - prepare Geoloc on start ?
 
-=> On GO:
-    - sequential media load list (distance sorted)
 
     
