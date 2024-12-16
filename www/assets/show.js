@@ -13,8 +13,6 @@ var lastPosition = null
 var lastTrackPosition = null
 var initializing = true
 
-var instru1 = null
-
 // title click -> back to control
 document.getElementById('title').addEventListener('click', () => {
     window.location.href = '/';
@@ -122,11 +120,6 @@ function initGeoloc()
     lastTrackPosition = null
     initializing = true
     polyline.setLatLngs([])
-
-    // load instrumentals , set volume at 0
-    if (!instru1) instru1 = new Howl({src: ['/media/instru1.wav'], loop: true})
-    instru1.play()
-    instru1.volume(0)
 }
 
 // Start real geoloc

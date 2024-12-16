@@ -162,7 +162,7 @@ app.post('/edit/:file/json', express.json(), (req, res) => {
 
     // Remove unused Objets media
     fs.readdirSync('./media/' + fileName + '/Objets').forEach(file => {
-      if (!content.zones || !content.zones.find(objet => objet.media === file)) {
+      if (!content.zones || !content.zones.find(objet => objet.media.src === file)) {
         fs.unlinkSync('./media/' + fileName + '/Objets/' + file);
         console.log('remove unused media', file);
       }

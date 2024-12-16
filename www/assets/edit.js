@@ -135,7 +135,7 @@ function load(pID) {
                                         postFile('/mediaUpload/' + parcoursID + '/' + step.folder, formData)
                                             .then(() => {
                                                 input.remove()
-                                                step.media[m] = file.name
+                                                step.media[m].src = file.name
                                                 save().then(load).then(() => selectSpot('steps', i))
                                             })
                                             .catch(error => {
@@ -151,24 +151,33 @@ function load(pID) {
                             div.append($('<span>').addClass('badge bg-danger me-1').text(m).css('width', '63px'))
                             
                             // media button
-                            if (step.media && step.media[m] != '-') {
-                                div.append($('<span>').addClass('edit-media me-1').text(step.media[m].substring(0, 25)))
+                            if (step.media && step.media[m].src != '-') {
+                                div.append($('<span>').addClass('edit-media me-1').text(step.media[m].src.substring(0, 25)))
                                 div.append($('<button>').addClass('btn btn-sm btn-danger btn-sm float-end p-1 me-1').html('<i class="bi bi-trash"></i>').click(() => {
-                                    if (confirm('Supprimer ' + step.folder + '/' +step.media[m] + ' ?')) {
-                                        get('/mediaRemove/' + parcoursID + '/' + step.folder + '/' + step.media[m])
-                                        step.media[m] = '-'
+                                    if (confirm('Supprimer ' + step.folder + '/' +step.media[m].src + ' ?')) {
+                                        get('/mediaRemove/' + parcoursID + '/' + step.folder + '/' + step.media[m].src)
+                                        step.media[m].src = '-'
+                                        step.media[m].master = 1
                                         save().then(load).then(() => selectSpot('steps', i))
                                     }
                                 }))
                                 div.append($('<button>').addClass('btn btn-sm btn-secondary btn-sm float-end p-1 me-1 btn-preview').html('<i class="bi bi-play"></i>').click(() => {
                                     if (s.player[m].isPlaying()) s.player[m].pause()
-                                    else s.player[m].resume(1)
+                                    else s.player[m].resume()
                                 }))
                                 s.player[m].on('play', () => div.find('.btn-preview').html('<i class="bi bi-pause"></i>'))
                                 s.player[m].on('pause', () => div.find('.btn-preview').html('<i class="bi bi-play"></i>'))
                                 s.player[m].on('stop', () => div.find('.btn-preview').html('<i class="bi bi-play"></i>'))
                                 s.player[m].on('end', () => div.find('.btn-preview').html('<i class="bi bi-play"></i>'))
+                                
+                                
+                                // volume integer input
+                                div.append($('<input class="input-volume float-end me-1 ">').attr('type', 'number').attr('min', 0).attr('max', 100).attr('step', 1).val(step.media[m].master*100).change(() => {
+                                    step.media[m].master = div.find('input').val()/100.0
+                                    save().then(load).then(() => selectSpot('steps', i))
+                                }))
                             }
+
                         })
 
                         // Add click event
@@ -201,7 +210,7 @@ function load(pID) {
                         // header div : title + buttons
                         const header = $('<div>').addClass('edit-header').appendTo(li)
                         header.append($('<span>').addClass('badge bg-info me-3').text(i))
-                        header.append($('<span>').addClass('edit-media me-1').text(zone.media))
+                        header.append($('<span>').addClass('edit-media me-1').text(zone.media.src))
                         
 
                         // body: audio select 
@@ -225,7 +234,7 @@ function load(pID) {
                                             postFile('/mediaUpload/' + parcoursID + '/Objets', formData)
                                                 .then(() => {
                                                     input.remove()
-                                                    zone.media = file.name
+                                                    zone.media.src = file.name
                                                     save()
                                                         .then(loadMediaList)
                                                         .then(load)
@@ -240,7 +249,7 @@ function load(pID) {
                                     input.click()
                                 }
                                 else {
-                                    zone.media = select.val()
+                                    zone.media.src = select.val()
                                     save().then(load).then(() => selectSpot('zones', i))
                                 }
                                 
@@ -249,7 +258,7 @@ function load(pID) {
                         // audio play/stop button
                         const play = $('<button>').addClass('btn btn-sm btn-secondary btn-sm p-1 me-1').html('<i class="bi bi-play btn-play"></i>').click(() => {
                             if (z.player.isPlaying()) z.player.pause()
-                            else z.player.resume(1)
+                            else z.player.resume()
                         })
                         z.player.on('play', () => play.html('<i class="bi bi-pause btn-play"></i>'))
                         z.player.on('pause', () => play.html('<i class="bi bi-play btn-play"></i>'))
@@ -282,7 +291,7 @@ function load(pID) {
                         if (MEDIALIST && MEDIALIST['Objets']) {
                             MEDIALIST['Objets'].forEach(media => {
                                 const option = $('<option>').attr('value', media).text(media).val(media)
-                                if (media == zone.media) option.attr('selected', 'selected')
+                                if (media == zone.media.src) option.attr('selected', 'selected')
                                 select.append(option)
                             })
                         }
@@ -293,7 +302,7 @@ function load(pID) {
 
                         // on select
                         z.on('selected', () => {
-                            if (!li.hasClass('active')) z.player.resume(1)
+                            if (!li.hasClass('active')) z.player.resume()
                             li.addClass('active')
                         })
                         z.on('unselected', () => {

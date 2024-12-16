@@ -88,6 +88,11 @@ li.active > .edit-header {
     display: inline-block;
 }
 
+.edit-body .input-volume {
+    width: 50px;
+    text-align: right;
+}
+
 option[value=\*] { 
     /* italic */
     font-style: italic;

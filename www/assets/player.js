@@ -6,12 +6,15 @@ class PlayerSimple extends EventEmitter
         this._fadeTime = fadetime 
         this._player = null
         this.isGoingOut = null
+        this._master = 1
+        this._volume = 0
     }
 
-    load(src) {
+    load(basepath, media) {
         this.clear()
+
         this._player = new Howl({
-            src: src,
+            src: basepath + media.src,
             loop: this._loop,
             autoplay: false,
             volume: 0
@@ -43,10 +46,13 @@ class PlayerSimple extends EventEmitter
         this._player.on('load', () => {
             if (this._player) {
                 this.emit('load', this._player._src)
-                console.log('PlayerSimple load:', this._player._src)
+                console.log('PlayerSimple ready:', this._player._src)
             }
         })
-        console.log('PlayerSimple loaded:', src)
+
+        this.master(media.master)
+
+        console.log('PlayerSimple load:', media.src)
     }
 
     clear() {  
@@ -65,20 +71,25 @@ class PlayerSimple extends EventEmitter
         return this._loop
     }
 
-    play(seek=0, volume=1) {
-        if (this.isGoingOut) clearTimeout(this.isGoingOut)
+    play(seek=0, volume=1.0) {
+        if (this.isGoingOut) {
+            clearTimeout(this.isGoingOut)
+            this.isGoingOut = null
+            this._player.pause()
+        }
         else if (this._player.playing()) return
 
         if (seek >= 0) this._player.seek(seek)
         this._player.play()
-
-        if (volume < 0) volume = this._player.volume()
-
-        if (this._fadeTime > 0) this._player.fade(0, volume, this._fadeTime)
-        else this._player.volume(volume)
+        
+        if (this._fadeTime > 0) {
+            this._volume = volume
+            this._player.fade(this._player.volume() , this._volume * this._master, this._fadeTime)
+        }
+        else this.volume(volume)
     }
 
-    resume(volume=1) {
+    resume(volume=1.0) {
         this.play(-1, volume)
     }
 
@@ -88,11 +99,25 @@ class PlayerSimple extends EventEmitter
 
     pause() {
         if (!this._player.playing()) return
+        if (this.isGoingOut) return
         this._player.pause()
     }
 
     volume(value) {
-        this._player.volume(value)
+        if (value !== undefined) {
+            this._volume = value
+            this._player.volume(this._volume * this._master)
+            // this._player.fade(this._volume * this._master, this._volume * this._master, 0)  // cancel other fade
+        }
+        return this._volume
+    }
+
+    master(value) {
+        if (value !== undefined) {
+            this._master = value
+            this._player.volume(this._volume * this._master)
+        }
+        return this._master
     }
 
     isPlaying() {
@@ -104,11 +129,14 @@ class PlayerSimple extends EventEmitter
         if (this.isGoingOut) clearTimeout(this.isGoingOut)
         if (!this._player.playing()) return
 
+        // Fade out
         this._player.fade(this._player.volume(), 0, d)
+        this._volume = 0
+
         this.isGoingOut = setTimeout(() => {
             this._player.stop()
-            // console.log('PlayerSimple stopOut done')
             this.isGoingOut = null
+            // console.log('PlayerSimple stopOut done')
         }, d+10)
     }
 
@@ -116,12 +144,15 @@ class PlayerSimple extends EventEmitter
         if (d < 0) d = this._fadeTime
         if (!this._player.playing() || this.isGoingOut) return
 
+        // Fade out
         this._player.fade(this._player.volume(), 0, d)
+        this._volume = 0
+
         this.isGoingOut = setTimeout(() => {
             this._player.pause()
             this._player.seek(this._player.seek() - d/1000)
-            // console.log('PlayerSimple pauseOut done')
             this.isGoingOut = null
+            // console.log('PlayerSimple pauseOut done')
         }, d+10)
     }
 }
@@ -146,11 +177,11 @@ class PlayerStep extends EventEmitter
         })
     }
 
-    load(src) {
-        this.voice.load(src.voice)
-        this.music.load(src.music)
-        this.ambiant.load(src.ambiant)
-        this.offlimit.load(src.offlimit)
+    load(basepath, media) {
+        this.voice.load(basepath, media.voice)
+        this.music.load(basepath, media.music)
+        this.ambiant.load(basepath, media.ambiant)
+        this.offlimit.load(basepath, media.offlimit)
         this.state = 'stop'
     }
 

@@ -168,13 +168,14 @@ class Zone extends Spot
             this._spot.name = 'Objet '+index
 
         if (!this._spot.media) 
-            this._spot.media = '-'
+            this._spot.media = {src: '-', master: 1}
 
         // Leaflet Tooltip
-        this._marker.bindTooltip(this._spot.media)
+        this._marker.bindTooltip(this._spot.media.src)
 
         // player
         this.player = new PlayerSimple(true, 0)
+        this.player.master( this._spot.master )
     }
 
     index(i) {
@@ -186,7 +187,7 @@ class Zone extends Spot
     }
 
     loadAudio() {
-        this.player.load('/media/'+ parcoursID +'/' + this._spot.folder + '/' + this._spot.media)        
+        this.player.load('/media/'+ parcoursID +'/' + this._spot.folder + '/', this._spot.media)        
     }
 
     updatePosition(position) {
@@ -217,10 +218,10 @@ class Step extends Spot
 
         if (!this._spot.media) 
             this._spot.media = {
-                voice: '-',
-                music: '-',
-                ambiant: '-',
-                offlimit: '-',
+                voice: {src: '-', master: 1},
+                music: {src: '-', master: 1},
+                ambiant: {src: '-', master: 1},
+                offlimit: {src: '-', master: 1},
             }
 
         // player
@@ -245,12 +246,7 @@ class Step extends Spot
         allSteps.push(this)
 
         // Players
-        this.player.load({
-            voice: '/media/' + parcoursID + '/' + this._spot.folder + '/' + this._spot.media.voice,
-            music: '/media/' + parcoursID + '/' + this._spot.folder + '/' + this._spot.media.music,
-            ambiant: '/media/' + parcoursID + '/' + this._spot.folder + '/' + this._spot.media.ambiant,
-            offlimit: '/media/' + parcoursID + '/' + this._spot.folder + '/' + this._spot.media.offlimit,
-        })
+        this.player.load( '/media/' + parcoursID + '/' + this._spot.folder + '/', this._spot.media ) 
     }
 
     updatePosition(position) {
