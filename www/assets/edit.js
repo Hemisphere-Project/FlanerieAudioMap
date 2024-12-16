@@ -192,8 +192,14 @@ function load() {
                         li.click(() => s.select().center())
 
                         // on select
-                        s.on('selected', () => li.addClass('active'))
-                        s.on('unselected', () => li.removeClass('active'))
+                        s.on('selected', () => {
+                            if (!li.hasClass('active')) s.player.play()
+                            li.addClass('active')
+                        })
+                        s.on('unselected', () => {
+                            li.removeClass('active')
+                            s.player.stop()
+                        })
 
                     })
                 }

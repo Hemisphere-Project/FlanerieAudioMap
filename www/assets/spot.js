@@ -50,26 +50,15 @@ function removeSpot(type, index)
 // Generic class Spot, implementing Events
 class Spot extends EventEmitter
 {
-    constructor(spot, map, index, color, type)
+    constructor(spot, map, index, type)
     {
         super()
         this._spot = spot
         this._map = map
         this._index = index
-        this.player = null
+        this._type = type
 
-        // Leaflet Circle
-        this._marker = L.circle([spot.lat, spot.lon],
-            {
-                color: color,
-                fillColor: color,
-                fillOpacity: 0.3,
-                radius: spot.radius,
-                type: type,
-                index: index,
-                selected: false,
-            })
-            .addTo(map)
+        this.player = null
 
         // Register
         registerSpot(this)
@@ -159,7 +148,20 @@ class Zone extends Spot
     constructor(zone, map, index) 
     {
         // Call parent constructor
-        super(zone, map, index, '#17a2b8', 'zones')
+        super(zone, map, index, 'zones')
+
+        // Leaflet Circle
+        this._marker = L.circle([zone.lat, zone.lon],
+            {
+                color: '#17a2b8',
+                fillColor: '#17a2b8',
+                fillOpacity: 0.3,
+                radius: zone.radius,
+                type: this._type,
+                index: index,
+                selected: false,
+            })
+            .addTo(map)
 
         if (!this._spot.folder) 
             this._spot.folder = 'Objets'
@@ -207,7 +209,20 @@ class Step extends Spot
     constructor(step, map, index) 
     {
         // Call parent constructor
-        super(step, map, index, 'red', 'steps')
+        super(step, map, index, 'steps')
+
+        // Leaflet Circle
+        this._marker = L.circle([step.lat, step.lon],
+            {
+                color: 'red',
+                fillColor: 'red',
+                fillOpacity: 0.3,
+                radius: step.radius,
+                type: this._type,
+                index: index,
+                selected: false,
+            })
+            .addTo(map)
 
         if (!this._spot.folder) 
             this._spot.folder = ''
