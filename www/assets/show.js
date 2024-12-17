@@ -244,9 +244,11 @@ function errorCallback(error) {
 document.getElementById('start').addEventListener('click', startGeoloc)
 document.getElementById('simulate').addEventListener('click', simulateGeoloc)
 document.getElementById('rearm').addEventListener('click', () => {
-    stepIndex = -1
+    stepIndex = -2
     spots.forEach(spot => spot.player.stop())
-    map.fire('move')
+    setTimeout(() => {
+        map.fire('move')
+    }, 2000)
 })
 document.getElementById('reload').addEventListener('click', () => {
     location.reload()

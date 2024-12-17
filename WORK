@@ -22,10 +22,16 @@
 
 ========= Post Guillotière Décembre 2024
 
-- sequence ordre imposé n+1 après n
-- option "étape facultative"
-- option "étape complète" (attendre afterparty pour déverrouiller)
-- objet toggle: localised / ambiance
-- étape: voix principale puis loop afterparty
-- objet lié à étape
 - interruptions/ offlimit globaux
+- étape: voix principale puis loop afterparty
+- option "étape complète" (attendre afterparty pour déverrouiller)
+- edit :: mise en page etape
+- show :: sequence n+1 : bordure dashed / sequence < n greyed out
+- objet lié à étape
+
+X objet toggle: localised / ambiance
+X sequence ordre imposé n+1 après n
+X option "étape facultative"
+
+
+// BUGS

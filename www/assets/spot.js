@@ -1,6 +1,8 @@
 const LOAD_EXTRARADIUS = 10
-
 var ALLSPOTS = []
+
+var stepIndex = -1
+
 
 function registerSpot(spot) {
     ALLSPOTS.push(spot)
@@ -45,9 +47,6 @@ function removeSpot(type, index)
         .map(s => s.index(s._index-1))
 
 }
-
-// Sequencial steps
-var stepIndex = -1
 
 // Generic class Spot, implementing Events
 class Spot extends EventEmitter
@@ -303,7 +302,7 @@ class Zone extends Spot
     constructor(zone, map, index) 
     {
         // Call parent constructor
-        super(zone, map, index, 'zones', '#17a2b8' )
+        super(zone, map, index, 'zones', zone.mode == 'Ambiance' ? 'green' : '#17a2b8' )
 
         if (!this._spot.folder) 
             this._spot.folder = 'Objets'
@@ -321,7 +320,7 @@ class Zone extends Spot
         this._marker.bindTooltip(this._spot.media.src)
 
         // player
-        this.player = new PlayerSimple(true, this._spot.mode == 'Ambiance' ? 1500 : 0)
+        this.player = new PlayerSimple(true, zone.mode == 'Ambiance' ? 1500 : 0)
     }
     
 
@@ -340,6 +339,7 @@ class Zone extends Spot
     updatePosition(position) 
     {
         super.updatePosition(position)
+        if (!this.player.isLoaded()) return
 
         // Inside
         if (this.inside(position)) {
@@ -387,6 +387,10 @@ class Step extends Spot
 
         // Leaflet Tooltip
         this._marker.bindTooltip(this._spot.name)
+
+        // Add to allSteps
+        allSteps = allSteps.filter(s => s._index !== this._index)
+        allSteps.push(this)
     }
 
     index(i) {
@@ -399,10 +403,6 @@ class Step extends Spot
     }
 
     loadAudio() {
-        // Add to allSteps
-        allSteps = allSteps.filter(s => s._index !== this._index)
-        allSteps.push(this)
-
         // Players
         this.player.load( '/media/' + parcoursID + '/' + this._spot.folder + '/', this._spot.media ) 
     }
@@ -415,18 +415,15 @@ class Step extends Spot
         //
 
         // Already played higher steps
-        if (this._index < stepIndex) {
-            this.player.stop()
-            return 
-        }
+        if (this._index < stepIndex) return
 
-        // if (this._index == 3) {
-        //     console.log(this.player.isPlaying(), this.near(position), this.inside(position))
-        // }
-
-        // If inside: play
+        // If inside:
         if (!this.player.isPlaying() && this.near(position) && this.inside(position)) 
         {
+            // Check if previous unrealised steps where optional
+            if (this._index > stepIndex + 1 && stepIndex + 1 >= 0)
+                if (allSteps.filter(s => s._index > stepIndex && s._index < this._index && s._spot.optional !== true).length > 0) return
+
             // Stop all other steps
             allSteps.filter(s => s._index !== this._index).map( s => s.player.stop() )
             

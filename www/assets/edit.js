@@ -132,6 +132,16 @@ function load() {
                             s.convertToPolygon()
                         }))
 
+                        // Optional toggle
+                        const formCheck = $('<div class="form-check form-switch">').appendTo(body)
+                        const input = $('<input class="form-check-input" type="checkbox" role="switch">').attr('id', 'flexSwitchCheck' + i).appendTo(formCheck)
+                        input.prop('checked', step.optional)
+                        input.change(() => {
+                            step.optional = input.prop('checked')
+                            save().then(load).then(() => selectSpot('steps', i))
+                        })
+                        formCheck.append($('<label class="form-check-label" for="flexSwitchCheck' + i + '">').text('Facultative'))
+
                         mediaList.forEach(m => {
                             const div = $('<div>').addClass('edit-media mt-2').appendTo(media)
 
@@ -231,7 +241,7 @@ function load() {
                         
                         // header div : title + buttons
                         const header = $('<div>').addClass('edit-header').appendTo(li)
-                        header.append($('<span>').addClass('badge bg-info me-3').text(i))
+                        header.append($('<span>').addClass('badge me-3').addClass(zone.mode == 'Ambiance' ? 'bg-success' : 'bg-info').text(i))
                         header.append($('<span>').addClass('edit-media me-1').text(zone.media.src))
                         
 
@@ -331,15 +341,7 @@ function load() {
                             })
                         }
 
-                        console.log('zone.mode', zone.mode) 
-
                         // Objet / Ambiance mode toggle
-                        /*
-                        <div class="form-check form-switch">
-                            <input class="form-check-input" type="checkbox" role="switch" id="flexSwitchCheckDefault">
-                            <label class="form-check-label" for="flexSwitchCheckDefault">Default switch checkbox input</label>
-                        </div>
-                        */
                         const formCheck = $('<div class="form-check form-switch">').appendTo(body)
                         const input = $('<input class="form-check-input" type="checkbox" role="switch">').attr('id', 'flexSwitchCheck' + i).appendTo(formCheck)
                         input.prop('checked', zone.mode == 'Ambiance')
