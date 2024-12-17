@@ -386,13 +386,13 @@ class Step extends Spot
         if (this._spot.media.offlimit.src !== '-') 
         {
             // If too far
-            if (this.player.isPlaying() && this.distanceToBorder(position) > 15) 
+            if (this.player.isPlaying() && this.distanceToBorder(position) > 3) 
             {
                 this.player.crossLimit(true)
             }
     
             // If back inside
-            if (this.player.isOfflimit() && this.distanceToBorder(position) < 5)
+            if (this.player.isOfflimit() && this.distanceToBorder(position) < 3)
             {
                 this.player.crossLimit(false)
             }

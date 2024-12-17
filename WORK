@@ -1,17 +1,19 @@
 
-- Etape qui se chevauche => higher index wins
+- Etape qui se chevauche => higher index wins ?
+- Etape ne peut jouer avant la précédente (optional ?)
+- Can't play lower index step
+
+- Nouveau type d'objet: Interruption (pause Etapes, trigger) 
 
 - Edit fade in/out time par étape
 
 - autosave -> history -> ctrl-z
 - export / import backup
 
-
-- Etape ne peut jouer avant la précédente
-
 => Geoloc:
     - wait for user GO to start
     - prepare Geoloc on start ?
+
 
 
     
