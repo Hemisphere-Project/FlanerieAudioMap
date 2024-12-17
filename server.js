@@ -49,7 +49,12 @@ app.get('/list', (req, res) => {
     if (!file.endsWith('.json')) return;
     const parcoursFileName = file.split('.json')[0];
     const parcoursContent = JSON.parse(fs.readFileSync(parcoursFolder + file, 'utf8'));
-    parcours.push({file: parcoursFileName, name: parcoursContent.name, status: parcoursContent.status});
+    parcours.push({
+      file: parcoursFileName, 
+      name: parcoursContent.name, 
+      status: parcoursContent.status, 
+      time: fs.statSync(parcoursFolder + file).mtime
+    });
   });
   res.json(parcours);  
 })
@@ -79,6 +84,18 @@ app.post('/deleteParcours', express.json(), (req, res) => {
   const fileName = req.body.file;
   const filePath = './parcours/' + fileName + '.json';
   fs.unlinkSync(filePath);
+  res.status(200).send();
+})
+
+// clone Parcours
+app.post('/cloneParcours', express.json(), (req, res) => {
+  const fileName = req.body.file;
+  const filePath = './parcours/' + fileName + '.json';
+  const content = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  content.name = req.body.name;
+  const newFileName = req.body.name.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+  const newFilePath = './parcours/' + newFileName + '.json';
+  fs.writeFileSync(newFilePath, JSON.stringify(content, null, 2));
   res.status(200).send();
 })
 

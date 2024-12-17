@@ -250,13 +250,15 @@ document.getElementById('reload').addEventListener('click', () => {
     location.reload()
 })
 
+var noSleep = new NoSleep();
+
 // INIT
 //
 load()
 
 $('.overlay').click(() => {
     $('.overlay').hide()
-
+    noSleep.enable();
     // load spots players
     // spots.forEach(spot => spot.loadAudio())
 })

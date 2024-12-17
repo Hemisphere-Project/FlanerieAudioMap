@@ -16,9 +16,18 @@ function refreshList() {
         list.innerHTML = '';
         data.forEach(parcours => {
         const tr = document.createElement('tr');
+            
+            // Name
             const tdName = document.createElement('td');
             tdName.innerHTML = parcours.name;
             tr.appendChild(tdName);
+
+            // Update time
+            const tdTime = document.createElement('td');
+            tdTime.innerHTML = parcours.time;
+            tr.appendChild(tdTime);
+
+            // Status
             const tdStatus = document.createElement('td');
             tdStatus.innerHTML = parcours.status;
             tr.appendChild(tdStatus);
@@ -50,6 +59,21 @@ function refreshList() {
                 if (confirm('Supprimer le parcours ' + parcours.name + ' ?')) deleteParcours(parcours.file) 
             });
             tdLink.appendChild(buttonDelete);
+
+            // button clone
+            const buttonClone = document.createElement('button');
+            buttonClone.classList.add('btn', 'btn-info', 'btn-sm', 'mr-1');
+            buttonClone.innerHTML = 'Clone';
+            buttonClone.addEventListener('click', () => {
+                var prevName = parcours.name + ' - Copie';
+                var name = prompt('Enter the name of the new parcours', prevName).trim()
+                if (!name) return;
+                post('/cloneParcours', {file: parcours.file, name: name})
+                    .then(() => {
+                        refreshList();
+                    })
+            })
+            tdLink.appendChild(buttonClone);
 
             tr.appendChild(tdLink);
             list.appendChild(tr);
