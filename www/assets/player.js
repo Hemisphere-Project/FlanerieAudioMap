@@ -154,7 +154,7 @@ class PlayerSimple extends EventEmitter
     stopOut(d=-1) {
         if (d < 0) d = this._fadeTime
         if (this.isGoingOut) clearTimeout(this.isGoingOut)
-        if (!this._player.playing()) return
+        if (!this._player || !this._player.playing()) return
 
         // Fade out
         this._player.fade(this._player.volume(), 0, d)
@@ -244,7 +244,7 @@ class PlayerStep extends EventEmitter
     }
 
     isPlaying() {
-        return this.state !== 'stop'
+        return this.state !== 'stop' && this.state !== 'off'
     }
 
     isLoaded() {

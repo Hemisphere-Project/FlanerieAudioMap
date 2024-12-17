@@ -230,10 +230,6 @@ class Spot extends EventEmitter
             // For each segment of the polygon, calcultate the distance to the segment, keep the minimum
             let min = 1000
 
-            // First check if we are in bounds*1.5
-            
-
-
             for (let i = 0; i < this._spot.radius.length; i++) {
                 let j = (i+1) % this._spot.radius.length
                 let d = geo_distance_to_segment(pos, this._spot.radius[i], this._spot.radius[j])
@@ -414,8 +410,12 @@ class Step extends Spot
             return 
         }
 
+        // if (this._index == 3) {
+        //     console.log(this.player.isPlaying(), this.near(position), this.inside(position))
+        // }
+
         // If inside: play
-        if (!this.player.isPlaying() && this.near(pos) && this.inside(position)) 
+        if (!this.player.isPlaying() && this.near(position) && this.inside(position)) 
         {
             // Stop all other steps
             allSteps.filter(s => s._index !== this._index).map( s => s.player.stop() )
