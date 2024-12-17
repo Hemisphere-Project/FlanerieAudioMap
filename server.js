@@ -84,6 +84,11 @@ app.post('/deleteParcours', express.json(), (req, res) => {
   const fileName = req.body.file;
   const filePath = './parcours/' + fileName + '.json';
   fs.unlinkSync(filePath);
+
+  // remove media folder
+  const mediaFolder = './media/' + fileName
+  if (fs.existsSync(mediaFolder)) fs.rmSync(mediaFolder, { recursive: true });
+
   res.status(200).send();
 })
 
@@ -96,6 +101,21 @@ app.post('/cloneParcours', express.json(), (req, res) => {
   const newFileName = req.body.name.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
   const newFilePath = './parcours/' + newFileName + '.json';
   fs.writeFileSync(newFilePath, JSON.stringify(content, null, 2));
+
+  // copy media folder
+  const mediaFolder = './media/' + fileName;
+  const newMediaFolder = './media/' + newFileName;
+  if (fs.existsSync(mediaFolder)) {
+    if (!fs.existsSync(newMediaFolder)) fs.mkdirSync(newMediaFolder);
+    fs.readdirSync(mediaFolder).forEach(folder => {
+      const newFolder = newMediaFolder + '/' + folder;
+      if (!fs.existsSync(newFolder)) fs.mkdirSync(newFolder);
+      fs.readdirSync(mediaFolder + '/' + folder).forEach(file => {
+        fs.copyFileSync(mediaFolder + '/' + folder + '/' + file, newFolder + '/' + file);
+      })
+    })
+  }
+
   res.status(200).send();
 })
 

@@ -24,7 +24,8 @@ function refreshList() {
 
             // Update time
             const tdTime = document.createElement('td');
-            tdTime.innerHTML = parcours.time;
+            // format date to jj/MM/YYYY HH:mm:ss
+            tdTime.innerHTML = new Date(parcours.time).toLocaleString('fr-FR');
             tr.appendChild(tdTime);
 
             // Status

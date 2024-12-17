@@ -2,7 +2,8 @@
 //
 
 //  if url contains 'flanerie'
-const FRONT_LOGS = window.location.href.includes('flanerie')
+// const FRONT_LOGS = window.location.href.includes('flanerie')
+const FRONT_LOGS = true
 
 // copy console.log and console.error to $('#logs')
 console._log = console.log

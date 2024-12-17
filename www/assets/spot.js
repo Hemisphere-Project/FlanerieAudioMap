@@ -1,3 +1,5 @@
+const LOAD_EXTRARADIUS = 10
+
 var ALLSPOTS = []
 
 function registerSpot(spot) {
@@ -44,7 +46,8 @@ function removeSpot(type, index)
 
 }
 
-
+// Sequencial steps
+var stepIndex = -1
 
 // Generic class Spot, implementing Events
 class Spot extends EventEmitter
@@ -85,7 +88,7 @@ class Spot extends EventEmitter
                 })
                 .addTo(map)
 
-            this._loadRadius = this._spot.radius
+            this._loadRadius = this._spot.radius + LOAD_EXTRARADIUS
         }
 
         // Leaflet Polygon.
@@ -104,7 +107,7 @@ class Spot extends EventEmitter
             // Compute radius
             this._loadRadius = Math.max(...this._spot.radius.map(c => 
                 this.distanceToCenter({coords: {latitude: c[0], longitude: c[1]}})
-            ))
+            ))+LOAD_EXTRARADIUS
         }
 
         // Load Circle
@@ -114,10 +117,10 @@ class Spot extends EventEmitter
                     opacity: 0.3,
                     fillColor: 'yellow',
                     fillOpacity: 0,
-                    radius: this._loadRadius + 10,
+                    radius: this._loadRadius,
                     selected: false,
                 })
-                .addTo(map)
+                .addTo(map).bringToBack()
 
     
         // Editable
@@ -402,18 +405,30 @@ class Step extends Spot
     {
         super.updatePosition(position)
 
-        // If inside
-        if (this.inside(position) && !this.player.isPlaying()) 
+        // Check if we are able to play (Sequential logic)
+        //
+
+        // Already played higher steps
+        if (this._index < stepIndex) {
+            this.player.stop()
+            return 
+        }
+
+        // If inside: play
+        if (!this.player.isPlaying() && this.near(pos) && this.inside(position)) 
         {
             // Stop all other steps
             allSteps.filter(s => s._index !== this._index).map( s => s.player.stop() )
             
             // Play
             this.player.play()
+
+            // Update index
+            stepIndex = this._index
         }
 
         // Handle Offlimit (if media exists)
-        if (this._spot.media.offlimit.src !== '-') 
+        if (stepIndex == this._index && this._spot.media.offlimit.src !== '-') 
         {
             // If too far
             if (this.player.isPlaying() && this.distanceToBorder(position) > 3) 
