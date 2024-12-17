@@ -243,8 +243,10 @@ function errorCallback(error) {
 
 document.getElementById('start').addEventListener('click', startGeoloc)
 document.getElementById('simulate').addEventListener('click', simulateGeoloc)
-document.getElementById('mediaload').addEventListener('click', () => {
-    spots.forEach(spot => spot.loadAudio())
+document.getElementById('rearm').addEventListener('click', () => {
+    stepIndex = -1
+    spots.forEach(spot => spot.player.stop())
+    map.fire('move')
 })
 document.getElementById('reload').addEventListener('click', () => {
     location.reload()

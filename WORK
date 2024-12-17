@@ -1,7 +1,5 @@
 
-- Etape qui se chevauche => higher index wins ?
 - Etape ne peut jouer avant la précédente (optional ?)
-- Can't play lower index step
 
 - Nouveau type d'objet: Interruption (pause Etapes, trigger) 
 
