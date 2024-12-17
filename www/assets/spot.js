@@ -111,16 +111,16 @@ class Spot extends EventEmitter
         }
 
         // Load Circle
-        L.circle(this.getCenterPosition(),
-                {
-                    color: 'yellow',
-                    opacity: 0.3,
-                    fillColor: 'yellow',
-                    fillOpacity: 0,
-                    radius: this._loadRadius,
-                    selected: false,
-                })
-                .addTo(map).bringToBack()
+        // L.circle(this.getCenterPosition(),
+        //         {
+        //             color: 'yellow',
+        //             opacity: 0.3,
+        //             fillColor: 'yellow',
+        //             fillOpacity: 0,
+        //             radius: this._loadRadius,
+        //             selected: false,
+        //         })
+        //         .addTo(map).bringToBack()
 
     
         // Editable
