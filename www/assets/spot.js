@@ -314,11 +314,14 @@ class Zone extends Spot
         if (!this._spot.media) 
             this._spot.media = {src: '-', master: 1}
 
+        if (!this._spot.mode)
+            this._spot.mode = 'Objet'   // Objet / Ambiance
+
         // Leaflet Tooltip
         this._marker.bindTooltip(this._spot.media.src)
 
         // player
-        this.player = new PlayerSimple(true, 0)
+        this.player = new PlayerSimple(true, this._spot.mode == 'Ambiance' ? 1500 : 0)
     }
     
 
@@ -338,13 +341,20 @@ class Zone extends Spot
     {
         super.updatePosition(position)
 
-        // Inside: play with volume crossfade
+        // Inside
         if (this.inside(position)) {
-            let vol = 1 - this.distanceToCenter(position) / this._spot.radius
-            this.player.volume(vol)
-            this.player.resume(vol)
+
+            // Objet: play with volume crossfade
+            if (this._spot.mode === 'Objet') 
+            {
+                let vol = 1 - this.distanceToCenter(position) / this._spot.radius
+                this.player.volume(vol)
+                this.player.resume(vol)
+            }
+            // Ambiance: play
+            else this.player.resume()
         }
-        else this.player.pause()
+        else this.player.pauseOut()
     }
 }    
 

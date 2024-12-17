@@ -88,6 +88,12 @@ li.active > .edit-header {
     display: inline-block;
 }
 
+.edit-body .form-switch {
+    margin-left: 50px;
+    margin-top: 10px;
+    width: 60%;
+}
+
 .edit-body .input-volume {
     width: 50px;
     text-align: right;

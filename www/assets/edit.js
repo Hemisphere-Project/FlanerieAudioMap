@@ -313,6 +313,14 @@ function load() {
                             zone.media.master = body.find('input').val()/100.0
                             save().then(load).then(() => selectSpot('zones', i))
                         }))
+
+                        // button switch to Circle/Polygon
+                        body.append($('<button>').addClass('btn btn-sm btn-secondary btn-sm float-end p-1 me-1').html('<i class="bi bi-circle"></i>').click(() => {
+                            z.convertToCircle()
+                        }))
+                        body.append($('<button>').addClass('btn btn-sm btn-secondary btn-sm float-end p-1 me-1').html('<i class="bi bi-pentagon"></i>').click(() => {
+                            z.convertToPolygon()
+                        }))
                         
                         // fill select with media list from folder 'Objets'
                         if (MEDIALIST && MEDIALIST['Objets']) {
@@ -323,7 +331,24 @@ function load() {
                             })
                         }
 
-                        
+                        console.log('zone.mode', zone.mode) 
+
+                        // Objet / Ambiance mode toggle
+                        /*
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" role="switch" id="flexSwitchCheckDefault">
+                            <label class="form-check-label" for="flexSwitchCheckDefault">Default switch checkbox input</label>
+                        </div>
+                        */
+                        const formCheck = $('<div class="form-check form-switch">').appendTo(body)
+                        const input = $('<input class="form-check-input" type="checkbox" role="switch">').attr('id', 'flexSwitchCheck' + i).appendTo(formCheck)
+                        input.prop('checked', zone.mode == 'Ambiance')
+                        input.change(() => {
+                            zone.mode = input.prop('checked') ? 'Ambiance' : 'Objet'
+                            save().then(load).then(() => selectSpot('zones', i))
+                        })
+                        formCheck.append($('<label class="form-check-label" for="flexSwitchCheck' + i + '">').text( zone.mode == 'Ambiance' ? 'Ambiance' : 'Objet Ponctuel' ))
+
                         // Add click event
                         li.click(() => z.select().center())
 

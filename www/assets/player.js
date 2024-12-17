@@ -44,6 +44,11 @@ class PlayerSimple extends EventEmitter
             if (this._player) {
                 this.emit('pause', this._player._src)
                 console.log('PlayerSimple pause:', this._player._src)
+
+                if (this._rewindOnPause !== undefined) {
+                    let d = this._rewindOnPause > 0 ? this._rewindOnPause : this._fadeTime
+                    this._player.seek(this._player.seek() - d / 1000)
+                }
             }
         })
         this._player.on('load', () => {
@@ -151,6 +156,10 @@ class PlayerSimple extends EventEmitter
         return this._player !== null
     }
 
+    rewindOnPause(value = -1) {
+        this._rewindOnPause = value
+    }
+
     stopOut(d=-1) {
         if (d < 0) d = this._fadeTime
         if (this.isGoingOut) clearTimeout(this.isGoingOut)
@@ -164,12 +173,12 @@ class PlayerSimple extends EventEmitter
             this._player.stop()
             this.isGoingOut = null
             // console.log('PlayerSimple stopOut done')
-        }, d+10)
+        }, d)
     }
 
     pauseOut(d=-1) {
         if (d < 0) d = this._fadeTime
-        if (!this._player.playing() || this.isGoingOut) return
+        if (!this._player || !this._player.playing() || this.isGoingOut) return
 
         // Fade out
         this._player.fade(this._player.volume(), 0, d)
@@ -177,10 +186,9 @@ class PlayerSimple extends EventEmitter
 
         this.isGoingOut = setTimeout(() => {
             this._player.pause()
-            this._player.seek(this._player.seek() - d*2/1000)
             this.isGoingOut = null
             // console.log('PlayerSimple pauseOut done')
-        }, d+10)
+        }, d)
     }
 }
 
@@ -196,12 +204,13 @@ class PlayerStep extends EventEmitter
         this.offlimit = new PlayerSimple(true, 500)
         this.state = 'off'
 
-        this.voice.on('end', () => {
-            if (this.state == 'play') this.state = 'afterplay'
-        })
-        this.music.on('end', () => {
-            if (this.state == 'play') this.state = 'afterplay'
-        })
+        this.voice.rewindOnPause(3000)
+        this.voice.on('end', () => { if (this.state == 'play') this.state = 'afterplay' })
+
+        this.music.rewindOnPause(3000)
+        this.music.on('end', () => { if (this.state == 'play') this.state = 'afterplay' })
+        
+
     }
 
     load(basepath, media) {
