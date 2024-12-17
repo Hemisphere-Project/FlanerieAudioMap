@@ -25,8 +25,7 @@
 - interruptions/ offlimit globaux
 - étape: voix principale puis loop afterparty
 - option "étape complète" (attendre afterparty pour déverrouiller)
-- edit :: mise en page etape
-- show :: sequence n+1 : bordure dashed / sequence < n greyed out
+- show // edit :: sequence n+1 : bordure dashed / sequence < n greyed out
 - objet lié à étape
 
 X objet toggle: localised / ambiance

@@ -99,6 +99,10 @@ li.active > .edit-header {
     text-align: right;
 }
 
+.edit-body .edit-media-list {
+    margin-bottom: 20px;
+}
+
 option[value=\*] { 
     /* italic */
     font-style: italic;

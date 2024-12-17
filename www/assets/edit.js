@@ -88,7 +88,7 @@ function load() {
                                 save().then(load).then(() => selectSpot('steps', i))
                             })
 
-                        const media = $('<div>').addClass('edit-media mt-2').appendTo(body)
+                        const media = $('<div>').addClass('edit-media-list mt-2').appendTo(body)
                         const mediaList = step.media ? Object.keys(step.media) : []
 
                         // buttons
