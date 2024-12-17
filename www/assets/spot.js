@@ -57,6 +57,7 @@ class Spot extends EventEmitter
         this._index = index
         this._type = type
         this._color = color
+        this._loadRadius = 1
 
         this.player = null
 
@@ -83,6 +84,8 @@ class Spot extends EventEmitter
                     selected: false,
                 })
                 .addTo(map)
+
+            this._loadRadius = this._spot.radius
         }
 
         // Leaflet Polygon.
@@ -97,14 +100,36 @@ class Spot extends EventEmitter
                     selected: false,
                 })
                 .addTo(map)
+
+            // Compute radius
+            this._loadRadius = Math.max(...this._spot.radius.map(c => 
+                this.distanceToCenter({coords: {latitude: c[0], longitude: c[1]}})
+            ))
         }
 
+        // Load Circle
+        L.circle(this.getCenterPosition(),
+                {
+                    color: 'yellow',
+                    opacity: 0.3,
+                    fillColor: 'yellow',
+                    fillOpacity: 0,
+                    radius: this._loadRadius + 10,
+                    selected: false,
+                })
+                .addTo(map)
+
+    
         // Editable
         if (this._editable) this.editable()
     }
 
     marker() {
         return this._marker
+    }
+
+    near(position) {
+        return this.distanceToCenter(position) < this._loadRadius
     }
 
     inside(position) {
@@ -201,6 +226,11 @@ class Spot extends EventEmitter
         else {
             // For each segment of the polygon, calcultate the distance to the segment, keep the minimum
             let min = 1000
+
+            // First check if we are in bounds*1.5
+            
+
+
             for (let i = 0; i < this._spot.radius.length; i++) {
                 let j = (i+1) % this._spot.radius.length
                 let d = geo_distance_to_segment(pos, this._spot.radius[i], this._spot.radius[j])
@@ -261,7 +291,7 @@ class Spot extends EventEmitter
     updatePosition(pos) 
     {
         // Near: load if not loaded
-        if (this.player && !this.player.isLoaded() && this.distanceToBorder(pos) < 10) this.loadAudio()
+        if (this.player && !this.player.isLoaded() && this.near(pos)) this.loadAudio()
 
         // to be implemented by children
     }
