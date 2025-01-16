@@ -23,7 +23,7 @@
 ========= Post Guillotière Décembre 2024
 
 - interruptions/ offlimit globaux
-- étape: voix principale puis loop afterparty
+- étape: voix principale puis loop aftervoice
 - option "étape complète" (attendre afterparty pour déverrouiller)
 - show // edit :: sequence n+1 : bordure dashed / sequence < n greyed out
 - objet lié à étape
@@ -32,5 +32,9 @@ X objet toggle: localised / ambiance
 X sequence ordre imposé n+1 après n
 X option "étape facultative"
 
+====
 
-// BUGS
+- simulation: brider le movement de carte
+- capture d'écran (capture de trajet)
+- Rename map -> fork (clone) & keep original
+

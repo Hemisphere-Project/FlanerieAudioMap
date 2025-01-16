@@ -1,12 +1,53 @@
 const LOAD_EXTRARADIUS = 10
-var ALLSPOTS = []
 
 var stepIndex = -1
 
+var ALLSPOTS = 
+{
 
-function registerSpot(spot) {
-    ALLSPOTS.push(spot)
+    spots: {
+        zones: [], 
+        steps: [],
+        inters: []
+    },
+
+    add: function(spot) {
+        if (spot._type == 'zones') this.spots.zones.push(spot)
+        if (spot._type == 'steps') this.spots.steps.push(spot)
+        if (spot._type == 'inters') this.spots.inters.push(spot)
+    },
+
+    remove: function(spot) {
+        this.spots[spot._type] = this.spots[spot._type].filter(s => s !== spot)
+    },
+
+    clear: function() {
+        for (let type in this.spots) {
+            this.spots[type].map(s => s.clear())
+            this.spots[type] = []
+        }
+    },
+
+    find: function(type, index) {
+        return this.spots[type].find(s => s._index === index)
+    },
+
+    select: function(type, index, exclusive = true) {
+        let spot = this.find(type, index)
+        if (exclusive) this.unselect(spot)
+        if (spot) spot.select()
+    },
+
+    unselect: function(exception = null) {
+        for (let type in this.spots) {
+            this.spots[type].map(s => {
+                if (s !== exception) s.unselect()
+            })
+        }
+    }
 }
+
+
 
 function clearSpots() {
     ALLSPOTS.map(s => s.clear())
@@ -67,8 +108,7 @@ class Spot extends EventEmitter
         this.createMarker()
 
         // Register
-        registerSpot(this)
-
+        ALLSPOTS.add(this)
     }
 
     createMarker() {
