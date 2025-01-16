@@ -33,43 +33,40 @@ function load(pID) {
     
     return get('/edit/' + pID + '/json')
         .then(data => {
-            // console.log(data)          
-            
-            if (data && 'name' in data) {
-                parcours = data
+            if (!data || !('name' in data)) throw new Error('No data')
 
-                // Set name
-                document.getElementById('title').innerHTML = data.name + ' (' + data.status + ')'
+            parcours = data
 
-                // Set map position
-                if (data.coords) {
-                    const [zoom, lat, lon] = data.coords.split('/')
-                    map.setView([lat, lon], zoom)  
-                }
+            // Set name
+            document.getElementById('title').innerHTML = data.name + ' (' + data.status + ')'
 
-                // Clear previous spots
-                for (let i = 0; i < spots.length; i++) spots[i].clear()
-                spots = []
-                
-                // Draw zones
-                if (data.zones) 
-                {
-                    data.zones.forEach( (zone, i) => {
-                        var z = new Zone(zone, map, i)
-                        spots.push(z)
-                    })
-                }
-
-                // Draw steps
-                if (data.steps) 
-                {
-                    data.steps.forEach( (step, i) => {
-                        var s = new Step(step, map, i)
-                        spots.push(s)
-                    })
-                }
+            // Set map position
+            if (data.coords) {
+                const [zoom, lat, lon] = data.coords.split('/')
+                map.setView([lat, lon], zoom)  
             }
-            else throw new Error('No data')
+
+            // Clear previous spots
+            for (let i = 0; i < spots.length; i++) spots[i].clear()
+            spots = []
+            
+            // Draw zones
+            if (data.zones) 
+            {
+                data.zones.forEach( (zone, i) => {
+                    var z = new Zone(zone, map, i)
+                    spots.push(z)
+                })
+            }
+
+            // Draw steps
+            if (data.steps) 
+            {
+                data.steps.forEach( (step, i) => {
+                    var s = new Step(step, map, i)
+                    spots.push(s)
+                })
+            }
         })
         .catch(error => {
             console.error(error)

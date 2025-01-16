@@ -1,10 +1,8 @@
 const LOAD_EXTRARADIUS = 10
-
 var stepIndex = -1
 
-var ALLSPOTS = 
+var PARCOURS = 
 {
-
     spots: {
         zones: [], 
         steps: [],
@@ -22,10 +20,7 @@ var ALLSPOTS =
     },
 
     clear: function() {
-        for (let type in this.spots) {
-            this.spots[type].map(s => s.clear())
-            this.spots[type] = []
-        }
+        
     },
 
     find: function(type, index) {
@@ -34,60 +29,28 @@ var ALLSPOTS =
 
     select: function(type, index, exclusive = true) {
         let spot = this.find(type, index)
-        if (exclusive) this.unselect(spot)
-        if (spot) spot.select()
+        if (spot) spot.select(exclusive)
     },
 
-    unselect: function(exception = null) {
+    unselectAll: function(exception = null) {
         for (let type in this.spots) {
             this.spots[type].map(s => {
                 if (s !== exception) s.unselect()
             })
         }
+    },
+
+    load: function(data) {
+        // clear 
+        for (let type in this.spots) {
+            this.spots[type].map(s => s.clear())
+            this.spots[type] = []
+        }
+
+        
     }
 }
 
-
-
-function clearSpots() {
-    ALLSPOTS.map(s => s.clear())
-    ALLSPOTS = []
-}
-
-function findSpot(type, index) {
-    return ALLSPOTS.find(s => s.marker().options.type === type && s.marker().options.index === index)
-}
-
-function unselectSpots(except = null) {
-    ALLSPOTS.map(s => {
-        if (s !== except) s.unselect()
-    })
-}
-
-function selectSpot(type, index, exclusive = true)
-{
-    // select the one
-    let spot = findSpot(type, index)
-    
-    // unsellect all
-    if (exclusive) unselectSpots(spot)
-        
-    if (!spot) return 
-    spot.select()
-}
-
-function removeSpot(type, index)
-{
-    let spot = findSpot(type, index)
-    if (spot) spot.clear()
-
-    ALLSPOTS = ALLSPOTS.filter(s => s !== spot)
-    
-    // reindex (rename) higher indexes
-    ALLSPOTS.filter(s => s.marker().options.type === type && s._index > index)
-        .map(s => s.index(s._index-1))
-
-}
 
 // Generic class Spot, implementing Events
 class Spot extends EventEmitter
@@ -108,7 +71,7 @@ class Spot extends EventEmitter
         this.createMarker()
 
         // Register
-        ALLSPOTS.add(this)
+        PARCOURS.add(this)
     }
 
     createMarker() {
@@ -303,7 +266,7 @@ class Spot extends EventEmitter
     }
     
     select(exclusive = true) {
-        if (exclusive) unselectSpots(this)
+        if (exclusive) PARCOURS.unselectAll(this)
         
         this._marker.options.selected = true
         L.DomUtil.addClass(this._marker._path, 'selected');
