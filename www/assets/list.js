@@ -14,6 +14,7 @@ function refreshList() {
     .then(data => {
         const list = document.getElementById('parcours');
         list.innerHTML = '';
+        console.log(data)
         data.forEach(parcours => {
         const tr = document.createElement('tr');
             

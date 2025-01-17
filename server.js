@@ -51,8 +51,8 @@ app.get('/list', (req, res) => {
     const parcoursContent = JSON.parse(fs.readFileSync(parcoursFolder + file, 'utf8'));
     parcours.push({
       file: parcoursFileName, 
-      name: parcoursContent.name, 
-      status: parcoursContent.status, 
+      name: parcoursContent.info.name, 
+      status: parcoursContent.info.status, 
       time: fs.statSync(parcoursFolder + file).mtime
     });
   });
@@ -144,17 +144,17 @@ app.post('/edit/:file/json', express.json(), (req, res) => {
       fs.mkdirSync('./media/' + fileName + '/Objets');
 
     // Objets name update
-    if (content.zones)
-      content.zones.forEach((objet, i) => {
-        if (!objet.name || objet.name.startsWith('Objet')) content.zones[i].name = 'Objet ' + i;
+    if (content.spots.zones)
+      content.spots.zones.forEach((objet, i) => {
+        if (!objet.name || objet.name.startsWith('Objet')) content.spots.zones[i].name = 'Objet ' + i;
       });
 
     // Steps Media folders renaming
-    if (content.steps)
-      content.steps.forEach((step, i) => 
+    if (content.spots.steps)
+      content.spots.steps.forEach((step, i) => 
       {
-        if (!step.folder) content.steps[i].folder = 'Etape';
-        if (!step.name || step.name.startsWith('Etape')) content.steps[i].name = 'Etape ' + i;
+        if (!step.folder) content.spots.steps[i].folder = 'Etape';
+        if (!step.name || step.name.startsWith('Etape')) content.spots.steps[i].name = 'Etape ' + i;
 
         var oldFolder = './media/' + fileName + '/' + step.folder;
         var newFolder = './media/' + fileName + '/' + step.name;
@@ -164,18 +164,18 @@ app.post('/edit/:file/json', express.json(), (req, res) => {
         // add _ to folder name if already exists
         while(fs.existsSync(newFolder)) {
           newFolder += '_';
-          content.steps[i].name += '_';
+          content.spots.steps[i].name += '_';
         }
 
         if (fs.existsSync(oldFolder)) {
           console.log('oldFolder exists, rename to newFolder', oldFolder, newFolder);
           fs.renameSync(oldFolder, newFolder);
-          content.steps[i].folder = content.steps[i].name;
+          content.spots.steps[i].folder = content.spots.steps[i].name;
         }
         else {
           console.log('no folder, create newFolder', newFolder);
           fs.mkdirSync(newFolder); 
-          content.steps[i].folder = content.steps[i].name;
+          content.spots.steps[i].folder = content.spots.steps[i].name;
         }
       });
 
@@ -188,10 +188,10 @@ app.post('/edit/:file/json', express.json(), (req, res) => {
         fs.renameSync(basePath+folder, basePath+newFolder);
         console.log('rename folder', folder, newFolder);
         // apply to content
-        if (content.steps) content.steps.forEach((objet, i) => {
+        if (content.spots.steps) content.spots.steps.forEach((objet, i) => {
           if (objet.folder === folder) {
-            content.steps[i].folder = newFolder;
-            content.steps[i].name = newFolder;
+            content.spots.steps[i].folder = newFolder;
+            content.spots.steps[i].name = newFolder;
           }
         });
       }
@@ -199,7 +199,7 @@ app.post('/edit/:file/json', express.json(), (req, res) => {
 
     // Remove unused Objets media
     fs.readdirSync('./media/' + fileName + '/Objets').forEach(file => {
-      if (!content.zones || !content.zones.find(objet => objet.media.src === file)) {
+      if (!content.spots.zones || !content.spots.zones.find(objet => objet.media.src === file)) {
         fs.unlinkSync('./media/' + fileName + '/Objets/' + file);
         console.log('remove unused media', file);
       }
@@ -209,7 +209,7 @@ app.post('/edit/:file/json', express.json(), (req, res) => {
     fs.readdirSync('./media/' + fileName).forEach(folder => {
       // ignore Objets folder
       if (folder === 'Objets') return;
-      if (!content.steps || !content.steps.find(step => step.folder === folder)) {
+      if (!content.spots.steps || !content.spots.steps.find(step => step.folder === folder)) {
         fs.rmSync('./media/' + fileName + '/' + folder, { recursive: true });
       }
     });

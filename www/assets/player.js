@@ -15,7 +15,9 @@ class PlayerSimple extends EventEmitter
         this.clear()
 
         this._media = media
-
+        
+        if (!media.src || media.src == '-') return
+        
         this._player = new Howl({
             src: basepath + media.src,
             loop: this._loop,
@@ -114,6 +116,11 @@ class PlayerSimple extends EventEmitter
         if (!this._player.playing()) return
         if (this.isGoingOut) return
         this._player.pause()
+    }
+
+    toggle() {
+        if (this.isPlaying()) this.pause()
+        else this.resume()
     }
 
     volume(value) {

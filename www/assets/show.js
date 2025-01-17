@@ -20,58 +20,6 @@ document.getElementById('title').addEventListener('click', () => {
 
 // current file from url
 var parcoursID = window.location.pathname.split('/').pop()
-var parcours = {}
-var spots = []
-
-
-// LOAD
-//
-
-// Get parcours json
-function load(pID) {
-    if (!pID) pID = parcoursID
-    
-    return get('/edit/' + pID + '/json')
-        .then(data => {
-            if (!data || !('name' in data)) throw new Error('No data')
-
-            parcours = data
-
-            // Set name
-            document.getElementById('title').innerHTML = data.name + ' (' + data.status + ')'
-
-            // Set map position
-            if (data.coords) {
-                const [zoom, lat, lon] = data.coords.split('/')
-                map.setView([lat, lon], zoom)  
-            }
-
-            // Clear previous spots
-            for (let i = 0; i < spots.length; i++) spots[i].clear()
-            spots = []
-            
-            // Draw zones
-            if (data.zones) 
-            {
-                data.zones.forEach( (zone, i) => {
-                    var z = new Zone(zone, map, i)
-                    spots.push(z)
-                })
-            }
-
-            // Draw steps
-            if (data.steps) 
-            {
-                data.steps.forEach( (step, i) => {
-                    var s = new Step(step, map, i)
-                    spots.push(s)
-                })
-            }
-        })
-        .catch(error => {
-            console.error(error)
-        })
-}
 
 // Load Map 
 var startPoint = [43.1249, 1.254];
@@ -216,7 +164,7 @@ function updatePosition(position)
         // document.getElementById('distance').innerHTML = Math.round(geo_distance(initialPosition, position), 2) + ' m'
 
         // update spots
-        spots.forEach(spot => spot.updatePosition(position))
+        PARCOURS.update(position)
     }
 
     // next measure
@@ -242,7 +190,7 @@ document.getElementById('start').addEventListener('click', startGeoloc)
 document.getElementById('simulate').addEventListener('click', simulateGeoloc)
 document.getElementById('rearm').addEventListener('click', () => {
     stepIndex = -2
-    spots.forEach(spot => spot.player.stop())
+    PARCOURS.stopAudio()
     setTimeout(() => {
         map.fire('move')
     }, 2000)
@@ -255,11 +203,18 @@ var noSleep = new NoSleep();
 
 // INIT
 //
-load()
+PARCOURS.setMap(map)
+PARCOURS.load(parcoursID)
+    .then(() => {
+        // Set name
+        document.getElementById('title').innerHTML = PARCOURS.info.name + ' (' + PARCOURS.info.status + ')'
+    })
 
+// START action
+//
 $('.overlay').click(() => {
     $('.overlay').hide()
     noSleep.enable();
     // load spots players
-    // spots.forEach(spot => spot.loadAudio())
+    // PARCOURS.loadAudio()
 })
