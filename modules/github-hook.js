@@ -24,7 +24,7 @@ function githubHook(app, route = '/webhook', secret) {
       if (event === 'push') {
         // git stash then git pull && pm2 restart contacts
         log('processing push event (Pull / Restart)');
-        exec('git pull && npm i', (err, stdout, stderr) => {
+        exec('git stash && git pull && npm i', (err, stdout, stderr) => {
           if (err) {
             console.error(err);
             return; 
