@@ -35,7 +35,9 @@ body {
 .page {
     display: none;
     width: 80%;
-    height: 50%;
+    /* height: 50%; */
+    max-height: 80%;
+    overflow-y: auto;
     background-color: black;
     color: white;
     padding: 20px;
