@@ -57,7 +57,7 @@ function startGeoloc()
 
     if (navigator.geolocation) {
         
-        document.getElementById('map').style.opacity = 0
+        document.getElementById('MAP').style.opacity = 0
         document.getElementById('setstart').style.display = 'none'
         firstMeasure = null
         initialPosition = null
@@ -110,22 +110,22 @@ function successCallback(position) {
             document.getElementById('logs').innerHTML = 'Initialisation terminée'
 
             markerStart.setLatLng([position.coords.latitude, position.coords.longitude])
-            map.setView([position.coords.latitude, position.coords.longitude], ZOOM)
+            MAP.setView([position.coords.latitude, position.coords.longitude], ZOOM)
 
-            // On map move: initMap with new map center
-            map.off('move')
-            map.on('move', function() {
+            // On MAP move: initMap with new MAP center
+            MAP.off('move')
+            MAP.on('move', function() {
                 initialPosition = {
                     coords: {
-                        latitude: map.getCenter().lat,
-                        longitude: map.getCenter().lng,
+                        latitude: MAP.getCenter().lat,
+                        longitude: MAP.getCenter().lng,
                     }
                 }
                 markerStart.setLatLng([initialPosition.coords.latitude, initialPosition.coords.longitude])
             })
 
-            // map opacity
-            document.getElementById('map').style.opacity = 1
+            // MAP opacity
+            document.getElementById('MAP').style.opacity = 1
             document.getElementById('setstart').style.display = 'block'
         }
 
@@ -176,22 +176,20 @@ document.getElementById('refresh').addEventListener('click', startGeoloc)
 document.getElementById('setstart').addEventListener('click', () => {
     initialPosition = lastPosition
     markerStart.setLatLng([initialPosition.coords.latitude, initialPosition.coords.longitude])
-    map.setView([initialPosition.coords.latitude, initialPosition.coords.longitude], ZOOM)
+    MAP.setView([initialPosition.coords.latitude, initialPosition.coords.longitude], ZOOM)
     polyline.setLatLngs([])
 })
 
-// map
-var map = L.map('map').setView([45.7663, 4], ZOOM)
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: ZOOM,
-    minZoom: ZOOM,
-}).addTo(map)
+// MAP
+var MAP = initMap('MAP', {
+    zoom: ZOOM,
+})
 
 // Start point marker
-var markerStart = L.marker([45.7663, 4]).addTo(map)
+var markerStart = L.marker([45.7663, 4]).addTo(MAP)
 
 // Track line
-var polyline = L.polyline([], {color: 'blue'}).addTo(map)
+var polyline = L.polyline([], {color: 'blue'}).addTo(MAP)
 
 // Position marker: round style
 var markerPosition = L.marker([45.7663, 4], {
@@ -199,7 +197,7 @@ var markerPosition = L.marker([45.7663, 4], {
         className: 'round-icon',
         html: '<div class="round-icon"></div>',
     }),
-}).addTo(map)
+}).addTo(MAP)
 
 
 

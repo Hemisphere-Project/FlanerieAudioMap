@@ -1,175 +1,6 @@
 const LOAD_EXTRARADIUS = 10
 var stepIndex = -1
 
-var PARCOURS = 
-{
-    // data
-    info: {
-        name: '',
-        status: '',
-        coords: ''
-    },
-    spots: {},
-
-    // internal
-    map: null,
-    pID: null,
-
-    add: function(spot) {
-        if (!this.spots[spot._type]) this.spots[spot._type] = []
-        this.spots[spot._type].push(spot)
-    },
-
-    remove: function(spot) {
-        this.spots[spot._type] = this.spots[spot._type].filter(s => s !== spot)
-    },
-
-    clear: function() {
-        
-    },
-
-    find: function(type, index) {
-        return this.spots[type].find(s => s._index === index)
-    },
-
-    select: function(type, index, exclusive = true) {
-        let spot = this.find(type, index)
-        if (spot) spot.select(exclusive)
-    },
-
-    unselectAll: function(exception = null) {
-        for (let type in this.spots) {
-            this.spots[type].map(s => {
-                if (s !== exception) s.unselect()
-            })
-        }
-    },
-
-    setMap: function(map) {
-        this.map = map
-    },
-
-    load: function(parcoursID) {
-
-        // promise
-        return new Promise((resolve, reject) => {
-
-            if (!parcoursID) parcoursID = this.pID
-            else this.pID = parcoursID
-
-            if(!parcoursID) {
-                reject('No parcours ID')
-                return
-            }
-
-            // request parcours json
-            get('/edit/' + parcoursID + '/json')
-                .then(data => {
-                    if (!data || !('info' in data)) throw new Error('No data')
-                    
-                    // clear 
-                    for (let type in this.spots) {
-                        this.spots[type].map(s => s.clear())
-                        this.spots[type] = []
-                    }
-
-                    // first load: center map
-                    if (this.map && data.info.coords && !this.info.coords) {
-                        const [zoom, lat, lon] = data.info.coords.split('/')
-                        this.map.setView([lat, lon], zoom)  
-                    }
-
-                    // load
-                    this.info = data.info
-                    for (let type in data.spots)
-                        data.spots[type].forEach((spot, i) => this.addSpot(type, spot))
-                    
-                    resolve()
-                })
-                .catch(error => {
-                    reject(error)
-                })
-        })
-    },
-
-    addSpot: function(type, spot) {
-        let index = 0
-        if (this.spots[type]) index = this.spots[type].length
-        if (type === 'zones') new Zone(spot, this.map, index)
-        if (type === 'steps') new Step(spot, this.map, index)
-        return this
-    },
-
-    deleteSpot: function(type, index) {
-        this.spots[type].splice(index, 1)[0].clear()
-        return this
-    },
-
-    // swap two indexes
-    moveSpot: function(type, source, target) {
-        if (source < 0 || source >= this.spots[type].length) return this
-        if (target < 0 || target >= this.spots[type].length) return this
-        
-        let temp = this.spots[type][source]
-        this.spots[type][source] = this.spots[type][target]
-        this.spots[type][target] = temp
-
-        // update index
-        this.spots[type].map((s, i) => s.index(i))
-        return this
-    },
-
-    export: function() {
-        var data = {
-            info: this.info,
-            spots: {}
-        }
-        for (let type in this.spots)
-            data.spots[type] = this.spots[type].map(s => s._spot)
-        return data
-    },
-
-    save: function() {
-        return new Promise((resolve, reject) => {
-            post('/edit/' + this.pID + '/json', this.export())
-                .then(data => {
-                    if (data) resolve(data)
-                    else {
-                        console.error(data)
-                        reject('Error saving parcours')
-                    }
-                })
-                .catch(error => {
-                    reject(error)
-                })
-        })
-    },
-
-    update: function(position) {
-        for (let type in this.spots) {
-            this.spots[type].map(s => s.updatePosition(position))
-        }
-    },
-
-    stopAudio: function() {
-        for (let type in this.spots) {
-            this.spots[type].map(s => s.player.stop())
-        }
-    },
-
-    loadAudio: function() {
-        for (let type in this.spots) {
-            this.spots[type].map(s => s.loadAudio())
-        }
-    },
-
-    editable: function() {
-        for (let type in this.spots) {
-            this.spots[type].map(s => s.editable())
-        }
-    }
-}
-
 
 // Generic class Spot, implementing Events
 class Spot extends EventEmitter
@@ -207,7 +38,8 @@ class Spot extends EventEmitter
                     index: this._index,
                     selected: false,
                 })
-                .addTo(map)
+            
+            if (this._map) this._marker.addTo(this._map)
 
             this._loadRadius = this._spot.radius + LOAD_EXTRARADIUS
         }
@@ -223,7 +55,8 @@ class Spot extends EventEmitter
                     index: this._index,
                     selected: false,
                 })
-                .addTo(map)
+
+            if (this._map) this._marker.addTo(this._map)
 
             // Compute radius
             this._loadRadius = Math.max(...this._spot.radius.map(c => 
@@ -248,8 +81,24 @@ class Spot extends EventEmitter
         if (this._editable) this.editable()
     }
 
+    setMap(map) {
+        this._map = map
+        this.createMarker()
+    }
+
     marker() {
         return this._marker
+    }
+
+    showMarker() {
+        if (this._map) this._map.removeLayer(this._marker)
+        if (this._map) this._map.addLayer(this._marker)
+        return this
+    }
+
+    hideMarker() {
+        if (this._map) this._map.removeLayer(this._marker)
+        return this
     }
 
     near(position) {
@@ -305,7 +154,7 @@ class Spot extends EventEmitter
             [this._spot.lat - radius/1.4, this._spot.lon + radius],
         ]
 
-        this._map.removeLayer(this._marker)
+        if (this._map) this._map.removeLayer(this._marker)
         this.createMarker()
     }
 
@@ -319,7 +168,7 @@ class Spot extends EventEmitter
 
         this._spot.radius = radius
 
-        this._map.removeLayer(this._marker)
+        if (this._map) this._map.removeLayer(this._marker)
         this.createMarker()
     }
 
@@ -374,12 +223,12 @@ class Spot extends EventEmitter
     }
 
     center() {
-        map.setView([this._spot.lat, this._spot.lon], 19)
+        if (this._map) this._map.setView([this._spot.lat, this._spot.lon], this._map.getZoom())
         return this
     }
 
     clear() {
-        this._map.removeLayer(this._marker)
+        if (this._map) this._map.removeLayer(this._marker)
         if (this.player) this.player.clear()
         this.player = null
     }
@@ -411,7 +260,10 @@ class Spot extends EventEmitter
     updatePosition(pos) 
     {
         // Near: load if not loaded
-        if (this.player && !this.player.isLoaded() && this.near(pos)) this.loadAudio()
+        if (this.player && !this.player.isLoaded() && this.near(pos)) {
+            this.loadAudio()
+            console.log('Spot load:', this._spot.name, this.player.isLoaded())
+        }
 
         // to be implemented by children
     }

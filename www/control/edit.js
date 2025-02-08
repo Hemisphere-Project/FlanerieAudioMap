@@ -339,11 +339,10 @@ document.getElementById('pCoords').addEventListener('change', () => {
 })
 
 // Load Map 
-var startPoint = [43.1249, 1.254];
-var map = L.map('map', {editable: true}).setView(startPoint, 16)
+var MAP = initMap('map')
 
 // Drag marker
-map.on('editable:vertex:dragend', function (e) {
+MAP.on('editable:vertex:dragend', function (e) {
     let marker = e.layer; // marker that was dragged
     // find spot
     let spot = PARCOURS.find(marker.options.type, marker.options.index)
@@ -369,26 +368,21 @@ map.on('editable:vertex:dragend', function (e) {
 });
 
 
-map.doubleClickZoom.disable(); // disable double click zoom
 
-map.on('mouseup',function(e){ map.removeEventListener('mousemove'); }) // hack to enable cicrle drag
-
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19,
-}).addTo(map)
+MAP.on('mouseup',function(e){ MAP.removeEventListener('mousemove'); }) // hack to enable cicrle drag
 
 function loadMap() {
     const coords = document.getElementById('pCoords').value
     if (coords) {
         const [zoom, lat, lon] = coords.split('/')
-        map.setView([lat, lon], zoom)
+        MAP.setView([lat, lon], zoom)
         // markerStart.setLatLng([lat, lon])
     }
 }
 
 // set coords (from map to pCoords)
 $('#setCoords').click(() => {
-    const coords = map.getZoom() + '/' + map.getCenter().lat + '/' + map.getCenter().lng
+    const coords = MAP.getZoom() + '/' + MAP.getCenter().lat + '/' + MAP.getCenter().lng
     document.getElementById('pCoords').value = coords
     save()
 })
@@ -409,11 +403,11 @@ function onMapDblClick(e) {
         ")
         .openOn(map);
 }
-map.on('dblclick', onMapDblClick);
+MAP.on('dblclick', onMapDblClick);
 
 // Goto point
 function gotoPoint(lat, lon) {
-    map.setView([lat, lon], 19)
+    MAP.setView([lat, lon], 18)
 }
 
 function loadMediaList() {
@@ -428,7 +422,7 @@ function loadMediaList() {
 
 // INIT
 //
-PARCOURS.setMap(map)
+PARCOURS.setMap(MAP)
 
 // first get media list json tree
 var MEDIALIST = null

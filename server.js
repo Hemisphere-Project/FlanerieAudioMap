@@ -25,19 +25,19 @@ app.use(express.static(path.join(__dirname, 'www')));
 // static audio files
 app.use('/media', express.static(path.join(__dirname, 'media')));
 
-// Default endpoint: redirect to /list
+// Default endpoint: redirect to /app
 app.get("/", (req, res) => {
-  res.redirect('/control');
+  res.redirect('/app');
 })
 
 // Default endpoint
 app.get('/control', (req, res) => {
-    res.sendFile(path.join(__dirname, 'www', 'list.html'));
+    res.sendFile(path.join(__dirname, 'www', 'control', 'list.html'));
 }); 
 
 // Proto endpoint
 app.get('/proto', (req, res) => {
-    res.sendFile(path.join(__dirname, 'www', 'proto.html'));
+    res.sendFile(path.join(__dirname, 'www', 'control', 'proto.html'));
 });
 
 // List parcours
@@ -53,7 +53,8 @@ app.get('/list', (req, res) => {
       file: parcoursFileName, 
       name: parcoursContent.info.name, 
       status: parcoursContent.info.status, 
-      time: fs.statSync(parcoursFolder + file).mtime
+      time: fs.statSync(parcoursFolder + file).mtime,
+      coords: parcoursContent.info.coords
     });
   });
   res.json(parcours);  
@@ -121,7 +122,7 @@ app.post('/cloneParcours', express.json(), (req, res) => {
 
 // edit parcours
 app.get('/edit/:file', (req, res) => {
-  res.sendFile(path.join(__dirname, 'www', 'edit.html'));
+  res.sendFile(path.join(__dirname, 'www', 'control', 'edit.html'));
 })
 
 // get parcours json
@@ -284,8 +285,17 @@ app.get('/mediaRemoveFolder/:parcours/:folder', (req, res) => {
 
 // Show parcours
 app.get('/show/:file', (req, res) => {
-  res.sendFile(path.join(__dirname, 'www', 'show.html'));
+  res.sendFile(path.join(__dirname, 'www', 'control', 'show.html'));
 })
+
+
+///////////// APP
+
+
+app.get('/app', (req, res) => {
+  res.sendFile(path.join(__dirname, 'www', 'app', 'app.html'));
+})
+
 
 // Start the server
 const server = http.createServer(app);

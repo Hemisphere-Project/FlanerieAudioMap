@@ -160,7 +160,7 @@ class PlayerSimple extends EventEmitter
     }
 
     isLoaded() {
-        return this._player !== null
+        return this._player !== null || (this._media && this._media.src == '-')
     }
 
     rewindOnPause(value = -1) {

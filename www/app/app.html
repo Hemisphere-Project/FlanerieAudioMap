@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>Flanerie en paysage mobile</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0">
+    
+    <link rel="stylesheet" href="/app/app.css">
+    <link rel="stylesheet" href="/libs/leaflet-1.9.4/leaflet.css">
+
+    <script src="/libs/jquery-3.7.1.min.js"></script>
+    <script src="/libs/typewriter.min.js"></script>
+    <script src="/libs/leaflet-1.9.4/leaflet.js"></script>
+    <script src="/libs/leaflet.editable.js"></script>
+    <script src="/libs/howler-2.2.4/howler.min.js"></script>
+    <script src="/libs/nosleep.min.js"></script>
+
+</head>
+<body>
+    <div id="app">
+        
+        <div id="title" class="page">
+            Flanerie en paysage mobile
+        </div>
+
+        <div id="intro" class="page">
+            Bienvenue, je vais vous guider. Mais avant je dois vérifier que vous êtes prêt.
+        </div>
+
+        <div id="nodata" class="page">
+            <div class="content">
+                <p>Aucun parcours proche n'a été trouvé sur votre appareil.</p>
+                    <br />
+                <p id="nodata-retry">Connectez vous à internet pour télécharger un parcours ...</p>
+            </div>
+        </div>
+
+        <div id="nogeo" class="page">
+            <div class="content">
+                <p>Impossible de détecter votre position.</p>
+                    <br />
+                <p id="nogeo-retry">Activez la géolocalisation pour continuer ...</p>
+            </div>
+        </div>
+        
+        <div id="noparcours" class="page">
+            <div class="content">
+                <p>Aucun parcours n'a été trouvé à proximité de votre position.</p>
+                    <br />
+                <p>Consultez la liste des parcours disponibles sur </p>
+                <p><a href="https://bloffique-theatre.com/" target="_system"><span id="noparcours-retry">bloffique-theatre.com</span></a></p>
+            </div>
+        </div>
+
+        <div id="select" class="page">
+            <div class="content">
+                <p>Choisissez un parcours:</p>
+                <ul id="select-parcours"></ul>
+                <button id="select-parcours-start" class="btn btn-primary"></button>
+            </div>
+        </div>
+
+        <div id="parcours" class="page">
+            <h3 id="parcours-title"></h3>
+            <div id="parcours-map"></div>
+            <p id="parcours-init">Rendez vous au point de départ pour commencer le parcours.</p>
+        </div>
+
+        <div id="synchronise" class="page">
+            <div class="content">
+                <p>Téléchargement du parcours: </p>
+                <p id="progress">0%</p>
+            </div>
+        </div>
+
+    </div>
+    
+    <script src="/assets/common.js"></script>
+    <script src="/assets/map.js"></script>
+    <script src="/assets/parcours.js"></script>
+    <script src="/assets/geoloc.js"></script>
+    <script src="/assets/player.js"></script>
+    <script src="/assets/spot.js"></script>
+    <script src="/app/pages.js"></script>
+    <script src="/app/app.js"></script>
+</body>
+</html>
