@@ -36,7 +36,7 @@ function TYPEWRITE(id, delay = 50, initialDelay = 0) {
 //
 PAGES['title'] = () => {
     TYPEWRITE('title', 90, 1000)
-    $('#title').off('click').on('click', () => PAGE('check') );
+    $('#title').off('click').on('click', () => PAGE('intro') );
 }
 
 
