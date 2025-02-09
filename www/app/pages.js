@@ -166,5 +166,5 @@ PAGES['parcours'] = () => {
 
 
 // START
-// PAGE('title');
-PAGE('checkgeo');
+PAGE('title');
+// PAGE('checkgeo');
