@@ -21,7 +21,7 @@ class Spot extends EventEmitter
         this.createMarker()
 
         // Register
-        PARCOURS.add(this)
+        document.PARCOURS.add(this)
     }
 
     createMarker() {
@@ -222,8 +222,10 @@ class Spot extends EventEmitter
         return this
     }
 
-    center() {
-        if (this._map) this._map.setView([this._spot.lat, this._spot.lon], this._map.getZoom())
+    center(quick = true) {
+        if (this._map) 
+            if (quick) this._map.setView([this._spot.lat, this._spot.lon], this._map.maxZoom())
+            else this._map.flyTo([this._spot.lat, this._spot.lon], this._map.maxZoom())
         return this
     }
 
@@ -234,7 +236,7 @@ class Spot extends EventEmitter
     }
     
     select(exclusive = true) {
-        if (exclusive) PARCOURS.unselectAll(this)
+        if (exclusive) document.PARCOURS.unselectAll(this)
         
         this._marker.options.selected = true
         L.DomUtil.addClass(this._marker._path, 'selected');

@@ -139,4 +139,16 @@ class EventEmitter {
         }
         return this
     }
+
+    off(event, listener) {
+        if (this._events[event]) {
+            this._events[event] = this._events[event].filter(l => l !== listener)
+        }
+        return this
+    }
+
+    removeAllListeners(event) {
+        delete this._events[event]
+        return this
+    }
 }

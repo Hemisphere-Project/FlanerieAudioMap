@@ -1,21 +1,19 @@
-// VARS
-
+// CONF
 const CROSSFADE_DISTANCE = 10
 const CROSSFADE_DUMP = 4
 
+// GLOBALS
+const PARCOURS = document.PARCOURS
+const GEO = document.GEO
 
-
+// MAP
+const MAP = initMap('map')
 
 // title click -> back to control
-document.getElementById('title').addEventListener('click', () => {
-    window.location.href = '/';
-})
+$('#title').click(() => window.location.href = '/control')
 
 // current file from url
 var parcoursID = window.location.pathname.split('/').pop()
-
-// Load Map 
-var MAP = initMap('map')
 
 // GEOLOC
 //
@@ -27,8 +25,8 @@ var lastTrackPosition = null
 // Position marker: round style
 var markerPosition = L.marker([45.7663, 4], {
     icon: L.divIcon({
-        className: 'round-icon',
-        html: '<div class="round-icon"></div>',
+        className: 'position-icon',
+        html: '<div class="position-icon"></div>',
     }),
 }).addTo(MAP)
 
@@ -44,7 +42,7 @@ function updatePosition(position)
     document.getElementById('time').innerHTML = new Date(position.timestamp).toLocaleTimeString()
     
     // marker follow position
-    markerPosition.setLatLng([position.coords.latitude, position.coords.longitude])
+    markerPosition.setLatLng(geo_coords(position))
 
     // track
     if (!lastTrackPosition || geo_distance(lastTrackPosition, position) > 3) {
@@ -71,38 +69,41 @@ function errorCallback(error) {
     // setTimeout(()=>{GEO.startGeoloc(MAP, updatePosition, errorCallback)}, 5000)
 }
 
-document.getElementById('start').addEventListener('click', () => {
+$('#start').click(() => {
     polyline.setLatLngs([])
     lastTrackPosition = null
-    GEO.startGeoloc(MAP, updatePosition, errorCallback)
+    GEO.startGeoloc()
+    GEO.followMe()
+    GEO.on('position', updatePosition)
+    GEO.on('error', errorCallback)
     $('.status').hide()
     $('.status-geoloc').show()
 })
 
-document.getElementById('simulate').addEventListener('click', () => {
+$('#simulate').click(() => {
     polyline.setLatLngs([])
     lastTrackPosition = null
-    GEO.simulateGeoloc(MAP, updatePosition)
+    GEO.simulateGeoloc()
+    GEO.on('position', updatePosition)
     $('.status').hide()
     $('.status-simulate').show()
 })
 
-document.getElementById('rearm').addEventListener('click', () => {
+// Stop and reload
+$('#rearm').click(() => {
     stepIndex = -2
     PARCOURS.stopAudio()
-    setTimeout(() => {
-        MAP.fire('move')
-    }, 2000)
+    setTimeout(() => MAP.fire('move'), 2000)
 })
-document.getElementById('reload').addEventListener('click', () => {
-    location.reload()
-})
+
+// Reload page
+$('#reload').click(() => location.reload())
+
 
 var noSleep = new NoSleep();
 
 // INIT
 //
-PARCOURS.setMap(MAP)
 PARCOURS.load(parcoursID)
     .then(() => {
         // Set name

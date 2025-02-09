@@ -2,7 +2,7 @@
 // PARCOURS 
 //
 
-var PARCOURS = 
+document.PARCOURS = 
 {
     // data
     info: {
@@ -141,12 +141,12 @@ var PARCOURS =
         return this
     },
 
-    showSpotMarker: function(type, index, center = false) {
+    showSpotMarker: function(type, index, center = false, quick = true) {
         // remove all other markers
         this.hideSpotMarkers()
         if (this.spots[type][index]) {
             this.spots[type][index].showMarker()
-            if (center) this.spots[type][index].center()
+            if (center) this.spots[type][index].center(quick)
         }
         return this
     },

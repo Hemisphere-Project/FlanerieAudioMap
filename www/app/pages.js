@@ -1,4 +1,11 @@
-var DISTANCE_MATCH = 10000;
+var DISTANCE_MATCH = 100000000000000;
+
+var DEVMODE = true;
+
+// GLOBALS
+//
+const PARCOURS = document.PARCOURS;
+const GEO = document.GEO;
 
 // 
 // PAGE SELECT
@@ -8,6 +15,7 @@ var currentPage = '';
 
 function PAGE(name, ...args) 
 {
+    if (currentPage === name) return;
     console.log('PAGE', name, args);
     document.querySelectorAll('.page').forEach(page => page.style.display = 'none');
     try { document.getElementById(name).style.display = 'block'; } catch (e) {}
@@ -23,7 +31,7 @@ function NEXTPAGE() {
 
 function TYPEWRITE(id, delay = 50, initialDelay = 0) {
     var div = document.getElementById(id);
-    var content = $(div).text();
+    var content = $(div).text().replace(/\|/g, '');
     var typewriter = new Typewriter(div, {delay: delay});
     return typewriter
             .pauseFor(initialDelay)
@@ -43,46 +51,61 @@ PAGES['title'] = () => {
 PAGES['intro'] = () => {
     TYPEWRITE('intro')
         .pauseFor(2000)
-        .callFunction(() => PAGE('check') )
+        .callFunction(() => {if(currentPage=='intro') PAGE('checkgeo')} )
+        
+    $('#intro').off('click').on('click', () => PAGE('checkgeo') );
 }
 
-PAGES['check'] = () => {
+PAGES['checkgeo'] = () => {
 
-    // check if geolocation is available
-    if (!navigator.geolocation) PAGE('nogeo');
-
-    // check if user accept geolocation
-    navigator.geolocation.getCurrentPosition(
-        position => {
-
-            // once position check if stored parcours is available and not too far
-            if (PARCOURS.valid()) 
-                if (geo_distance(position, PARCOURS) < DISTANCE_MATCH) 
-                    return PAGE('parcours')
-
-            // if not, check if parcours are available online
-            get('/list')
-                .then(parcours => {
-                    var availableParcours = parcours.filter(p => geo_distance(position, p) < DISTANCE_MATCH);
-                    if (availableParcours.length > 0) PAGE('select', availableParcours);
-                    else PAGE('noparcours');
-                })
-                .catch(error => PAGE('nodata'));
-        },
-        error => PAGE('nogeo')
-    );
+    if (!DEVMODE) {
+        GEO.startGeoloc()
+            .then(()=>PAGE('checkdata'))
+            .catch(()=>PAGE('nogeo'))
+    }
+    else {
+        $('#checkgeo-select').show();
+        $('#checkgeo-select-gps').off('click').on('click', () => {
+            GEO.startGeoloc()
+                .then(()=>PAGE('checkdata'))
+                .catch(()=>PAGE('nogeo'))
+        })
+        $('#checkgeo-select-simul').off('click').on('click', () => {
+            GEO.simulateGeoloc()
+            PAGE('checkdata')
+        });
+    }
 }
+
+PAGES['checkdata'] = () => 
+{
+    // once position check if stored parcours is available and not too far
+    if (PARCOURS.valid()) 
+        if (geo_distance(position, PARCOURS) < DISTANCE_MATCH) 
+            return PAGE('parcours')
+
+    // if not, check if parcours are available online
+    get('/list')
+        .then(parcours => {
+            console.log('PARCOURS', parcours);
+            var availableParcours = parcours.filter(p => GEO.distance(p) < DISTANCE_MATCH);
+            if (availableParcours.length > 0) PAGE('select', availableParcours);
+            else PAGE('noparcours');
+        })
+        .catch(error => PAGE('nodata'));
+}
+
 
 PAGES['nodata'] = () => {
     TYPEWRITE('nodata-retry')
         .pauseFor(2000)
-        .callFunction(() => PAGE('check') )
+        .callFunction(() => PAGE('checkdata') )
 }
 
 PAGES['nogeo'] = () => {
     TYPEWRITE('nogeo-retry')
         .pauseFor(2000)
-        .callFunction(() => PAGE('check') )
+        .callFunction(() => PAGE('checkgeo') )
 }
 
 PAGES['noparcours'] = () => {
@@ -93,6 +116,7 @@ PAGES['select'] = (list) => {
 
     // List
     var select = document.getElementById('select-parcours');
+    select.innerHTML = '';
     list.forEach(p => {
         var li = document.createElement('li');
         li.innerHTML = p.name;
@@ -126,17 +150,21 @@ PAGES['parcours'] = () => {
             zoomControl: false,
             dragging: false,
         })
-    PARCOURS.setMap(MAP)
+        
     PARCOURS.hideSpotMarkers()
-    
-    MAP.setView(geo_coords(position), MAP.getZoom())
-    
+    MAP.showPositionMarker()
+    MAP.toPosition(true)
+    // PARCOURS.showSpotMarker('steps', 0, true, true)
+    setTimeout(() => PARCOURS.showSpotMarker('steps', 0, true, false), 1000)
+    setTimeout(() => GEO.followMe(), 6000)
+
     $('#parcours-title').text(PARCOURS.info.name);
     TYPEWRITE('parcours-init')
-        .callFunction(() => PARCOURS.showSpotMarker('steps', 0, true) )
+        // .callFunction(() => GEO.followMe() )
 }
 
 
 
 // START
-PAGE('title');
+// PAGE('title');
+PAGE('checkgeo');

@@ -1,3 +1,5 @@
+const PARCOURS = document.PARCOURS
+
 // title click -> back to control
 document.getElementById('title').addEventListener('click', () => {
     window.location.href = '/control';
@@ -339,7 +341,7 @@ document.getElementById('pCoords').addEventListener('change', () => {
 })
 
 // Load Map 
-var MAP = initMap('map')
+initMap('map')
 
 // Drag marker
 MAP.on('editable:vertex:dragend', function (e) {

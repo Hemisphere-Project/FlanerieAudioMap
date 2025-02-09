@@ -18,6 +18,7 @@
 </head>
 <body>
     <div id="app">
+        <div id="map"></div>
         
         <div id="title" class="page">
             Flanerie en paysage mobile
@@ -25,6 +26,15 @@
 
         <div id="intro" class="page">
             Bienvenue, je vais vous guider. Mais avant je dois vérifier que vous êtes prêt.
+        </div>
+
+        <div id="checkgeo" class="page">
+            Test de la géolocalisation ...
+            <div id="checkgeo-select">
+                DEV MODE:
+                <button id="checkgeo-select-gps" class="btn btn-primary">GPS</button>
+                <button id="checkgeo-select-simul" class="btn btn-primary">Simulation</button>
+            </div>
         </div>
 
         <div id="nodata" class="page">
