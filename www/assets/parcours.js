@@ -162,6 +162,7 @@ document.PARCOURS =
     },
 
     save: function() {
+        console.log('save', this.export())
         return new Promise((resolve, reject) => {
             post('/edit/' + this.pID + '/json', this.export())
                 .then(data => {

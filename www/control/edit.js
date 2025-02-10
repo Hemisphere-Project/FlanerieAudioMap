@@ -391,7 +391,8 @@ $('#setCoords').click(() => {
 
 // Add spot 
 function addSpot(lat, lon, type) {
-    PARCOURS.addSpot(type, { lat: lat, lon: lon, radius: 10 }).save()
+    PARCOURS.addSpot(type, { lat: lat, lon: lon, radius: 10 })
+    save()
 }
 
 // Double click on map to add a marker
