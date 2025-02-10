@@ -403,7 +403,7 @@ function onMapDblClick(e) {
             <button class='btn btn-sm btn-info' onclick='addSpot(" + e.latlng.lat + "," + e.latlng.lng + ", \"steps\"); popupNewStep.remove();'>Etape</button> \
             <button class='btn btn-sm btn-info' onclick='addSpot(" + e.latlng.lat + "," + e.latlng.lng + ", \"zones\"); popupNewStep.remove();'>Objet</button> \
         ")
-        .openOn(map);
+        .openOn(MAP);
 }
 MAP.on('dblclick', onMapDblClick);
 
