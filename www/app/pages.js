@@ -176,7 +176,7 @@ PAGES['parcours'] = () => {
         PARCOURS.update(position)
     })
 
-    PARCOURS.find('steps', 0).once('enter', () => PAGE('run'))
+    // PARCOURS.find('steps', 0).once('enter', () => PAGE('run'))
 }
 
 
