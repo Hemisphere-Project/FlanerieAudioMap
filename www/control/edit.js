@@ -341,7 +341,7 @@ document.getElementById('pCoords').addEventListener('change', () => {
 })
 
 // Load Map 
-initMap('map')
+var MAP = initMap('map')
 
 // Drag marker
 MAP.on('editable:vertex:dragend', function (e) {
