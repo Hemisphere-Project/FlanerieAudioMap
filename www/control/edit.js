@@ -103,7 +103,10 @@ function load() {
                         // Optional toggle
                         const formCheck = $('<div class="form-check form-switch">').appendTo(body)
                         const input = $('<input class="form-check-input" type="checkbox" role="switch">').attr('id', 'flexSwitchCheck' + i).prop('checked', step.optional).appendTo(formCheck)
-                                        .change(() => step.optional = input.prop('checked') && save().then(() => PARCOURS.select('steps', i)))
+                                        .change(() => {
+                                            step.optional = input.prop('checked')
+                                            save().then(() => PARCOURS.select('steps', i))
+                                        })
                         formCheck.append($('<label class="form-check-label" for="flexSwitchCheck' + i + '">').text('Facultative'))
 
                         // media list
@@ -120,7 +123,10 @@ function load() {
                                     if (!file) {input.remove(); return}
                                     const formData = new FormData()
                                     postFile('/mediaUpload/' + parcoursID + '/' + step.folder, formData.append('file', file) )
-                                        .then(() => step.media[m].src = file.name && save().then(() => PARCOURS.select('steps', i)))
+                                        .then(() => {
+                                            step.media[m].src = file.name 
+                                            save().then(() => PARCOURS.select('steps', i))
+                                        })
                                         .catch(error => console.error(error) && toastError('Erreur lors de l\'upload du fichier..'))
                                         .finally(() => input.remove())
                                 })
@@ -212,14 +218,20 @@ function load() {
                                         formData.append('file', file)
                                         console.log('uploading', file)
                                         postFile('/mediaUpload/' + parcoursID + '/Objets', formData)
-                                            .then(() => zone.media.src = file.name && save().then(() => PARCOURS.select('zones', i)))
+                                            .then(() => {
+                                                zone.media.src = file.name
+                                                save().then(() => PARCOURS.select('zones', i))
+                                            })
                                             .catch(error => console.error(error) && toastError('Erreur lors de l\'upload du fichier..'))
                                             .finally(() => input.remove())
                                     })
                                     input.click()
                                 }
                                 // select existing media
-                                else zone.media.src = select.val() && save().then(() => PARCOURS.select('zones', i))
+                                else {
+                                    zone.media.src = select.val() 
+                                    save().then(() => PARCOURS.select('zones', i))
+                                }
                                 
                             })
 
@@ -244,7 +256,8 @@ function load() {
                             
                         // volume integer input
                         body.append($('<input class="input-volume float-end me-1 ">').attr('type', 'number').attr('min', 0).attr('max', 100).attr('step', 1).val(zone.media.master*100).change(() => {
-                            zone.media.master = body.find('input').val()/100.0 && save().then(() => PARCOURS.select('zones', i))
+                            zone.media.master = body.find('input').val()/100.0 
+                            save().then(() => PARCOURS.select('zones', i))
                         }))
 
                         // button switch to Circle/Polygon
@@ -263,12 +276,15 @@ function load() {
                         // Objet / Ambiance mode toggle
                         const formCheck = $('<div class="form-check form-switch">').appendTo(body)
                         const input = $('<input class="form-check-input" type="checkbox" role="switch">').attr('id', 'flexSwitchCheck' + i).prop('checked', zone.mode == 'Ambiance').appendTo(formCheck)
-                        input.change(() => zone.mode = input.prop('checked') ? 'Ambiance' : 'Objet' && save().then(() => PARCOURS.select('zones', i)) )
+                        input.change(() => {
+                            zone.mode = input.prop('checked') ? 'Ambiance' : 'Objet' 
+                            save().then(() => PARCOURS.select('zones', i)) 
+                        })
                         formCheck.append($('<label class="form-check-label" for="flexSwitchCheck' + i + '">').text( zone.mode == 'Ambiance' ? 'Ambiance' : 'Objet Ponctuel' ))
 
                         // on select
-                        z.on('selected', () => li.addClass('active') && z.player.resume())
-                        z.on('unselected', () => li.removeClass('active') && z.player.stop())
+                        z.on('selected', () => li.addClass('active') && z.player ? z.player.resume() : null)
+                        z.on('unselected', () => li.removeClass('active') && z.player ? z.player.stop() : null)
                     }
 
             })
