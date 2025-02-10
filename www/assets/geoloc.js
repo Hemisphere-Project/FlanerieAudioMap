@@ -120,6 +120,14 @@ class GeoLoc extends EventEmitter {
             if (this.follow && !position.simulate && this.map)
                 this.map.setView([position.coords.latitude, position.coords.longitude], this.map.getZoom());
 
+            // polyline track
+            if (this.follow && this.polyTrack) {
+                if (!this.lastTrackPosition || geo_distance(this.lastTrackPosition, position) > 3) {
+                    this.polyTrack.addLatLng([position.coords.latitude, position.coords.longitude]);
+                    this.lastTrackPosition = position;
+                }
+            }
+
             this.emit('position', position);
         }
 
@@ -131,8 +139,12 @@ class GeoLoc extends EventEmitter {
         this.emit('error', error);
     }
 
+    setPosition(pos) {
+        this.fakeUpdate(pos);
+    }
+
     // Fake position (center of the map)
-    fakePosition() {
+    fakePosition(pos) {
         let p = {
             coords: {
                 latitude: 45.76776,
@@ -143,16 +155,17 @@ class GeoLoc extends EventEmitter {
             timestamp: Date.now(),
             simulate: true,
         };
-        if (this.map) {
-            p.coords.latitude = this.map.getCenter().lat;
-            p.coords.longitude = this.map.getCenter().lng;
+        if (pos) {
+            pos = geo_coords(pos);
+            p.coords.latitude = pos[0];
+            p.coords.longitude = pos[1];
         } 
         return p;
     }
 
     // Fake update event (triggered by map move, simulate GPS new position event)
-    fakeUpdate() {
-        this._callbackPosition(this.fakePosition());
+    fakeUpdate(pos = null) {
+        this._callbackPosition(this.fakePosition(pos));
     }
 
     // Test if geoloc is supported
@@ -177,7 +190,7 @@ class GeoLoc extends EventEmitter {
         this.map = map;
 
         if (!this.map) return;
-        this.map.off('move', ()=>this.fakeUpdate());
+        this.map.off('move', ()=>this.fakeUpdate(this.map.getCenter()));
 
         if (this.runMode == 'gps') 
         {
@@ -186,9 +199,19 @@ class GeoLoc extends EventEmitter {
         else if (this.runMode == 'simulate') 
         {
             this.map.dragging.enable();
-            this.map.on('move', ()=>this.fakeUpdate());
-            setTimeout(()=>this.fakeUpdate(), 300);
+            this.map.on('move', ()=>{
+                if (this.follow) this.fakeUpdate(this.map.getCenter());
+            });
+            setTimeout(()=>this.fakeUpdate(this.map.getCenter()), 300);
         }
+
+        // polyline track
+        if (this.polyTrack) this.polyTrack.remove();
+        this.polyTrack = L.polyline([], {color: 'blue'}).addTo(this.map);
+    }
+
+    mode() {
+        return this.runMode;
     }
 
     // Init geolocation
@@ -212,9 +235,10 @@ class GeoLoc extends EventEmitter {
     }
 
     // Start simulated geoloc
-    simulateGeoloc() {
+    simulateGeoloc(pos=null) {
         this.init('simulate');
         console.log('>> Mode Simulation basée sur le déplacement de la carte !');
+        this.fakeUpdate(pos);
     }
 
     // Start real geoloc
@@ -244,8 +268,12 @@ class GeoLoc extends EventEmitter {
     }
 
     followMe() {
-        this.follow = true;
-        if (this.map) this.map.flyTo(geo_coords(this.position()), document.MAP.getZoom())
+        if (this.map) {
+            this.map.flyTo(geo_coords(this.position()), document.MAP.getZoom())
+            this.map.once('moveend', () => {
+                this.follow = true;
+            });
+        }
     }
 }
 

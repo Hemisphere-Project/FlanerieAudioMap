@@ -1,204 +1,195 @@
-//
-// PARCOURS 
-//
+class Parcours extends EventEmitter {
+    constructor() {
+        super()
+        this.info = {
+            name: '',
+            status: '',
+            coords: ''
+        };
+        this.spots = {};
+        this.coords = null;
+        this.map = null;
+        this.pID = null;
+    }
 
-document.PARCOURS = 
-{
-    // data
-    info: {
-        name: '',
-        status: '',
-        coords: ''
-    },
-    spots: {},
+    add(spot) {
+        if (!this.spots[spot._type]) this.spots[spot._type] = [];
+        this.spots[spot._type].push(spot);
+    }
 
-    // internal
-    coords: null,
-    map: null,
-    pID: null,
+    remove(spot) {
+        this.spots[spot._type] = this.spots[spot._type].filter(s => s !== spot);
+    }
 
-    add: function(spot) {
-        if (!this.spots[spot._type]) this.spots[spot._type] = []
-        this.spots[spot._type].push(spot)
-    },
+    clear() {
+        for (let type in this.spots) {
+            this.spots[type].map(s => s.clear());
+            this.spots[type] = [];
+        }
+    }
 
-    remove: function(spot) {
-        this.spots[spot._type] = this.spots[spot._type].filter(s => s !== spot)
-    },
+    find(type, index) {
+        return this.spots[type].find(s => s._index === index);
+    }
 
-    clear: function() {
-        
-    },
+    select(type, index, exclusive = true) {
+        let spot = this.find(type, index);
+        if (spot) spot.select(exclusive);
+    }
 
-    find: function(type, index) {
-        return this.spots[type].find(s => s._index === index)
-    },
-
-    select: function(type, index, exclusive = true) {
-        let spot = this.find(type, index)
-        if (spot) spot.select(exclusive)
-    },
-
-    unselectAll: function(exception = null) {
+    unselectAll(exception = null) {
         for (let type in this.spots) {
             this.spots[type].map(s => {
-                if (s !== exception) s.unselect()
-            })
+                if (s !== exception) s.unselect();
+            });
         }
-    },
+    }
 
-    valid: function () {
-        return this.pID !== null
-    },
+    valid() {
+        return this.pID !== null;
+    }
 
-    setMap: function(map) {
-        this.map = map
-        // set for each spot
+    setMap(map) {
+        this.map = map;
         for (let type in this.spots) {
-            this.spots[type].map(s => s.setMap(map))
+            this.spots[type].map(s => s.setMap(map));
         }
-        if (this.coords) this.map.setView(geo_coords(this.coords), this.map.getZoom())
-    },
+        if (this.coords) this.map.setView(geo_coords(this.coords), this.map.getZoom());
+    }
 
-    load: function(parcoursID) {
-
-        // promise
+    load(parcoursID) {
         return new Promise((resolve, reject) => {
+            if (!parcoursID) parcoursID = this.pID;
+            else this.pID = parcoursID;
 
-            if (!parcoursID) parcoursID = this.pID
-            else this.pID = parcoursID
-
-            if(!parcoursID) {
-                reject('No parcours ID')
-                return
+            if (!parcoursID) {
+                reject('No parcours ID');
+                return;
             }
 
-            // request parcours json
             get('/edit/' + parcoursID + '/json')
                 .then(data => {
-                    if (!data || !('info' in data)) throw new Error('No data')
-                    
-                    // clear 
-                    for (let type in this.spots) {
-                        this.spots[type].map(s => s.clear())
-                        this.spots[type] = []
-                    }
+                    if (!data || !('info' in data)) throw new Error('No data');
 
-                    // coords
-                    const [zoom, lat, lng] = data.info.coords.split('/')
-                    this.coords = {lat: lat, lng: lng}
+                    this.clear();
 
-                    // first load: center map
+                    const [zoom, lat, lng] = data.info.coords.split('/');
+                    this.coords = { lat: lat, lng: lng };
+
                     if (this.map && data.info.coords && !this.info.coords) {
-                        this.map.setView(geo_coords(this.coords), zoom)  
+                        this.map.setView(geo_coords(this.coords), zoom);
                     }
 
-                    // load
-                    this.info = data.info
+                    this.info = data.info;
                     for (let type in data.spots)
-                        data.spots[type].forEach((spot, i) => this.addSpot(type, spot))
-                    
-                    resolve()
+                        data.spots[type].forEach((spot, i) => this.addSpot(type, spot));
+
+                    resolve();
                 })
                 .catch(error => {
-                    this.pID = null
-                    reject(error)
-                })
-        })
-    },
+                    this.pID = null;
+                    reject(error);
+                });
+        });
+    }
 
-    addSpot: function(type, spot) {
-        let index = 0
-        if (this.spots[type]) index = this.spots[type].length
-        if (type === 'zones') new Zone(spot, this.map, index)
-        if (type === 'steps') new Step(spot, this.map, index)
-        return this
-    },
+    addSpot(type, spot) {
+        let index = 0;
+        var s = null;
+        if (this.spots[type]) index = this.spots[type].length;
+        if (type === 'zones') s = new Zone(spot, this.map, index, this.pID);
+        if (type === 'steps') s = new Step(spot, this.map, index, this.pID);
+        if (s) {
+            s.on('enter', () => this.emit('enter', s));
+            s.on('leave', () => this.emit('leave', s));
+        }
+        return this;
+    }
 
-    deleteSpot: function(type, index) {
-        this.spots[type].splice(index, 1)[0].clear()
-        return this
-    },
+    deleteSpot(type, index) {
+        this.spots[type].splice(index, 1)[0].clear();
+        return this;
+    }
 
-    // swap two indexes
-    moveSpot: function(type, source, target) {
-        if (source < 0 || source >= this.spots[type].length) return this
-        if (target < 0 || target >= this.spots[type].length) return this
-        
-        let temp = this.spots[type][source]
-        this.spots[type][source] = this.spots[type][target]
-        this.spots[type][target] = temp
+    moveSpot(type, source, target) {
+        if (source < 0 || source >= this.spots[type].length) return this;
+        if (target < 0 || target >= this.spots[type].length) return this;
 
-        // update index
-        this.spots[type].map((s, i) => s.index(i))
-        return this
-    },
+        let temp = this.spots[type][source];
+        this.spots[type][source] = this.spots[type][target];
+        this.spots[type][target] = temp;
 
-    hideSpotMarkers: function() {
+        this.spots[type].map((s, i) => s.index(i));
+        return this;
+    }
+
+    hideSpotMarkers() {
         for (let type in this.spots) {
-            this.spots[type].map(s => s.hideMarker())
+            this.spots[type].map(s => s.hideMarker());
         }
-        return this
-    },
+        return this;
+    }
 
-    showSpotMarker: function(type, index, center = false, quick = true) {
-        // remove all other markers
-        this.hideSpotMarkers()
+    showSpotMarker(type, index, center = false, quick = true) {
+        this.hideSpotMarkers();
         if (this.spots[type][index]) {
-            this.spots[type][index].showMarker()
-            if (center) this.spots[type][index].center(quick)
+            this.spots[type][index].showMarker();
+            if (center) this.spots[type][index].center(quick);
         }
-        return this
-    },
+        return this;
+    }
 
-    export: function() {
+    export() {
         var data = {
             info: this.info,
             spots: {}
-        }
+        };
         for (let type in this.spots)
-            data.spots[type] = this.spots[type].map(s => s._spot)
-        return data
-    },
+            data.spots[type] = this.spots[type].map(s => s._spot);
+        return data;
+    }
 
-    save: function() {
-        console.log('save', this.export())
+    save() {
+        console.log('save', this.export());
         return new Promise((resolve, reject) => {
             post('/edit/' + this.pID + '/json', this.export())
                 .then(data => {
-                    if (data) resolve(data)
+                    if (data) resolve(data);
                     else {
-                        console.error(data)
-                        reject('Error saving parcours')
+                        console.error(data);
+                        reject('Error saving parcours');
                     }
                 })
                 .catch(error => {
-                    reject(error)
-                })
-        })
-    },
+                    reject(error);
+                });
+        });
+    }
 
-    update: function(position) {
+    update(position) {
         for (let type in this.spots) {
-            this.spots[type].map(s => s.updatePosition(position))
+            this.spots[type].map(s => s.updatePosition(position));
         }
-    },
+    }
 
-    stopAudio: function() {
+    stopAudio() {
         for (let type in this.spots) {
-            this.spots[type].map(s => s.player.stop())
+            this.spots[type].map(s => s.player.stop());
         }
-    },
+    }
 
-    loadAudio: function() {
+    loadAudio() {
         for (let type in this.spots) {
-            this.spots[type].map(s => s.loadAudio())
+            this.spots[type].map(s => s.loadAudio());
         }
-    },
+    }
 
-    editable: function() {
+    editable() {
         for (let type in this.spots) {
-            this.spots[type].map(s => s.editable())
+            this.spots[type].map(s => s.editable());
         }
     }
 }
+
+// Init parcours
+document.PARCOURS = new Parcours();

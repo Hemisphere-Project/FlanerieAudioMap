@@ -150,17 +150,33 @@ PAGES['parcours'] = () => {
             zoomControl: false,
             dragging: false,
         })
-        
+    
     PARCOURS.hideSpotMarkers()
     MAP.showPositionMarker()
+    
+    if (GEO.mode() == 'simulate') {
+        // set GEO position to 10m from parcours start
+        var position = PARCOURS.find('steps', 0).getCenterPosition()
+        position.lat += 0.0005
+        console.log('SET POSITION', position)
+        GEO.setPosition(position)
+    }
     MAP.toPosition(true)
-    // PARCOURS.showSpotMarker('steps', 0, true, true)
     setTimeout(() => PARCOURS.showSpotMarker('steps', 0, true, false), 1000)
-    setTimeout(() => GEO.followMe(), 6000)
+    // setTimeout(() => GEO.followMe(), 5000)
+    
 
     $('#parcours-title').text(PARCOURS.info.name);
     TYPEWRITE('parcours-init')
-        // .callFunction(() => GEO.followMe() )
+        // .pauseFor(2000)
+        .callFunction(() => GEO.followMe() )
+
+    // Activate Parcours (TODO: move it somehere else)
+    GEO.on('position', (position) => {
+        PARCOURS.update(position)
+    })
+
+    PARCOURS.find('steps', 0).once('enter', () => PAGE('run'))
 }
 
 

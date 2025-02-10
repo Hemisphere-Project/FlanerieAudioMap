@@ -133,6 +133,14 @@ class EventEmitter {
         return this
     }
 
+    once(event, listener) {
+        const onceListener = (...args) => {
+            listener(...args)
+            this.off(event, onceListener)
+        }
+        return this.on(event, onceListener)
+    }
+
     emit(event, ...args) {
         if (this._events[event]) {
             this._events[event].forEach(listener => listener(...args))

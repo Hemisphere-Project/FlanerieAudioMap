@@ -5,15 +5,17 @@ var stepIndex = -1
 // Generic class Spot, implementing Events
 class Spot extends EventEmitter
 {
-    constructor(spot, map, index, type, color = 'blue')
+    constructor(spot, map, index, type, color = 'blue', parcoursID)
     {
         super()
+        this.pID = parcoursID
         this._spot = spot
         this._map = map
         this._index = index
         this._type = type
         this._color = color
         this._loadRadius = 1
+        this._wasInside = false
 
         this.player = null
 
@@ -177,7 +179,7 @@ class Spot extends EventEmitter
             this._index = i
             this._marker.options.index = i
         }
-        return this
+        return this._index
     }
 
     name(name) {
@@ -267,7 +269,19 @@ class Spot extends EventEmitter
             console.log('Spot load:', this._spot.name, this.player.isLoaded())
         }
 
+        // Enter / Leave event
+        let inside = this.inside(pos)
+        if (inside && !this._wasInside) {
+            this.emit('enter', pos)
+            this._wasInside = true
+        }
+        if (!inside && this._wasInside) {
+            this.emit('leave', pos)
+            this._wasInside = false
+        }
+
         // to be implemented by children
+
     }
 
 }
@@ -275,10 +289,10 @@ class Spot extends EventEmitter
 
 class Zone extends Spot
 {
-    constructor(zone, map, index) 
+    constructor(zone, map, index, parcoursID)
     {
         // Call parent constructor
-        super(zone, map, index, 'zones', zone.mode == 'Ambiance' ? 'green' : '#17a2b8' )
+        super(zone, map, index, 'zones', zone.mode == 'Ambiance' ? 'green' : '#17a2b8', parcoursID)
 
         if (!this._spot.folder) 
             this._spot.folder = 'Objets'
@@ -309,7 +323,7 @@ class Zone extends Spot
     }
 
     loadAudio() {
-        this.player.load('/media/'+ parcoursID +'/' + this._spot.folder + '/', this._spot.media)        
+        this.player.load('/media/'+ this.pID +'/' + this._spot.folder + '/', this._spot.media)        
     }
 
     updatePosition(position) 
@@ -339,10 +353,10 @@ var allSteps = []
 
 class Step extends Spot
 {
-    constructor(step, map, index) 
+    constructor(step, map, index , parcoursID) 
     {
         // Call parent constructor
-        super(step, map, index, 'steps', 'red' )       
+        super(step, map, index, 'steps', 'red', parcoursID) 
 
         if (!this._spot.folder) 
             this._spot.folder = ''
@@ -380,7 +394,7 @@ class Step extends Spot
 
     loadAudio() {
         // Players
-        this.player.load( '/media/' + parcoursID + '/' + this._spot.folder + '/', this._spot.media ) 
+        this.player.load( '/media/' + this.pID + '/' + this._spot.folder + '/', this._spot.media ) 
     }
 
     updatePosition(position) 

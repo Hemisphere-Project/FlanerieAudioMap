@@ -19,7 +19,6 @@ var parcoursID = window.location.pathname.split('/').pop()
 //
 
 // Track line
-var polyline = L.polyline([], {color: 'blue'}).addTo(MAP)
 var lastTrackPosition = null
 
 // Position marker: round style
@@ -41,14 +40,12 @@ function updatePosition(position)
     document.getElementById('speed').innerHTML = Math.round(position.coords.speed, 2) + ' m/s'
     document.getElementById('time').innerHTML = new Date(position.timestamp).toLocaleTimeString()
     
-    // marker follow position
-    markerPosition.setLatLng(geo_coords(position))
 
     // track
-    if (!lastTrackPosition || geo_distance(lastTrackPosition, position) > 3) {
-        lastTrackPosition = position
-        polyline.addLatLng([position.coords.latitude, position.coords.longitude])
-    }
+    // if (!lastTrackPosition || geo_distance(lastTrackPosition, position) > 3) {
+    //     lastTrackPosition = position
+    //     polyline.addLatLng([position.coords.latitude, position.coords.longitude])
+    // }
 
     // update spots
     PARCOURS.update(position)
@@ -70,7 +67,6 @@ function errorCallback(error) {
 }
 
 $('#start').click(() => {
-    polyline.setLatLngs([])
     lastTrackPosition = null
     GEO.startGeoloc()
     GEO.followMe()
@@ -81,10 +77,16 @@ $('#start').click(() => {
 })
 
 $('#simulate').click(() => {
-    polyline.setLatLngs([])
     lastTrackPosition = null
-    GEO.simulateGeoloc()
+
+    var position = PARCOURS.find('steps', 0).getCenterPosition()
+    position.lat += 0.0005
+
+    GEO.simulateGeoloc(position)
+    GEO.followMe()
     GEO.on('position', updatePosition)
+    
+    
     $('.status').hide()
     $('.status-simulate').show()
 })
