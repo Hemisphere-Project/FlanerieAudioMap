@@ -298,9 +298,10 @@ app.get('/show/:file', (req, res) => {
 });
 
 ///////////// APP
-
-app.get('/app', (req, res) => {
-  res.sendFile(path.join(__dirname, 'www', 'app', 'app.html'));
+app.get('/app', function (req, res) {
+  let html = fs.readFileSync(path.join(__dirname, 'www/app/app.html'), 'utf8');
+  html = html.replace(/\$BASEPATH\$/g, '/app');
+  res.send(html);
 });
 
 // Start the server
