@@ -1,6 +1,7 @@
 certs/
 media/
 parcours/
+_tmp/
 
 # Logs
 logs

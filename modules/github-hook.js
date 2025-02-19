@@ -1,28 +1,19 @@
-// import { exec } from 'child_process';
-const exec = require('child_process').exec;
-
+import { exec } from 'child_process';
+import GithubWebHook from 'express-github-webhook';
+import bodyParser from 'body-parser';
 
 function log(msg) {
   console.log(`[\x1b[33mWebhook\x1b[0m]\t${msg}`);
 }
 
-
-// import GithubWebHook from 'express-github-webhook';
-const GithubWebHook = require('express-github-webhook');
-const bodyParser = require('body-parser');
-var webhookHandler;
-
-
+let webhookHandler;
 
 function githubHook(app, route = '/webhook', secret) {
-
     webhookHandler = GithubWebHook({ path: route, secret: secret });
     
     // HOOKS
     webhookHandler.on('*', function (event, repo, data) {
-      // log('hook', event, repo, data);
       if (event === 'push') {
-        // git stash then git pull && pm2 restart contacts
         log('processing push event (Pull / Restart)');
         exec('git stash && git pull && npm i', (err, stdout, stderr) => {
           if (err) {
@@ -35,7 +26,6 @@ function githubHook(app, route = '/webhook', secret) {
       }
     });
 
-
     // Middlewares
     app.use(bodyParser.json());
     app.use(webhookHandler);
@@ -43,4 +33,4 @@ function githubHook(app, route = '/webhook', secret) {
     log('ready.\n----------------------');
 }
 
-module.exports = githubHook;
+export default githubHook;

@@ -1,25 +1,34 @@
 // Import dotenv
-require('dotenv').config();
+import dotenv from 'dotenv';
+dotenv.config();
 
 // Import express
-const http = require('http')
-const express = require('express');
-const multer = require('multer');
-const path = require('path');
-const fs = require('fs')
+import http from 'http';
+import express from 'express';
+import multer from 'multer';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
 
 // Create express app
 const app = express();
-const upload = multer({ dest: 'media/' })
+const upload = multer({ dest: 'media/' });
 
 // Set the port
 const port = process.env.PORT || 3000;
 
+// Get __dirname equivalent in ES module
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
 // Apply Github Hooks
-require('./modules/github-hook.js')(app, '/webhook', process.env.GITHOOK_SECRET);
+import applyGithubHook from './modules/github-hook.js';
+applyGithubHook(app, '/webhook', process.env.GITHOOK_SECRET);
 
 // Apply updater
-require('./modules/updater.js')(app);
+import applyUpdater from './modules/updater.js';
+applyUpdater(app);
 
 // Set the static path
 app.use(express.static(path.join(__dirname, 'www')));
@@ -30,7 +39,7 @@ app.use('/media', express.static(path.join(__dirname, 'media')));
 // Default endpoint: redirect to /app
 app.get("/", (req, res) => {
   res.redirect('/app');
-})
+});
 
 // Default endpoint
 app.get('/control', (req, res) => {
@@ -60,7 +69,7 @@ app.get('/list', (req, res) => {
     });
   });
   res.json(parcours);  
-})
+});
 
 // new parcours
 app.post('/newParcours', express.json(), (req, res) => {
@@ -74,13 +83,12 @@ app.post('/newParcours', express.json(), (req, res) => {
 
   const filePath = './parcours/' + fileName + '.json';
 
-
   const content = {name: name, status: 'draft'};
 
   // write beautiful json file
   fs.writeFileSync(filePath, JSON.stringify(content, null, 2));
   res.status(200).send();
-})
+});
 
 // delete parcours
 app.post('/deleteParcours', express.json(), (req, res) => {
@@ -89,11 +97,11 @@ app.post('/deleteParcours', express.json(), (req, res) => {
   fs.unlinkSync(filePath);
 
   // remove media folder
-  const mediaFolder = './media/' + fileName
+  const mediaFolder = './media/' + fileName;
   if (fs.existsSync(mediaFolder)) fs.rmSync(mediaFolder, { recursive: true });
 
   res.status(200).send();
-})
+});
 
 // clone Parcours
 app.post('/cloneParcours', express.json(), (req, res) => {
@@ -115,17 +123,17 @@ app.post('/cloneParcours', express.json(), (req, res) => {
       if (!fs.existsSync(newFolder)) fs.mkdirSync(newFolder);
       fs.readdirSync(mediaFolder + '/' + folder).forEach(file => {
         fs.copyFileSync(mediaFolder + '/' + folder + '/' + file, newFolder + '/' + file);
-      })
-    })
+      });
+    });
   }
 
   res.status(200).send();
-})
+});
 
 // edit parcours
 app.get('/edit/:file', (req, res) => {
   res.sendFile(path.join(__dirname, 'www', 'control', 'edit.html'));
-})
+});
 
 // get parcours json
 app.get('/edit/:file/json', (req, res) => {
@@ -133,7 +141,7 @@ app.get('/edit/:file/json', (req, res) => {
   const filePath = './parcours/' + fileName + '.json';
   const content = JSON.parse(fs.readFileSync(filePath, 'utf8'));
   res.json(content);
-})
+});
 
 // save parcours json
 app.post('/edit/:file/json', express.json(), (req, res) => {
@@ -198,7 +206,7 @@ app.post('/edit/:file/json', express.json(), (req, res) => {
           }
         });
       }
-    })
+    });
 
     // Remove unused Objets media
     fs.readdirSync('./media/' + fileName + '/Objets').forEach(file => {
@@ -225,7 +233,7 @@ app.post('/edit/:file/json', express.json(), (req, res) => {
   catch (error) {
     res.status(500).json({error: error.message});
   }
-})
+});
 
 // Media json file tree (one deep) with folders as keys and files as values list
 app.get('/mediaList/:parcours', (req, res) => {
@@ -243,13 +251,13 @@ app.get('/mediaList/:parcours', (req, res) => {
     if (fs.lstatSync(mediaFolder + folder).isDirectory())
       media[folder] = fs.readdirSync(mediaFolder + folder)
           .filter(file => !fs.lstatSync(mediaFolder + folder + '/' + file).isDirectory())
-          .filter(file => validExt.includes(file.split('.').pop()))
+          .filter(file => validExt.includes(file.split('.').pop()));
     else 
       if (validExt.includes(folder.split('.').pop()))
         media['.'].push(folder);
   });
   res.json(media);
-})  
+});  
 
 // Upload media file with folder argument from file argument
 app.post('/mediaUpload/:parcours/:folder/:name?', upload.single('file'), (req, res) => 
@@ -261,7 +269,7 @@ app.post('/mediaUpload/:parcours/:folder/:name?', upload.single('file'), (req, r
 
   fs.renameSync(req.file.path, filePath);
   res.status(200).send();
-})
+});
 
 // Remove media file
 app.get('/mediaRemove/:parcours/:folder/:file', (req, res) => {
@@ -269,35 +277,31 @@ app.get('/mediaRemove/:parcours/:folder/:file', (req, res) => {
   const filePath = mediaFolder + req.params.file;
   fs.unlinkSync(filePath, (err) => {
     if (err) console.error(err);
-  })
+  });
   res.status(200).send();
-})
+});
 
 // Remove folder and all files inside
 app.get('/mediaRemoveFolder/:parcours/:folder', (req, res) => {
-  const mediaFolder = './media/' + req.params.parcours + '/' + req.params.folder
+  const mediaFolder = './media/' + req.params.parcours + '/' + req.params.folder;
   if (req.params.folder)
     fs.rm(mediaFolder, { recursive: true }, (err) => {
       if (err) console.error(err);
-    })
+    });
   console.log('mediaRemoveFolder', mediaFolder);
   res.status(200).send();
-})
-
+});
 
 // Show parcours
 app.get('/show/:file', (req, res) => {
   res.sendFile(path.join(__dirname, 'www', 'control', 'show.html'));
-})
-
+});
 
 ///////////// APP
 
-
 app.get('/app', (req, res) => {
   res.sendFile(path.join(__dirname, 'www', 'app', 'app.html'));
-})
-
+});
 
 // Start the server
 const server = http.createServer(app);

@@ -3,7 +3,7 @@ import fs from "fs";
 import crypto from "crypto";
 import path from 'path';
 import { fileURLToPath } from 'url';
-const __basepath = path.resolve(path.dirname(fileURLToPath(import.meta.url))+ "/../..")
+const __basepath = path.resolve(path.dirname(fileURLToPath(import.meta.url))+ "/..")
 
 // Load environment variables from .env file
 import dotenv from 'dotenv';
@@ -18,7 +18,7 @@ function error(msg) {
 }
 
 const APPDATA_DIR   = process.env.APPDATA_DIR   || "www/app";
-const MEDIA_DIR     = process.env.MEDIA_DIR     || "www/parcours";
+const MEDIA_DIR     = process.env.MEDIA_DIR     || "media";
 const TEMP_DIR      = process.env.TEMP_DIR      || "_tmp";
 const ZIP_FILENAME  = process.env.ZIP_FILENAME  || "app.zip";
 
