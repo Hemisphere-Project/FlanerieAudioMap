@@ -12,12 +12,14 @@ const fs = require('fs')
 const app = express();
 const upload = multer({ dest: 'media/' })
 
-
 // Set the port
 const port = process.env.PORT || 3000;
 
 // Apply Github Hooks
 require('./modules/github-hook.js')(app, '/webhook', process.env.GITHOOK_SECRET);
+
+// Apply updater
+require('./modules/updater.js')(app);
 
 // Set the static path
 app.use(express.static(path.join(__dirname, 'www')));
