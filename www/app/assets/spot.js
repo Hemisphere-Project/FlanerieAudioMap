@@ -98,7 +98,7 @@ class Spot extends EventEmitter
             this._marker.setStyle({color: color, fillColor: color})
         }
         if (opacity) this._marker.setStyle({fillOpacity: opacity})
-            
+
         if (this._map) this._map.removeLayer(this._marker)
         if (this._map) this._map.addLayer(this._marker)
         return this
@@ -380,6 +380,7 @@ class Step extends Spot
 
         // player
         this.player = new PlayerStep()
+        this.player.on('done', () => { this.emit('done', this) })
 
         // Leaflet Tooltip
         this._marker.bindTooltip(this._spot.name)

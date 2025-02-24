@@ -179,8 +179,6 @@ PAGES['parcours'] = () => {
     // ON step fire: show next
     PARCOURS.on('fire', (s) => {
         if (s._type != 'steps') return
-        console.log('FIRE', s)
-        
         s.showMarker('yellow')
 
         let sNext = PARCOURS.find('steps', s._index + 1)
@@ -200,7 +198,6 @@ PAGES['parcours'] = () => {
     // ON step done: hide
     PARCOURS.on('done', (s) => {
         if (s._type != 'steps') return
-        console.log('DONE', s)
         s.hideMarker()
 
         // Last step

@@ -27,25 +27,25 @@ class PlayerSimple extends EventEmitter
         this._player.on('end', () => {
             if (this._player) {
                 this.emit('end', this._player._src)
-                console.log('PlayerSimple end:', this._player._src)
+                // console.log('PlayerSimple end:', this._player._src)
             }
         })
         this._player.on('stop', () => {
             if (this._player) {
                 this.emit('stop', this._player._src)
-                console.log('PlayerSimple stop:', this._player._src)
+                // console.log('PlayerSimple stop:', this._player._src)
             }
         })
         this._player.on('play', () => {
             if (this._player) {
                 this.emit('play', this._player._src)
-                console.log('PlayerSimple play:', this._player._src)
+                // console.log('PlayerSimple play:', this._player._src)
             }
         })
         this._player.on('pause', () => {
             if (this._player) {
                 this.emit('pause', this._player._src)
-                console.log('PlayerSimple pause:', this._player._src)
+                // console.log('PlayerSimple pause:', this._player._src)
 
                 if (this._rewindOnPause !== undefined) {
                     let d = this._rewindOnPause > 0 ? this._rewindOnPause : this._fadeTime
@@ -56,13 +56,12 @@ class PlayerSimple extends EventEmitter
         this._player.on('load', () => {
             if (this._player) {
                 this.emit('load', this._player._src)
-                console.log('PlayerSimple ready:', this._player._src)
+                // console.log('PlayerSimple ready:', this._player._src)
             }
         })
 
         this.master(media.master)
-
-        console.log('PlayerSimple load:', media.src)
+        // console.log('PlayerSimple load:', media.src)
     }
 
     clear() {  
@@ -212,10 +211,20 @@ class PlayerStep extends EventEmitter
         this.state = 'off'
 
         this.voice.rewindOnPause(3000)
-        this.voice.on('end', () => { if (this.state == 'play') this.state = 'afterplay' })
+        this.voice.on('end', () => { 
+            if (this.state == 'play') {
+                this.state = 'afterplay' 
+                this.emit('done')
+            }
+        })
 
         this.music.rewindOnPause(3000)
-        this.music.on('end', () => { if (this.state == 'play') this.state = 'afterplay' })
+        this.music.on('end', () => { 
+            if (this.state == 'play') {
+                this.state = 'afterplay' 
+                this.emit('done')
+            }    
+        })
         
 
     }
@@ -233,7 +242,9 @@ class PlayerStep extends EventEmitter
         this.music.clear()
         this.ambiant.clear()
         this.offlimit.clear()
+        let wasNotStop = this.state !== 'stop'
         this.state = 'stop'
+        if (wasNotStop) this.emit('stop')
     }
 
     play() {
@@ -241,7 +252,9 @@ class PlayerStep extends EventEmitter
         this.voice.play()
         this.music.play()
         this.ambiant.play()
+        let wasNotPlay = this.state !== 'play'
         this.state = 'play'
+        if (wasNotPlay) this.emit('play')
     }
 
     stop() {
@@ -249,7 +262,9 @@ class PlayerStep extends EventEmitter
         this.music.stopOut()
         this.ambiant.stopOut()
         this.offlimit.stopOut()
+        let wasNotStop = this.state !== 'stop'
         this.state = 'stop'
+        if (wasNotStop) this.emit('stop')
     }
 
     volume(value) {
@@ -278,12 +293,14 @@ class PlayerStep extends EventEmitter
             this.music.pauseOut()
             this.offlimit.play()
             this.state = 'offlimit'
+            this.emit('offlimit')
         }
         else if (!out && this.state == 'offlimit') {
             this.offlimit.stopOut()
             this.voice.resume()
             this.music.resume()
             this.state = 'play'
+            this.emit('resume')
         }
     }
 }
