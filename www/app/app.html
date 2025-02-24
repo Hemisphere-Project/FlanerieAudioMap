@@ -54,6 +54,14 @@
             </div>
         </div>
 
+        <div id="nomedia" class="page">
+            <div class="content">
+                <p>Impossible de charger les médias pour votre parcours</p>
+                    <br />
+                <p id="nomedia-retry">Vérifiez votre connexion internet ...</p>
+            </div>
+        </div>
+
         <div id="nogeo" class="page">
             <div class="content">
                 <p>Impossible de détecter votre position.</p>
@@ -75,7 +83,13 @@
             <div class="content">
                 <p>Choisissez un parcours:</p>
                 <ul id="select-parcours"></ul>
-                <button id="select-parcours-start" class="btn btn-primary"></button>
+            </div>
+        </div>
+
+        <div id="load" class="page">
+            <div class="content">
+                <p>Téléchargement du parcours: </p>
+                <p id="load-progress">0%</p>
             </div>
         </div>
 
@@ -85,10 +99,9 @@
             <p id="parcours-init">Rendez vous au point de départ pour commencer le parcours.</p>
         </div>
 
-        <div id="synchronise" class="page">
+        <div id="end" class="page">
             <div class="content">
-                <p>Téléchargement du parcours: </p>
-                <p id="progress">0%</p>
+                <p id="parcours-end"></p>
             </div>
         </div>
 

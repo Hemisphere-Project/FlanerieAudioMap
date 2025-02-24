@@ -10,6 +10,7 @@ class Parcours extends EventEmitter {
         this.coords = null;
         this.map = null;
         this.pID = null;
+        this.medialoaded = false;
     }
 
     add(spot) {
@@ -46,7 +47,7 @@ class Parcours extends EventEmitter {
     }
 
     valid() {
-        return this.pID !== null;
+        return this.pID !== null && this.medialoaded === true;
     }
 
     setMap(map) {
@@ -84,13 +85,73 @@ class Parcours extends EventEmitter {
                     for (let type in data.spots)
                         data.spots[type].forEach((spot, i) => this.addSpot(type, spot));
 
-                    resolve();
+                    // DOWNLOAD MEDIA
+                    this.loadmedia()
+                        .then(() => {
+                            console.log('Parcours loaded', data);
+                            this.medialoaded = true;
+                            resolve();
+                        })
+                        .catch(error => {
+                            console.warn('Error loading media', error);
+                            this.medialoaded = false;
+                            reject(error);
+                        });
                 })
                 .catch(error => {
                     this.pID = null;
                     reject(error);
                 });
         });
+    }
+    
+    loadmedia() {
+        return new Promise((resolve, reject) => {
+            if (!this.pID) {
+                reject('No parcours ID');
+                return;
+            }
+            if (!document.WEBAPP_URL) {
+                console.log('WEB MODE: Media loading skipped');
+                resolve();
+                return;
+            }
+            
+            // Get media list
+            get('/update/media/' + this.pID)
+            .then(data => {
+                console.log('MEDIA', data);
+
+                const mediaFiles = Object.keys(data);
+                const downloadSequence = mediaFiles.reduce((promiseChain, file) => {
+                    let info = data[file];
+                    let path = this.pID + '/' + file;
+                    return promiseChain.then(() => media_download(path, info))
+                        .then(() => {
+                            console.log('Media loaded', path);
+                        })
+                        .catch(error => {
+                            console.warn('Error loading media', error);
+                            throw error;
+                        });
+                }, Promise.resolve());
+
+                downloadSequence
+                    .then(() => {
+                        resolve();
+                    })
+                    .catch(error => {
+                        reject(error);
+                    });
+            })
+            .catch(error => {
+                reject(error);
+            });
+        });
+    }
+
+    loadprogress() {
+        return 0;
     }
 
     addSpot(type, spot) {

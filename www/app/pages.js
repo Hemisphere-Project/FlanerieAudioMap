@@ -81,7 +81,7 @@ PAGES['checkdata'] = () =>
 {
     // once position check if stored parcours is available and not too far
     if (PARCOURS.valid()) 
-        if (geo_distance(position, PARCOURS) < DISTANCE_MATCH) 
+        if (GEO.distance(PARCOURS) < DISTANCE_MATCH) 
             return PAGE('parcours')
 
     // if not, check if parcours are available online
@@ -120,24 +120,28 @@ PAGES['select'] = (list) => {
     list.forEach(p => {
         var li = document.createElement('li');
         li.innerHTML = p.name;
-        li.addEventListener('click', () => {
-            // add active class
-            select.querySelectorAll('li').forEach(li => li.classList.remove('active'));
-            li.classList.add('active');
-        });
+        li.addEventListener('click', () => PAGE('load', p));
         select.appendChild(li);
     });
 
-    // Go
-    $('#select-parcours-start').off('click').on('click', () => {
-        var active = select.querySelector('.active');
-        if (active) {
-            var parcours = list.find(p => p.name === active.innerHTML);
-            PARCOURS.load(parcours.file)
-                .then(() => PAGE('parcours'))
-                // .catch(error => PAGE('select'));
-        }
-    });
+    // Only one parcours => click it
+    if (list.length == 1) select.querySelector('li').click();
+}
+
+PAGES['load'] = (p) => {
+    var progress = setInterval(() => {
+        var p = PARCOURS.loadprogress();
+        $('#load-progress').text(p + '%');
+    }, 1000);
+
+    PARCOURS.load(p.file).then(() => {
+        clearInterval(progress);
+        PAGE('parcours')
+    })
+    .catch(() => {
+        clearInterval(progress);
+        PAGE('nodata')
+    })
 }
 
 PAGES['parcours'] = () => {
@@ -157,7 +161,7 @@ PAGES['parcours'] = () => {
     if (GEO.mode() == 'simulate') {
         // set GEO position to 10m from parcours start
         var position = PARCOURS.find('steps', 0).getCenterPosition()
-        position.lat += 0.0005
+        position[0] += 0.0005
         console.log('SET POSITION', position)
         GEO.setPosition(position)
     }
@@ -181,8 +185,15 @@ PAGES['parcours'] = () => {
         if (s._type != 'steps') return
         s.showMarker('yellow')
 
-        let sNext = PARCOURS.find('steps', s._index + 1)
-        if (sNext) sNext.showMarker('red')
+        let i = s.index() + 1;
+        let sNext = PARCOURS.find('steps', i)
+        while (sNext) {
+            sNext.showMarker('red')
+            if (!sNext._spot.optional) break;
+            i++;
+            sNext = PARCOURS.find('steps', i)
+        }
+
 
         // First step
         if (s._index == 0) {
@@ -190,7 +201,7 @@ PAGES['parcours'] = () => {
             TYPEWRITE('parcours-init')
 
             // Show objects
-            PARCOURS.spots.zones.map(z => z.showMarker('#17a2b8', 0.1))
+            PARCOURS.spots.zones.map(z => z.showMarker())
         }
         
     })
@@ -198,7 +209,7 @@ PAGES['parcours'] = () => {
     // ON step done: hide
     PARCOURS.on('done', (s) => {
         if (s._type != 'steps') return
-        s.hideMarker()
+        s.showMarker('grey', 0.5)
 
         // Last step
         if (s._index + 1 == PARCOURS.spots.steps.length) {
@@ -206,12 +217,36 @@ PAGES['parcours'] = () => {
             PAGE('end')
         }
     })
-    
+}
 
+
+// End
+PAGES['end'] = () => {
+
+    var ending = true
+    function end() {
+        if (!ending) return;
+        TYPEWRITE('parcours-end')
+            .typeString('C\'est la fin...')
+            .pauseFor(2000)
+            .deleteAll()
+            .typeString('Merci de votre participation !')
+            .pauseFor(2000)
+            .deleteAll()
+            .typeString('A bientôt.')
+            .pauseFor(2000)
+            .deleteAll()
+            .pauseFor(5000)  
+            .callFunction(() => end())
+    }
+    end();
+    
 }
 
 
 
+
+
 // START
-PAGE('title');
-// PAGE('checkgeo');
+// PAGE('title');
+PAGE('checkgeo');

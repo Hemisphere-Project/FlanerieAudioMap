@@ -18,7 +18,7 @@ function error(msg) {
 }
 
 const APPDATA_DIR   = process.env.APPDATA_DIR   || "www/app";
-const MEDIA_DIR     = process.env.MEDIA_DIR     || "parcours";
+const MEDIA_DIR     = process.env.MEDIA_DIR     || "media";
 const TEMP_DIR      = process.env.TEMP_DIR      || "_tmp";
 const ZIP_FILENAME  = process.env.ZIP_FILENAME  || "app.zip";
 
@@ -26,9 +26,10 @@ var APPINFO = {
     'appzip': {
         'url': null,
         'hash': null
-    },
-    'media_tree': {}
+    }
 };
+
+var APPMEDIA = {};
 
 // compress appdata/ into download/appdata.zip
 // return promise
@@ -103,11 +104,16 @@ function fileCrowler(path) {
         const stats = fs.statSync(subpath);
         if (stats.isDirectory()) {
             result[file] = fileCrowler(subpath);
-        } else {
+        } 
+        else if (!file.startsWith('.')) 
+        {
             const data = fs.readFileSync(subpath);
             const hash = crypto.createHash("sha256");
             hash.update(data);
-            result[file] = hash.digest("hex");
+            result[file] = {
+                hash: hash.digest("hex"),
+                size: stats.size
+            };
         }
     });
     return result;
@@ -119,7 +125,23 @@ function buildMediaTree()
 {
     return new Promise((resolve, reject) => {
         const MEDIA_PATH = __basepath + "/" + MEDIA_DIR;
-        APPINFO.media_tree = fileCrowler(MEDIA_PATH);
+
+        function flatten(media) {
+            const result = {};
+            for (const folder in media) {
+                    const files = media[folder];
+                    for (const file in files) {
+                        const filedata = files[file];
+                        result[folder + "/" + file] = filedata;
+                    }
+            }
+            return result;
+        }
+
+        APPMEDIA = fileCrowler(MEDIA_PATH);
+        for (const folder in APPMEDIA) 
+            APPMEDIA[folder] = flatten(APPMEDIA[folder]);
+
         resolve();
     })
 }
@@ -143,6 +165,15 @@ function initUpdater(app)
         res.json(APPINFO);
     });
 
+    // Get MEDIA tree
+    app.get('/update/media/:folder', (req, res) => {
+        const folder = req.params.folder;
+        if (folder in APPMEDIA)
+            res.json(APPMEDIA[folder]);
+        else
+            res.status(404).send("Folder not found");
+    })
+
     // Download appdata.zip
     APPINFO.appzip.url = '/update/appdata';
     app.get(APPINFO.appzip.url, (req, res) => {
@@ -150,9 +181,10 @@ function initUpdater(app)
         res.download(__basepath + "/" + TEMP_DIR + "/" + ZIP_FILENAME);
     });
 
-    // Display APPINFO (beautify media_tree)
+    // Display APPINFO
     log("APPINFO:\n"+JSON.stringify(APPINFO, null, 4));
-    log('ready.\n----------------------');
+    log("APPMEDIA:\n"+JSON.stringify(APPMEDIA, null, 4));
+    log('ready.\n----------------------'); 
 }
 
 export default initUpdater;

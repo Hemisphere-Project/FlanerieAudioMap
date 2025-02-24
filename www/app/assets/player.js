@@ -17,6 +17,8 @@ class PlayerSimple extends EventEmitter
         this._media = media
         
         if (!media.src || media.src == '-') return
+
+        if (document.LOCALAPP_PATH) basepath = document.LOCALAPP_PATH + basepath
         
         this._player = new Howl({
             src: basepath + media.src,

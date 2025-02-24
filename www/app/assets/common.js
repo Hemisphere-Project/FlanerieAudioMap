@@ -27,10 +27,18 @@ console.error = function(...message) {
     $('#logs').scrollTop($('#logs')[0].scrollHeight)
 }
 
+// PATH functions
+//
+function prep(path) {
+    if (path.startsWith('http') || !document.WEBAPP_URL) return path
+    if (!path.startsWith('/')) path = '/' + path
+     return document.WEBAPP_URL + path
+}
 // FETCH functions
 //
 
 function post(path, data) {
+    path = prep(path)
     return fetch(path, {
         method: 'POST',
         headers: {
@@ -63,6 +71,7 @@ function post(path, data) {
 }
 
 function postFile(path, data) {
+    path = prep(path)
     return fetch(path, {
         method: 'POST',
         body: data
@@ -93,6 +102,7 @@ function postFile(path, data) {
 
 
 function get(path, data) {
+    path = prep(path)
     path = new URLSearchParams(data).toString() ? path + '?' + new URLSearchParams(data).toString() : path
     return fetch(path)
         .then(response => {

@@ -33,8 +33,10 @@ class Spot extends EventEmitter
             this._marker = L.circle([this._spot.lat, this._spot.lon],
                 {
                     color: this._color,
+                    opacity: 0.7,
+                    weight: 1,
                     fillColor: this._color,
-                    fillOpacity: 0.3,
+                    fillOpacity: 0.35,
                     radius: this._spot.radius,
                     type: this._type,
                     index: this._index,
@@ -51,8 +53,10 @@ class Spot extends EventEmitter
             this._marker = L.polygon(this._spot.radius,
                 {
                     color: this._color,
+                    opacity: 0.7,
+                    weight: 1,
                     fillColor: this._color,
-                    fillOpacity: 0.3,
+                    fillOpacity: 0.35,
                     type: this._type,
                     index: this._index,
                     selected: false,
@@ -97,7 +101,10 @@ class Spot extends EventEmitter
             this._color = color
             this._marker.setStyle({color: color, fillColor: color})
         }
-        if (opacity) this._marker.setStyle({fillOpacity: opacity})
+        if (opacity) this._marker.setStyle({
+            fillOpacity: opacity/2,
+            opacity: opacity,
+        })
 
         if (this._map) this._map.removeLayer(this._marker)
         if (this._map) this._map.addLayer(this._marker)
@@ -137,10 +144,12 @@ class Spot extends EventEmitter
     }
 
     getCenterPosition() {
+        let p
         if (typeof this._spot.radius === 'number')
-            return this._marker.getLatLng()
+            p = this._marker.getLatLng()
         else
-            return this._marker.getBounds().getCenter()
+            p = this._marker.getBounds().getCenter()
+        return geo_coords(p)
     }
 
     getRadius() {
@@ -298,7 +307,7 @@ class Zone extends Spot
     constructor(zone, map, index, parcoursID)
     {
         // Call parent constructor
-        super(zone, map, index, 'zones', zone.mode == 'Ambiance' ? 'green' : '#17a2b8', parcoursID)
+        super(zone, map, index, 'zones', zone.mode == 'Ambiance' ? '#5958a7' : '#17a2b8', parcoursID)
 
         if (!this._spot.folder) 
             this._spot.folder = 'Objets'

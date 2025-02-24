@@ -10,9 +10,10 @@ function geo_coords(c) {
     }
 
     // parse coords from object
-    var lat = c.latitude || c.lat
-    var lng = c.longitude || c.lng || c.lon
+    var lat = c.latitude || c.lat || c[0]
+    var lng = c.longitude || c.lng || c.lon || c[1]
     if (lat && lng) return [lat, lng]
+    else console.error('Invalid coords:', c)
 }
 
 

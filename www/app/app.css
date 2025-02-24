@@ -148,3 +148,8 @@ body {
     border-radius: 50%;
     background-color: red;
 }
+
+/* MISC */
+.leaflet-control-attribution {
+    display: none;
+}
