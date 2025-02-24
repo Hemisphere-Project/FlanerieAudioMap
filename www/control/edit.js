@@ -122,7 +122,9 @@ function load() {
                                     const file = input[0].files[0]
                                     if (!file) {input.remove(); return}
                                     const formData = new FormData()
-                                    postFile('/mediaUpload/' + parcoursID + '/' + step.folder, formData.append('file', file) )
+                                    formData.append('file', file)
+                                    console.log('uploading', file)
+                                    postFile('/mediaUpload/' + parcoursID + '/' + step.folder, formData )
                                         .then(() => {
                                             step.media[m].src = file.name 
                                             save().then(() => PARCOURS.select('steps', i))

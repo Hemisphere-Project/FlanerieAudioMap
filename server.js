@@ -262,6 +262,9 @@ app.get('/mediaList/:parcours', (req, res) => {
 // Upload media file with folder argument from file argument
 app.post('/mediaUpload/:parcours/:folder/:name?', upload.single('file'), (req, res) => 
 {
+
+  console.log('mediaUpload', req.file, req.params.parcours, req.params.folder, req.params.name);
+  
   const filename = req.params.name ? req.params.name + '.' + req.file.originalname.split('.').pop() : req.file.originalname;
 
   const mediaFolder = './media/' + req.params.parcours + '/' + req.params.folder + '/';
