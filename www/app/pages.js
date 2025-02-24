@@ -176,7 +176,41 @@ PAGES['parcours'] = () => {
         PARCOURS.update(position)
     })
 
-    // PARCOURS.find('steps', 0).once('enter', () => PAGE('run'))
+    // ON step fire: show next
+    PARCOURS.on('fire', (s) => {
+        if (s._type != 'steps') return
+        console.log('FIRE', s)
+        
+        s.showMarker('yellow')
+
+        let sNext = PARCOURS.find('steps', s._index + 1)
+        if (sNext) sNext.showMarker('red')
+
+        // First step
+        if (s._index == 0) {
+            $('#parcours-init').text("Suivez la guide ...")
+            TYPEWRITE('parcours-init')
+
+            // Show objects
+            PARCOURS.spots.zones.map(z => z.showMarker('#17a2b8', 0.1))
+        }
+        
+    })
+
+    // ON step done: hide
+    PARCOURS.on('done', (s) => {
+        if (s._type != 'steps') return
+        console.log('DONE', s)
+        s.hideMarker()
+
+        // Last step
+        if (s._index + 1 == PARCOURS.spots.steps.length) {
+            console.log('END OF PARCOURS')
+            PAGE('end')
+        }
+    })
+    
+
 }
 
 

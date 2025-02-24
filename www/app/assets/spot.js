@@ -92,7 +92,13 @@ class Spot extends EventEmitter
         return this._marker
     }
 
-    showMarker() {
+    showMarker(color, opacity) {
+        if (color) {
+            this._color = color
+            this._marker.setStyle({color: color, fillColor: color})
+        }
+        if (opacity) this._marker.setStyle({fillOpacity: opacity})
+            
         if (this._map) this._map.removeLayer(this._marker)
         if (this._map) this._map.addLayer(this._marker)
         return this
@@ -415,13 +421,22 @@ class Step extends Spot
                 if (allSteps.filter(s => s._index > stepIndex && s._index < this._index && s._spot.optional !== true).length > 0) return
 
             // Stop all other steps
-            allSteps.filter(s => s._index !== this._index).map( s => s.player.stop() )
+            allSteps.filter(s => s._index !== this._index).map( s => {
+                let wasPlaying = s.player.isPlaying()
+                s.player.stop() 
+                if (wasPlaying) s.emit('done', s)
+            })
             
             // Play
             this.player.play()
 
             // Update index
             stepIndex = this._index
+
+            console.log('== ETAPE:', this._index, this._spot.name)
+
+            // fire event
+            this.emit('fire', this)
         }
 
         // Handle Offlimit (if media exists)
