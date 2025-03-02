@@ -160,6 +160,16 @@ app.post('/edit/:file/json', express.json(), (req, res) => {
         if (!objet.name || objet.name.startsWith('Objet')) content.spots.zones[i].name = 'Objet ' + i;
       });
 
+    // Offlimits Media folders exists
+    if (!fs.existsSync('./media/' + fileName + '/Offlimits'))
+      fs.mkdirSync('./media/' + fileName + '/Offlimits');
+
+    // Offlimits name update
+    if (content.spots.offlimits)
+      content.spots.offlimits.forEach((objet, i) => {
+        if (!objet.name || objet.name.startsWith('Objet')) content.spots.offlimits[i].name = 'Offlimit ' + i;
+      });
+
     // Steps Media folders renaming
     if (content.spots.steps)
       content.spots.steps.forEach((step, i) => 
@@ -216,10 +226,19 @@ app.post('/edit/:file/json', express.json(), (req, res) => {
       }
     });
 
+    // Remove unused Offlimits media
+    fs.readdirSync('./media/' + fileName + '/Offlimits').forEach(file => {
+      if (!content.spots.offlimits || !content.spots.offlimits.find(objet => objet.media.src === file)) {
+        fs.unlinkSync('./media/' + fileName + '/Offlimits/' + file);
+        console.log('remove unused media', file);
+      }
+    });
+
     // Remove unused Steps folder
     fs.readdirSync('./media/' + fileName).forEach(folder => {
       // ignore Objets folder
       if (folder === 'Objets') return;
+      if (folder === 'Offlimits') return;
       if (!content.spots.steps || !content.spots.steps.find(step => step.folder === folder)) {
         fs.rmSync('./media/' + fileName + '/' + folder, { recursive: true });
       }

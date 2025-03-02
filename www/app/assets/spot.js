@@ -304,10 +304,12 @@ class Spot extends EventEmitter
 
 class Zone extends Spot
 {
-    constructor(zone, map, index, parcoursID)
+    constructor(spot, map, index, parcoursID)
     {
+        let color =  (spot.mode == 'Ambiance') ? '#5958a7' : '#17a2b8'
+
         // Call parent constructor
-        super(zone, map, index, 'zones', zone.mode == 'Ambiance' ? '#5958a7' : '#17a2b8', parcoursID)
+        super(spot, map, index, 'zones', color, parcoursID)
 
         if (!this._spot.folder) 
             this._spot.folder = 'Objets'
@@ -325,7 +327,7 @@ class Zone extends Spot
         this._marker.bindTooltip(this._spot.media.src)
 
         // player
-        this.player = new PlayerSimple(true, zone.mode == 'Ambiance' ? 1500 : 0)
+        this.player = new PlayerSimple(true, spot.mode == 'Ambiance' ? 1500 : 0)
     }
     
 
@@ -361,7 +363,61 @@ class Zone extends Spot
         }
         else this.player.pauseOut()
     }
-}    
+}
+
+class Offlimit extends Spot
+{
+    constructor(spot, map, index, parcoursID)
+    {
+        let color =  'red'
+
+        // Call parent constructor
+        super(spot, map, index, 'offlimits', color, parcoursID)
+
+        if (!this._spot.folder) 
+            this._spot.folder = 'Offlimits'
+
+        if (!this._spot.name) 
+            this._spot.name = 'Offlimit '+index
+
+        if (!this._spot.media) 
+            this._spot.media = {src: '-', master: 1}
+
+        if (!this._spot.mode)
+            this._spot.mode = 'Offlimit'   // Offlimit
+
+        // Leaflet Tooltip
+        this._marker.bindTooltip(this._spot.media.src)
+
+        // player
+        this.player = new PlayerSimple(true, 0)
+    }
+    
+
+    index(i) {
+        if (i !== undefined) {
+            super.index(i)
+            this._spot.name = 'Offlimit '+i
+        }
+        return this._index
+    }
+
+    loadAudio() {
+        this.player.load('/media/'+ this.pID +'/' + this._spot.folder + '/', this._spot.media)        
+    }
+
+    updatePosition(position) 
+    {
+        super.updatePosition(position)
+        if (!this.player.isLoaded()) return
+
+        // Inside
+        if (this.inside(position)) {
+            this.player.resume()
+        }
+        else this.player.stop()
+    }
+}
 
 
 var allSteps = []
@@ -371,7 +427,7 @@ class Step extends Spot
     constructor(step, map, index , parcoursID) 
     {
         // Call parent constructor
-        super(step, map, index, 'steps', 'red', parcoursID) 
+        super(step, map, index, 'steps', 'yellow', parcoursID) 
 
         if (!this._spot.folder) 
             this._spot.folder = ''

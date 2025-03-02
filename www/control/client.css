@@ -134,3 +134,7 @@ option[value=\*] {
 .status {
     display: none;
 }
+
+.bg-ambiant {
+    background-color: #5958a7;
+}

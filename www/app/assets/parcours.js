@@ -157,9 +157,11 @@ class Parcours extends EventEmitter {
     addSpot(type, spot) {
         let index = 0;
         var s = null;
+        console.log('addSpot', type, spot);
         if (this.spots[type]) index = this.spots[type].length;
         if (type === 'zones') s = new Zone(spot, this.map, index, this.pID);
         if (type === 'steps') s = new Step(spot, this.map, index, this.pID);
+        if (type === 'offlimits') s = new Offlimit(spot, this.map, index, this.pID);
         if (s) {
             s.on('enter', () => this.emit('enter', s));
             s.on('leave', () => this.emit('leave', s));
