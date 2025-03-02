@@ -60,6 +60,7 @@ app.get('/list', (req, res) => {
     if (!file.endsWith('.json')) return;
     const parcoursFileName = file.split('.json')[0];
     const parcoursContent = JSON.parse(fs.readFileSync(parcoursFolder + file, 'utf8'));
+    console.log('parcours', parcoursFileName, parcoursContent);
     parcours.push({
       file: parcoursFileName, 
       name: parcoursContent.info.name, 
@@ -83,7 +84,7 @@ app.post('/newParcours', express.json(), (req, res) => {
 
   const filePath = './parcours/' + fileName + '.json';
 
-  const content = {name: name, status: 'draft'};
+  const content = {info: {name: name, status: 'draft'}};
 
   // write beautiful json file
   fs.writeFileSync(filePath, JSON.stringify(content, null, 2));
