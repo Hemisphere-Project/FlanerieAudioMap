@@ -392,7 +392,7 @@ class Offlimit extends Spot
         this._marker.bindTooltip(this._spot.media.src)
 
         // player
-        this.player = new PlayerSimple(true, 0)
+        this.player = new PlayerSimple(true, 1000)
     }
     
 
