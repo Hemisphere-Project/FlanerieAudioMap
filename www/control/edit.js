@@ -423,6 +423,7 @@ function loadMap() {
 $('#setCoords').click(() => {
     const coords = MAP.getZoom() + '/' + MAP.getCenter().lat + '/' + MAP.getCenter().lng
     document.getElementById('pCoords').value = coords
+    PARCOURS.info.coords = coords
     save()
 })
 

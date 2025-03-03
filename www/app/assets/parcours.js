@@ -58,6 +58,10 @@ class Parcours extends EventEmitter {
         if (this.coords) this.map.setView(geo_coords(this.coords), this.map.getZoom());
     }
 
+    setCoords() {
+        this.coords = coords;
+    }
+
     load(parcoursID) {
         return new Promise((resolve, reject) => {
             if (!parcoursID) parcoursID = this.pID;
@@ -73,7 +77,8 @@ class Parcours extends EventEmitter {
                     if (!data || !('info' in data)) throw new Error('No data');
 
                     this.clear();
-
+                    
+                    if (!data.info.coords) data.info.coords = "13/45.76537/4.88377";
                     const [zoom, lat, lng] = data.info.coords.split('/');
                     this.coords = { lat: lat, lng: lng };
 
