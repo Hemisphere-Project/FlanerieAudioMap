@@ -237,14 +237,48 @@ class Parcours extends EventEmitter {
     }
 
     update(position) {
-        for (let type in this.spots) {
-            this.spots[type].map(s => s.updatePosition(position));
+
+        let offlimit = false;
+
+        // process offlimits
+        if (this.spots['offlimits']) {
+            this.spots['offlimits'].map(s => { 
+                let inside = s.updatePosition(position);
+                if (inside) offlimit = true;
+            });
+        }
+
+        // process others, if not offlimit
+        if (!offlimit) {
+            for (let type in this.spots)
+                if (type !== 'offlimits') this.spots[type].map(s => s.updatePosition(position));
+        }
+        // pause all types (except offlimits) if offlimit
+        else {
+            let types = Object.keys(this.spots).filter(t => t !== 'offlimits');
+            this.pauseAudio(types);
         }
     }
 
-    stopAudio() {
-        for (let type in this.spots) {
-            this.spots[type].map(s => s.player.stop());
+    pauseAudio(types) {
+        // if not array convert to array
+        if (!types) {
+            for (let type in this.spots) this.spots[type].map(s => s.player.pause());
+        }
+        else {
+            if (!Array.isArray(types)) types = [types];
+            for (let type of types)
+                this.spots[type].map(s => s.player.pause());
+        }
+    }
+
+
+    stopAudio(type) {
+        if (type) {
+            if (this.spots[type]) this.spots[type].map(s => s.player.stop());
+        }
+        else {
+            for (let type in this.spots) this.spots[type].map(s => s.player.stop());
         }
     }
 

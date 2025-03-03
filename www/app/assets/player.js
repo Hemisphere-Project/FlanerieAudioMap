@@ -156,6 +156,10 @@ class PlayerSimple extends EventEmitter
         this.master(this._media.master + value)
     }
 
+    isPaused() {
+        return this._player && this._player.paused()
+    }
+
     isPlaying() {
         return this._player.playing() && !this.isGoingOut
     }
@@ -269,11 +273,35 @@ class PlayerStep extends EventEmitter
         if (wasNotStop) this.emit('stop')
     }
 
+    pause() {
+        this.voice.pauseOut()
+        this.music.pauseOut()
+        this.ambiant.pauseOut()
+        this.offlimit.pauseOut()
+        let wasNotPause = this.state !== 'pause'
+        this.state = 'pause'
+        if (wasNotPause) this.emit('pause')
+    }
+
+    resume() {
+        this.voice.resume()
+        this.music.resume()
+        this.ambiant.resume()
+        this.offlimit.resume()
+        let wasNotPlay = this.state !== 'play'
+        this.state = 'play'
+        if (wasNotPlay) this.emit('play')
+    }
+
     volume(value) {
         this.voice.volume(value)
         this.music.volume(value)
         this.ambiant.volume(value)
         this.offlimit.volume(value)
+    }
+
+    isPaused() {
+        return this.state == 'pause'
     }
 
     isPlaying() {

@@ -295,6 +295,7 @@ class Spot extends EventEmitter
             this._wasInside = false
         }
 
+        return inside
         // to be implemented by children
 
     }
@@ -345,12 +346,11 @@ class Zone extends Spot
 
     updatePosition(position) 
     {
-        super.updatePosition(position)
-        if (!this.player.isLoaded()) return
+        let inside = super.updatePosition(position)
+        if (!this.player.isLoaded()) return inside
 
         // Inside
-        if (this.inside(position)) {
-
+        if (inside) {
             // Objet: play with volume crossfade
             if (this._spot.mode === 'Objet') 
             {
@@ -362,6 +362,8 @@ class Zone extends Spot
             else this.player.resume()
         }
         else this.player.pauseOut()
+
+        return inside
     }
 }
 
@@ -408,14 +410,15 @@ class Offlimit extends Spot
 
     updatePosition(position) 
     {
-        super.updatePosition(position)
-        if (!this.player.isLoaded()) return
-
-        // Inside
-        if (this.inside(position)) {
-            this.player.resume()
+        let inside = super.updatePosition(position)
+        
+        if (this.player.isLoaded()) {
+            
+            if (inside) this.player.resume()
+            else this.player.stop()
         }
-        else this.player.stop()
+
+        return inside
     }
 }
 
@@ -471,20 +474,20 @@ class Step extends Spot
 
     updatePosition(position) 
     {
-        super.updatePosition(position)
+        let inside = super.updatePosition(position)
 
         // Check if we are able to play (Sequential logic)
         //
 
         // Already played higher steps
-        if (this._index < stepIndex) return
+        if (this._index < stepIndex) return inside
 
         // If inside:
-        if (!this.player.isPlaying() && this.near(position) && this.inside(position)) 
+        if ( (!this.player.isPlaying() || this.player.isPaused()) && this.near(position) && inside) 
         {
             // Check if previous unrealised steps where optional
             if (this._index > stepIndex + 1 && stepIndex + 1 >= 0)
-                if (allSteps.filter(s => s._index > stepIndex && s._index < this._index && s._spot.optional !== true).length > 0) return
+                if (allSteps.filter(s => s._index > stepIndex && s._index < this._index && s._spot.optional !== true).length > 0) return inside
 
             // Stop all other steps
             allSteps.filter(s => s._index !== this._index).map( s => {
@@ -494,7 +497,8 @@ class Step extends Spot
             })
             
             // Play
-            this.player.play()
+            if (this.player.isPaused()) this.player.resume()
+            else this.player.play()
 
             // Update index
             stepIndex = this._index
@@ -521,6 +525,7 @@ class Step extends Spot
             }
         }
 
+        return inside
     }
 
     clear() {
