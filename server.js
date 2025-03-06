@@ -59,8 +59,8 @@ app.get('/list', (req, res) => {
   fs.readdirSync(parcoursFolder).forEach(file => {
     if (!file.endsWith('.json')) return;
     const parcoursFileName = file.split('.json')[0];
+    console.log('parcours', parcoursFileName);
     const parcoursContent = JSON.parse(fs.readFileSync(parcoursFolder + file, 'utf8'));
-    // console.log('parcours', parcoursFileName, parcoursContent);
     parcours.push({
       file: parcoursFileName, 
       name: parcoursContent.info.name, 

@@ -274,6 +274,7 @@ class PlayerStep extends EventEmitter
     }
 
     pause() {
+        if (!this.isPlaying()) return
         this.voice.pauseOut()
         this.music.pauseOut()
         this.ambiant.pauseOut()
@@ -305,7 +306,8 @@ class PlayerStep extends EventEmitter
     }
 
     isPlaying() {
-        return this.state !== 'stop' && this.state !== 'off'
+        // return this.state !== 'stop' && this.state !== 'off'
+        return this.state == 'play'
     }
 
     isLoaded() {

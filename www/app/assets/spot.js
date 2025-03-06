@@ -491,7 +491,7 @@ class Step extends Spot
 
             // Stop all other steps
             allSteps.filter(s => s._index !== this._index).map( s => {
-                let wasPlaying = s.player.isPlaying()
+                let wasPlaying = s.player.isPlaying() || s.player.isPaused()
                 s.player.stop() 
                 if (wasPlaying) s.emit('done', s)
             })

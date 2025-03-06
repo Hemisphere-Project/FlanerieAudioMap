@@ -161,7 +161,7 @@ PAGES['parcours'] = () => {
     if (GEO.mode() == 'simulate') {
         // set GEO position to 10m from parcours start
         var position = PARCOURS.find('steps', 0).getCenterPosition()
-        position[0] += 0.0005
+        position[0] += 0.0007
         console.log('SET POSITION', position)
         GEO.setPosition(position)
     }

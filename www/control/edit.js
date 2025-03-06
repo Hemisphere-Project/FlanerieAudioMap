@@ -329,7 +329,7 @@ function save(reload = true) {
 
             PARCOURS.save().then(() => {
                 toastSuccess('Sauvegardé')
-                if (reload) loadMediaList().then(load()).then(resolve)
+                if (reload) loadMediaList().then(load).then(resolve)
                 else resolve()
             })
             .catch(error => {
