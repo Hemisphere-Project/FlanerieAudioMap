@@ -156,6 +156,27 @@ await bundleAppData();
 // Build Media tree
 await buildMediaTree();
 
+// Watch APPDATA_DIR for changes
+var appdataWatcherDebounce = null;
+fs.watch(APPDATA_DIR, { recursive: true }, (eventType, filename) => {
+    clearTimeout(appdataWatcherDebounce);
+    appdataWatcherDebounce = setTimeout(() => {
+        log(`APPDATA_DIR changed, rebuilding APPDATA zip...`);
+        bundleAppData();
+    }, 1000);
+    // log(`APPDATA_DIR changed: ${eventType} ${filename}`);
+});
+
+// Watch MEDIA_DIR for changes
+var mediaWatcherDebounce = null;
+fs.watch(MEDIA_DIR, { recursive: true }, (eventType, filename) => {
+    clearTimeout(mediaWatcherDebounce);
+    mediaWatcherDebounce = setTimeout(() => {
+        log(`MEDIA_DIR changed, rebuilding media tree...`);
+        buildMediaTree();
+    }, 1000);
+    // console.log(`MEDIA_DIR changed: ${eventType} ${filename}`);
+});
 
 // Routes
 function initUpdater(app) 
@@ -177,13 +198,13 @@ function initUpdater(app)
     // Download appdata.zip
     APPINFO.appzip.url = '/update/appdata';
     app.get(APPINFO.appzip.url, (req, res) => {
-        console.log("Downloading APPDATA ZIP file...");
+        log("Someone is downloading APPDATA ZIP file...");
         res.download(__basepath + "/" + TEMP_DIR + "/" + ZIP_FILENAME);
     });
 
     // Display APPINFO
     log("APPINFO:\n"+JSON.stringify(APPINFO, null, 4));
-    log("APPMEDIA:\n"+JSON.stringify(APPMEDIA, null, 4));
+    // log("APPMEDIA:\n"+JSON.stringify(APPMEDIA, null, 4));
     log('ready.\n----------------------'); 
 }
 

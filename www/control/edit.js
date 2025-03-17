@@ -140,7 +140,8 @@ function fillZones(type, divID, mediaFolder) {
             }
 
             // on select
-            z.on('selected', () => li.addClass('active') && z.player ? z.player.resume() : null)
+            // z.on('selected', () => li.addClass('active') && z.player ? z.player.resume() : null)
+            z.on('selected', () => li.addClass('active'))
             z.on('unselected', () => li.removeClass('active') && z.player ? z.player.stop() : null)
         }
 } 
@@ -217,12 +218,12 @@ function load() {
 
                         // Optional toggle
                         const formCheck = $('<div class="form-check form-switch">').appendTo(body)
-                        const input = $('<input class="form-check-input" type="checkbox" role="switch">').attr('id', 'flexSwitchCheck' + i).prop('checked', step.optional).appendTo(formCheck)
+                        const input = $('<input class="form-check-input" type="checkbox" role="switch">').attr('id', 'flexSwitchCheck' + i).prop('checked', !step.optional).appendTo(formCheck)
                                         .change(() => {
-                                            step.optional = input.prop('checked')
+                                            step.optional = !input.prop('checked')
                                             save().then(() => PARCOURS.select('steps', i))
                                         })
-                        formCheck.append($('<label class="form-check-label" for="flexSwitchCheck' + i + '">').text('Facultative'))
+                        formCheck.append($('<label class="form-check-label" for="flexSwitchCheck' + i + '">').text('Obligatoire'))
 
                         // media list
                         mediaList.forEach(m => {
@@ -293,7 +294,7 @@ function load() {
 
                         // on select
                         s.on('selected', () => {
-                            if (!li.hasClass('active')) s.player.play()
+                            // if (!li.hasClass('active')) s.player.play()
                             li.addClass('active')
                         })
                         s.on('unselected', () => {
@@ -429,7 +430,9 @@ $('#setCoords').click(() => {
 
 // Add spot 
 function addSpot(lat, lon, type) {
-    PARCOURS.addSpot(type, { lat: lat, lon: lon, radius: 10 })
+    let basespot = { lat: lat, lon: lon, radius: 10}
+    if (type == 'steps') basespot.optional = true
+    PARCOURS.addSpot(type, basespot)
     save()
 }
 
@@ -440,7 +443,7 @@ function onMapDblClick(e) {
         .setLatLng(e.latlng)
         .setContent("\
             <button class='btn btn-sm btn-warning' onclick='addSpot(" + e.latlng.lat + "," + e.latlng.lng + ", \"steps\"); popupNewStep.remove();'>Etape</button> \
-            <button class='btn btn-sm btn-info' onclick='addSpot(" + e.latlng.lat + "," + e.latlng.lng + ", \"zones\", \"Objet\"); popupNewStep.remove();'>Objet</button> \
+            <button class='btn btn-sm btn-info' onclick='addSpot(" + e.latlng.lat + "," + e.latlng.lng + ", \"zones\"); popupNewStep.remove();'>Objet</button> \
             <button class='btn btn-sm btn-danger' onclick='addSpot(" + e.latlng.lat + "," + e.latlng.lng + ", \"offlimits\"); popupNewStep.remove();'>Offlimit</button> \
         ")
         .openOn(MAP);

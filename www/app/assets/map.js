@@ -10,7 +10,7 @@ function initMap(id, options = {}) {
         editable: true,
         center: [43, 1],
         zoom: 16, 
-        maxZoom: 18,
+        maxZoom: 19,
         minZoom: 5,
         ...options
     }
@@ -26,7 +26,7 @@ function initMap(id, options = {}) {
     }
     document.MAP = L.map(id, _options)
     document.MAP.doubleClickZoom.disable(); // disable double click zoom
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(document.MAP)
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 21}).addTo(document.MAP)
     
     document.MAP.setView(_options.center, _options.zoom)
 

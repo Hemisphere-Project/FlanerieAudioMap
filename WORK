@@ -40,10 +40,11 @@ X option "étape facultative"
 
 - simulation: brider le movement de carte
 - capture d'écran (capture de trajet)
-- Rename map -> fork (clone) & keep original
 
+==== BUGS
+- APP runs before APPUPDATE is done...
+- MEDIA are downloaded each time
+- Keep parcours list in memory
+- Keep parcours progress in memory
 
-====
-
-- 
 

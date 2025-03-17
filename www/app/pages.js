@@ -2,6 +2,8 @@ var DISTANCE_MATCH = 100000000000000;
 
 var DEVMODE = true;
 
+var noSleep = null;
+
 // GLOBALS
 //
 const PARCOURS = document.PARCOURS;
@@ -49,6 +51,15 @@ PAGES['title'] = () => {
 
 
 PAGES['intro'] = () => {
+    try {
+        noSleep = new NoSleep();
+        noSleep.enable();
+        console.log('NoSleep enabled');
+    }
+    catch(e) {
+        console.log('NoSleep not available');
+    }
+
     TYPEWRITE('intro')
         .pauseFor(2000)
         .callFunction(() => {if(currentPage=='intro') PAGE('checkgeo')} )
@@ -161,7 +172,7 @@ PAGES['parcours'] = () => {
     if (GEO.mode() == 'simulate') {
         // set GEO position to 10m from parcours start
         var position = PARCOURS.find('steps', 0).getCenterPosition()
-        position[0] += 0.0007
+        position[0] += 0.0005
         console.log('SET POSITION', position)
         GEO.setPosition(position)
     }
