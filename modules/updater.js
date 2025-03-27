@@ -109,6 +109,7 @@ function fileCrowler(path) {
         } 
         else if (!file.startsWith('.')) 
         {
+            result[file] = {}
             const data = fs.readFileSync(subpath);
             result[file].size = stats.size;
             if (SETMEDIAHASH) {
