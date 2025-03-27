@@ -11,6 +11,8 @@ class Parcours extends EventEmitter {
         this.map = null;
         this.pID = null;
         this.medialoaded = false;
+        this.mediaPackSize = 0;
+        this.mediaPackLoaded = 0;
     }
 
     add(spot) {
@@ -128,12 +130,18 @@ class Parcours extends EventEmitter {
                 console.log('MEDIA', data);
 
                 const mediaFiles = Object.keys(data);
+
+                // mediaPackSize sum of all media files size
+                this.mediaPackSize = mediaFiles.reduce((sum, file) => sum + data[file].size, 0);
+                this.mediaPackLoaded = 0;
+
                 const downloadSequence = mediaFiles.reduce((promiseChain, file) => {
                     let info = data[file];
                     let path = this.pID + '/' + file;
                     return promiseChain.then(() => media_download(path, info))
                         .then(() => {
                             console.log('Media loaded', path);
+                            this.mediaPackLoaded += info.size;
                         })
                         .catch(error => {
                             console.warn('Error loading media', error);
@@ -156,7 +164,8 @@ class Parcours extends EventEmitter {
     }
 
     loadprogress() {
-        return 0;
+        if (this.mediaPackSize === 0) return 0;
+        return Math.round(this.mediaPackLoaded / this.mediaPackSize * 100);
     }
 
     addSpot(type, spot) {

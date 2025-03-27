@@ -59,6 +59,7 @@ path.leaflet-interactive:focus {
 
 path.leaflet-interactive.selected {
     outline: rgb(0, 0, 0) dotted 1px;
+    fill-opacity: 0.7;
 }
 
 .edit-header {

@@ -2,6 +2,8 @@ var DISTANCE_MATCH = 100000000000000;
 
 var DEVMODE = true;
 
+var noSleep = null;
+
 // GLOBALS
 //
 const PARCOURS = document.PARCOURS;
@@ -49,6 +51,15 @@ PAGES['title'] = () => {
 
 
 PAGES['intro'] = () => {
+    try {
+        noSleep = new NoSleep();
+        noSleep.enable();
+        console.log('NoSleep enabled');
+    }
+    catch(e) {
+        console.log('NoSleep not available');
+    }
+
     TYPEWRITE('intro')
         .pauseFor(2000)
         .callFunction(() => {if(currentPage=='intro') PAGE('checkgeo')} )
