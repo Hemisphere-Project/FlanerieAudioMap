@@ -22,6 +22,8 @@ const MEDIA_DIR     = process.env.MEDIA_DIR     || "media";
 const TEMP_DIR      = process.env.TEMP_DIR      || "_tmp";
 const ZIP_FILENAME  = process.env.ZIP_FILENAME  || "app.zip";
 
+var SETMEDIAHASH = false
+
 var APPINFO = {
     'appzip': {
         'url': null,
@@ -108,12 +110,12 @@ function fileCrowler(path) {
         else if (!file.startsWith('.')) 
         {
             const data = fs.readFileSync(subpath);
-            const hash = crypto.createHash("sha256");
-            hash.update(data);
-            result[file] = {
-                hash: hash.digest("hex"),
-                size: stats.size
-            };
+            result[file].size = stats.size;
+            if (SETMEDIAHASH) {
+                const hash = crypto.createHash("sha256");
+                hash.update(data);
+                result[file].hash = hash.digest("hex")
+            }
         }
     });
     return result;
