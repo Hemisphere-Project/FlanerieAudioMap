@@ -125,8 +125,7 @@ function get(path, data) {
                 const contentType = response.headers.get('Content-Type')
                 let r = response.text()
                 // try json parse
-                try { r = JSON.parse(r); }
-                catch (e) {}
+                r = JSON.parse(r);
                 return r
                 // if (contentType && contentType.includes('application/json')) {
                 //     return response.json()
