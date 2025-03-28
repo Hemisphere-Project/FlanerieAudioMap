@@ -37,9 +37,14 @@ function prep(path) {
 // FETCH functions
 //
 
+// if not defined fetchRemote, use fetch
+if (typeof fetchRemote === 'undefined') {
+    fetchRemote = fetch
+}
+
 function post(path, data) {
     path = prep(path)
-    return fetch(path, {
+    return fetchRemote(path, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -72,7 +77,7 @@ function post(path, data) {
 
 function postFile(path, data) {
     path = prep(path)
-    return fetch(path, {
+    return fetchRemote(path, {
         method: 'POST',
         body: data
     })
@@ -104,7 +109,7 @@ function postFile(path, data) {
 function get(path, data) {
     path = prep(path)
     path = new URLSearchParams(data).toString() ? path + '?' + new URLSearchParams(data).toString() : path
-    return fetch(path)
+    return fetchRemote(path)
         .then(response => {
             if (response.status !== 200) {
                 // check if there was JSON
