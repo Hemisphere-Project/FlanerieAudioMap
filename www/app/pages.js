@@ -100,6 +100,12 @@ PAGES['checkdata'] = () =>
         .then(parcours => {
             console.log('PARCOURS', parcours);
             var availableParcours = parcours.filter(p => GEO.distance(p) < DISTANCE_MATCH);
+
+            console.log('AVAILABLE PARCOURS', availableParcours);
+            for (let k in parcours) {
+               console.log('PARCOURS', parcours[k], GEO.distance(parcours[k]));
+            }
+
             if (availableParcours.length > 0) PAGE('select', availableParcours);
             else PAGE('noparcours');
         })
