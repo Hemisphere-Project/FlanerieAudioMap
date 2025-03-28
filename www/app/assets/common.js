@@ -123,12 +123,17 @@ function get(path, data) {
             }
             else {
                 const contentType = response.headers.get('Content-Type')
-                if (contentType && contentType.includes('application/json')) {
-                    return response.json()
-                }
-                else {
-                    return response.text()
-                }
+                let r = response.text()
+                // try json parse
+                try { r = JSON.parse(r); }
+                catch (e) {}
+                return r
+                // if (contentType && contentType.includes('application/json')) {
+                //     return response.json()
+                // }
+                // else {
+                //     return response.text()
+                // }
             }
         })
 }

@@ -100,10 +100,6 @@ PAGES['checkdata'] = () =>
         .then(parcours => {
             console.log('PARCOURS', parcours);
 
-            // try json parse
-            try { parcours = JSON.parse(parcours); }
-            catch (e) {}
-
             var availableParcours = parcours.filter(p => GEO.distance(p) < DISTANCE_MATCH);
 
             console.log('AVAILABLE PARCOURS', availableParcours);
