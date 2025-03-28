@@ -122,13 +122,6 @@ function get(path, data) {
                 throw new Error('Something went wrong..')
             }
             else {
-                const contentType = response.headers.get('Content-Type')
-                // if (contentType && contentType.includes('application/json')) {
-                //     return response.json()
-                // }
-                // else {
-                //     return response.text()
-                // }
                 return response.text().then((text) => {
                     try {
                         return JSON.parse(text)
