@@ -1,6 +1,6 @@
 var DISTANCE_MATCH = 100000000000000;
 
-var DEVMODE = false;
+var DEVMODE = true;
 
 var noSleep = null;
 
