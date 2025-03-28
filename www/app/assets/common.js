@@ -39,7 +39,16 @@ function prep(path) {
 
 // if not defined fetchRemote, use fetch
 if (typeof fetchRemote === 'undefined') {
-    fetchRemote = fetch
+    fetchRemote = function(path, options) {
+        return fetch(prep(path), options)
+            .then(response => {
+                try {
+                    return response.json()
+                }
+                catch(e) {}
+                return response
+            })
+    }
 }
 
 function post(path, data) {
