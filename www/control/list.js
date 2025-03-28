@@ -9,7 +9,7 @@ function deleteParcours(file) {
 
 function refreshList() {
     // fetch parcours list
-    fetch('/list')
+    fetchRemote('/list')
     .then(response => response.json())
     .then(data => {
         const list = document.getElementById('parcours');
