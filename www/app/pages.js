@@ -1,6 +1,6 @@
 var DISTANCE_MATCH = 100000000000000;
 
-var DEVMODE = true;
+var DEVMODE = false;
 
 var noSleep = null;
 
@@ -265,5 +265,5 @@ PAGES['end'] = () => {
 
 
 // START
-PAGE('title');
-// PAGE('checkgeo');
+// PAGE('title');
+PAGE('checkgeo');
