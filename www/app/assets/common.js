@@ -110,7 +110,6 @@ function get(path, data) {
     path = prep(path)
     path = new URLSearchParams(data).toString() ? path + '?' + new URLSearchParams(data).toString() : path
     return fetchRemote(path)
-        .then(response => response.json())
         .then(response => {
             if (response.status !== 200) {
                 // check if there was JSON
