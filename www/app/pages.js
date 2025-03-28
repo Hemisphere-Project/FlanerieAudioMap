@@ -100,7 +100,12 @@ PAGES['checkdata'] = () =>
         .then(parcours => {
             console.log('PARCOURS', parcours);
 
-            var availableParcours = parcours.filter(p => GEO.distance(p) < DISTANCE_MATCH);
+            var availableParcours = parcours.filter(p => !p.name.startsWith('.'))
+
+            // GPS: check distance (< 10km)
+            if (!GEO.mode() == 'simulate') {
+                availableParcours = availableParcours.filter(p => GEO.distance(p) < DISTANCE_MATCH);
+            }
 
             console.log('AVAILABLE PARCOURS', availableParcours);
             for (let k in parcours) {
