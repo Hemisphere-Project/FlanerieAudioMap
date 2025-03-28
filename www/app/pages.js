@@ -109,7 +109,7 @@ PAGES['checkdata'] = () =>
             if (availableParcours.length > 0) PAGE('select', availableParcours);
             else PAGE('noparcours');
         })
-        .catch(error => PAGE('nodata'));
+        // .catch(error => PAGE('nodata'));
 }
 
 
