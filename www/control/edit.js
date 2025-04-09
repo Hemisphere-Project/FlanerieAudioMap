@@ -444,7 +444,7 @@ function onMapDblClick(e) {
         .setContent("\
             <button class='btn btn-sm btn-warning' onclick='addSpot(" + e.latlng.lat + "," + e.latlng.lng + ", \"steps\"); popupNewStep.remove();'>Etape</button> \
             <button class='btn btn-sm btn-info' onclick='addSpot(" + e.latlng.lat + "," + e.latlng.lng + ", \"zones\"); popupNewStep.remove();'>Objet</button> \
-            <button class='btn btn-sm btn-danger' onclick='addSpot(" + e.latlng.lat + "," + e.latlng.lng + ", \"offlimits\"); popupNewStep.remove();'>Offlimit</button> \
+            <button class='btn btn-sm btn-danger' onclick='addSpot(" + e.latlng.lat + "," + e.latlng.lng + ", \"offlimits\"); popupNewStep.remove();'>Interruptions</button> \
         ")
         .openOn(MAP);
 }
