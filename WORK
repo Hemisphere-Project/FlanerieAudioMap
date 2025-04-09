@@ -22,11 +22,9 @@
 
 ========= Post Guillotière Décembre 2024
 
--- étape: voix principale puis loop aftervoice
 -- facultatif broken
 - objet "ambiance": corssfade in/out (avec réglage éventuel)
 
-- option "étape complète" (attendre afterparty pour déverrouiller)
 - objet lié à étape
 - show // edit :: sequence n+1 : bordure dashed / sequence < n greyed out
 
@@ -34,6 +32,8 @@ X interruptions/offlimit globaux
 X objet toggle: localised / ambiance
 X sequence ordre imposé n+1 après n
 X option "étape facultative"
+X étape: voix principale puis loop aftervoice
+X option "étape complète" (attendre afterparty pour déverrouiller)
 
 ====
 
@@ -41,10 +41,68 @@ X option "étape facultative"
 - capture d'écran (capture de trajet)
 
 ==== BUGS
-- APP runs before APPUPDATE is done...
+X APP runs before APPUPDATE is done...
 - MEDIA are downloaded each time
 - Keep parcours list in memory
 - Keep map in memory !
 - Keep parcours progress in memory
 
+
+
+======= POST BOULON
+
+X Désactiver la lecture en boucle des étapes
+X Désactiver lecture automatique des médias pendant l'édition du parcours
+
+Contraste des couleurs en édition / pas top la couleur jaune, notamment pour les étapes (contraste des superpositions un peu faible, proches des couleurs de fond de carte etc. ). Mettre des couleurs plus contrastées ou légèrement plus foncées.
+- ok je vais trouver un meilleur code couleur ;)
+
+Carte : possibilité supplémentaire de zoomer ?pas sûr que ce soit possible mais je demande quand même :)
+- pas certain que ce soit possible avec le fond de carte Openstreetmap, je vais regarder.
+il y a cependant une question plus large sur cette histoire de fond de carte, notamment dans la partie visible spectateur à envisager...
+
+Possibilité de Undo ? Ne serait-ce qu'un seul niveau pour remettre un coin d'une forme effacé par excès de clics sur les points
+- oui c'est faisable, il faut que je pense un peu le truc pour que ça ne fasse pas de bugs mais c'est tout à fait faisable.
+
+Option étape obligatoire (par défaut facultative. A mon avis, mieux que l'inverse : il vaudra toujours mieux que des spectateurs manquent la fin d'un texte plutôt que de poursuivre trop longtemps avec le même texte)
+- ok
+
+Off-limit des étapes pour prolonger une séquence (voix uniquement) par un autre média non-obligatoire (ie « meubler entre deux déclenchements » avec son, respiration, son de la marche etc.))
+- tu veux dire "after party" comme on l'avait évoqué ? une bande non obligatoire en boucle après la bande principale ?
+- est-ce que je supprime les "offlimit" actuelles des Etapes, pour privilégier plutôt les interruptions pour les sorties de zone ?
+- on garde quoi pour les étapes ? VOICE (sans loop) -> AFTERVOICE (avec loop) + MUSIC (loop)   ? et j'enlève abiance et offlimit ?
+
+Rebaptiser les off-limits sur la carte (catégorie) en interruptions
+- ok
+
+Note mémo : sur le terrain, possibilité de repartir depuis n'importe quelle étape en activant le reset du mode SHOW
+- ok, ce que je risque de faire c'est de supprimer le mode SHOW et de n'avoir que le mode APP (en appli mobile ou en webapp navigateur) 
+mais avec un mode DEVELOPER qui permet d'avoir la simulation, de partir de n'importe quelle étape, etc.. 
+ça permet de ne garder qu'une seule interface de jeux, mais avec des options spéciales pour les testeurs. 
+Ca m'évite d'avoir une divergence de fonctionnalité et des bugs qui apparaissent dans l'une ou l'autre.
+
+en mode site / édition  : ranger les parcours par ordre alphabétique ?
+- ok 
+
+Possibilité optionnelle de lier une interruptions particulière à une étape pour qu'elle ne soit active que lorsque celle-ci est jouée (exemple : bloquer temporairement la poursuite du parcours pendant une étape avant reprise de la marche / « L'interruption 8 n'est active que lorsque l'étape 7 est jouée. Ni avant ni après »)
+- ok je vais voir comment je m'y prends. Je te demanderai surement des précisions là dessus.
+
+Appli : bug de suivi GPS quand téléphone verrouillé ??? A VERIFIER. C'est la partie qu'on a le moins explorée alors je mets beaucoup de précautions ici.
+- à tester plus finement oui. Idem pour le son.
+
+Appli : prévoir un test son (gauche, droite, et surtout volume) avant le lancement de la déambulation
+- ok, si tu peux me fournir un fichier son de test c'est top, je rajouterais ça dans les étapes préliminaires, 
+avec un bouton pour valider lorsque c'est bon.
+
+Je rajoute également, pour le mode appli mobile spécifiquement:
+
+- Publier App sur Apple store
+- Enregistrer la liste des parcours offline (pour un redémarrage de l'app sans connectivité)
+- Enregistrer la progression du parcours (si besoin de relancer l'appli en cours de route)
+- Vérifier le cache de média (j'ai l'impression qu'ils se re-téléchargent à chaque fois pour le moment)
+
+Et bien sur:
+
+- (re)-voir le graphisme global
+- parcours utilisateur (textes, différentes pages, mode de jeux, affichage de la carte, ...)
 

@@ -486,7 +486,10 @@ class Step extends Spot
         {
             // Check if previous unrealised steps where optional
             if (this._index > stepIndex + 1 && stepIndex + 1 >= 0)
-                if (allSteps.filter(s => s._index > stepIndex && s._index < this._index && s._spot.optional !== true).length > 0) return inside
+                if (allSteps.filter(s => s._index > stepIndex && s._index < this._index && !(s._spot.optional === false)).length > 0) {
+                    console.warn('Etape précédente obligatoire:', stepIndex, 'cette étape:', this._index)
+                    return inside
+                }
 
             // Stop all other steps
             allSteps.filter(s => s._index !== this._index).map( s => {
