@@ -10,7 +10,7 @@ function initMap(id, options = {}) {
         editable: true,
         center: [43, 1],
         zoom: 16, 
-        maxZoom: 19,
+        maxZoom: 21,
         minZoom: 5,
         ...options
     }

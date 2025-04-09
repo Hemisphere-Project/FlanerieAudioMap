@@ -53,22 +53,20 @@ X APP runs before APPUPDATE is done...
 
 X Désactiver la lecture en boucle des étapes
 X Désactiver lecture automatique des médias pendant l'édition du parcours
+X Carte : possibilité supplémentaire de zoomer ?pas sûr que ce soit possible mais je demande quand même :)
+- Forcer zoom à 19 si supérieur au Set Map
 
 Contraste des couleurs en édition / pas top la couleur jaune, notamment pour les étapes (contraste des superpositions un peu faible, proches des couleurs de fond de carte etc. ). Mettre des couleurs plus contrastées ou légèrement plus foncées.
 - ok je vais trouver un meilleur code couleur ;)
-
-Carte : possibilité supplémentaire de zoomer ?pas sûr que ce soit possible mais je demande quand même :)
-- pas certain que ce soit possible avec le fond de carte Openstreetmap, je vais regarder.
-il y a cependant une question plus large sur cette histoire de fond de carte, notamment dans la partie visible spectateur à envisager...
 
 Possibilité de Undo ? Ne serait-ce qu'un seul niveau pour remettre un coin d'une forme effacé par excès de clics sur les points
 - oui c'est faisable, il faut que je pense un peu le truc pour que ça ne fasse pas de bugs mais c'est tout à fait faisable.
 
 Option étape obligatoire (par défaut facultative. A mon avis, mieux que l'inverse : il vaudra toujours mieux que des spectateurs manquent la fin d'un texte plutôt que de poursuivre trop longtemps avec le même texte)
-- ok
+- à confirmer 
 
 Off-limit des étapes pour prolonger une séquence (voix uniquement) par un autre média non-obligatoire (ie « meubler entre deux déclenchements » avec son, respiration, son de la marche etc.))
-- tu veux dire "after party" comme on l'avait évoqué ? une bande non obligatoire en boucle après la bande principale ?
+X tu veux dire "after party" comme on l'avait évoqué ? une bande non obligatoire en boucle après la bande principale ?
 - est-ce que je supprime les "offlimit" actuelles des Etapes, pour privilégier plutôt les interruptions pour les sorties de zone ?
 - on garde quoi pour les étapes ? VOICE (sans loop) -> AFTERVOICE (avec loop) + MUSIC (loop)   ? et j'enlève abiance et offlimit ?
 
