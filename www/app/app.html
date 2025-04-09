@@ -47,6 +47,18 @@
             Note: Si vous choisissez "Position Réelle", vous devez vous trouver à moins de 10km de la position de départ d'un parcours.
         </div>
 
+        <div id="confirmgeo" class="page">
+            <div class="content">
+                L'application a besoin de connaitre votre position pour fonctionner.
+                Elle devra notamment accéder à votre position GPS en arrière plan, ce qui vous permettra de profiter 
+                de l'expérience en verrouillant votre appareil dans votre poche.<br /><br />
+                Vous devrez donc activer la géolocalisation de votre appareil, et autoriser l'application à y accéder.<br /><br />
+                Aucune informations personnelle n'est collectée, et votre position ne sera pas partagée en dehors de votre appareil. 
+                Elle sert uniquement à déclencher les audio du parcours.<br /><br />
+            </div>
+            <button id="confirmgeo-accept" class="btn btn-primary">J'accepte</button> 
+        </div>
+
         <div id="nodata" class="page">
             <div class="content">
                 <p>Aucun parcours proche n'a été trouvé sur votre appareil.</p>
@@ -87,10 +99,28 @@
             </div>
         </div>
 
+        <div id="preload" class="page">
+            <div class="content">
+                <p id="preload-desc">Vérification des médias</p>
+            </div>
+        </div>
+
+        <div id="confirmload" class="page">
+            <div class="content">
+                <h3 id="confirmload-title"></h3>
+                <p id="confirmload-desc">L'application doit télécharger les médias associés, afin que vous puissiez effectuer le parcours hors ligne.</p>
+                <br />
+                <p id="confirmload-size-desc">
+                    Taille totale : <span id="confirmload-size"></span><br /><br />
+                    Confirmez vous le téléchargement des données de parcours?<br /><br />
+                    <button id="confirmload-accept" class="btn btn-primary">J'accepte</button> 
+                </p>
+            </div>
+        </div>
+
         <div id="load" class="page">
             <div class="content">
-                <p>Téléchargement du parcours: </p>
-                <p id="load-progress">0%</p>
+                <p id="load-desc">Vérification des médias</p>
             </div>
         </div>
 

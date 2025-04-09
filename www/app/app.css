@@ -65,7 +65,9 @@ body {
     margin-top: 60px;
     opacity: 0.5;
 }
-
+#confirmgeo button,
+#preload button,
+#confirmload button,
 #checkgeo-select button {
     width: 100%;
     padding: 10px;

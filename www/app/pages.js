@@ -70,22 +70,26 @@ PAGES['intro'] = () => {
 PAGES['checkgeo'] = () => {
 
     if (!DEVMODE) {
-        GEO.startGeoloc()
-            .then(()=>PAGE('checkdata'))
-            .catch(()=>PAGE('nogeo'))
+        PAGE('confirmgeo')
     }
     else {
         $('#checkgeo-select').show();
         $('#checkgeo-select-gps').off('click').on('click', () => {
-            GEO.startGeoloc()
-                .then(()=>PAGE('checkdata'))
-                .catch(()=>PAGE('nogeo'))
+            PAGE('confirmgeo')
         })
         $('#checkgeo-select-simul').off('click').on('click', () => {
             GEO.simulateGeoloc()
             PAGE('checkdata')
         });
     }
+}
+
+PAGES['confirmgeo'] = () => {
+    $('#confirmgeo-accept').off().on('click', () => {
+        GEO.startGeoloc()
+                .then(()=>PAGE('checkdata'))
+                .catch(()=>PAGE('nogeo'))
+    })
 }
 
 PAGES['checkdata'] = () => 
@@ -128,7 +132,7 @@ PAGES['nodata'] = () => {
 PAGES['nogeo'] = () => {
     TYPEWRITE('nogeo-retry')
         .pauseFor(2000)
-        .callFunction(() => PAGE('checkgeo') )
+        .callFunction(() => PAGE('confirmgeo') )
 }
 
 PAGES['noparcours'] = () => {
@@ -143,7 +147,7 @@ PAGES['select'] = (list) => {
     list.forEach(p => {
         var li = document.createElement('li');
         li.innerHTML = p.name;
-        li.addEventListener('click', () => PAGE('load', p));
+        li.addEventListener('click', () => PAGE('preload', p));
         select.appendChild(li);
     });
 
@@ -151,13 +155,37 @@ PAGES['select'] = (list) => {
     if (list.length == 1) select.querySelector('li').click();
 }
 
-PAGES['load'] = (p) => {
+PAGES['preload'] = (p) => {
+    // Check loaded media
+    PARCOURS.load(p.file).then(() => 
+    {
+        let dlNeeded = PARCOURS.mediaPackSize - PARCOURS.mediaPackLoaded
+        if (dlNeeded == 0) PAGE('load');
+        else PAGE('confirmload', dlNeeded);
+    })
+    TYPEWRITE('preload-desc')
+}
+
+PAGES['confirmload'] = (dlNeeded) => {
+    $('#confirmload-title').text(PARCOURS.info.name);
+    
+    dlNeeded = Math.round(dlNeeded / 1024.0 / 1024.0, 2);
+    $('#confirmload-size').text(dlNeeded + ' Mo');
+
+    // Confirm download
+    $('#confirmload-accept').off().on('click', () => {
+        PAGE('load');
+    })
+}
+
+PAGES['load'] = () => {
     var progress = setInterval(() => {
         var p = PARCOURS.loadprogress();
-        $('#load-progress').text(p + '%');
+        if (p > 0)
+            $('#load-desc').text("Téléchargement en cours: " + p + "%");
     }, 1000);
 
-    PARCOURS.load(p.file).then(() => {
+    PARCOURS.loadmedia().then(() => {
         clearInterval(progress);
         PAGE('parcours')
     })

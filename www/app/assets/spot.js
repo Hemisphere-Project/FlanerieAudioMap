@@ -438,13 +438,12 @@ class Step extends Spot
         if (!this._spot.name) 
             this._spot.name = 'Etape '+index
 
-        if (!this._spot.media) 
-            this._spot.media = {
-                voice: {src: '-', master: 1},
-                music: {src: '-', master: 1},
-                ambiant: {src: '-', master: 1},
-                offlimit: {src: '-', master: 1},
-            }
+        if (!this._spot.media) this._spot.media = {}
+        if (!('voice' in this._spot.media)) this._spot.media.voice = {src: '-', master: 1}
+        if (!('music' in this._spot.media)) this._spot.media.music = {src: '-', master: 1}
+        if (!('ambiant' in this._spot.media)) this._spot.media.ambiant = {src: '-', master: 1}
+        if (!('offlimit' in this._spot.media)) this._spot.media.offlimit = {src: '-', master: 1}
+        if (!('afterplay' in this._spot.media)) this._spot.media.afterplay = {src: '-', master: 1}
 
         // player
         this.player = new PlayerStep()

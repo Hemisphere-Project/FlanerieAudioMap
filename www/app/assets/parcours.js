@@ -91,17 +91,20 @@ class Parcours extends EventEmitter {
                     this.info = data.info;
                     for (let type in data.spots)
                         data.spots[type].forEach((spot, i) => this.addSpot(type, spot));
+                    
+                    // Estimate total size of media pack, and already loaded size
+                    this.mediaPackSize = 0;
+                    this.mediaPackLoaded = 0;
+                    this.medialoaded = false;
 
                     // DOWNLOAD MEDIA
-                    this.loadmedia()
+                    this.loadmedia( true ) // dryrun ! must call loadmedia() to actually load media
                         .then(() => {
                             console.log('Parcours loaded', data);
-                            this.medialoaded = true;
                             resolve();
                         })
                         .catch(error => {
-                            console.warn('Error loading media', error);
-                            this.medialoaded = false;
+                            console.warn('Error preloading media', error);
                             reject(error);
                         });
                 })
@@ -112,15 +115,11 @@ class Parcours extends EventEmitter {
         });
     }
     
-    loadmedia() {
+    loadmedia(dryrun = false) 
+    {
         return new Promise((resolve, reject) => {
             if (!this.pID) {
                 reject('No parcours ID');
-                return;
-            }
-            if (!document.WEBAPP_URL) {
-                console.log('WEB MODE: Media loading skipped');
-                resolve();
                 return;
             }
             
@@ -135,15 +134,29 @@ class Parcours extends EventEmitter {
                 this.mediaPackSize = mediaFiles.reduce((sum, file) => sum + data[file].size, 0);
                 this.mediaPackLoaded = 0;
 
+                // WEB MODE: skip media loading
+                if (!document.WEBAPP_URL) {
+                    console.log('WEB MODE: Media loading skipped');
+                    this.medialoaded = true;
+                    this.mediaPackLoaded = this.mediaPackSize;
+                    resolve();
+                    return;
+                }
+
+                // DOWNLOAD MEDIA
                 const downloadSequence = mediaFiles.reduce((promiseChain, file) => {
                     let info = data[file];
                     let path = this.pID + '/' + file;
-                    return promiseChain.then(() => media_download(path, info))
+                    return promiseChain.then(() => media_download(path, info, dryrun))
                         .then(() => {
                             console.log('Media loaded', path);
                             this.mediaPackLoaded += info.size;
                         })
                         .catch(error => {
+                            if (error === 'DRYRUN') {
+                                console.log('Media dryrun', path);
+                                return;
+                            }
                             console.warn('Error loading media', error);
                             throw error;
                         });
@@ -151,6 +164,7 @@ class Parcours extends EventEmitter {
 
                 downloadSequence
                     .then(() => {
+                        if (!dryrun) this.medialoaded = true;
                         resolve();
                     })
                     .catch(error => {

@@ -6,16 +6,16 @@
 const FRONT_LOGS = true
 
 // copy console.log and console.error to $('#logs')
-console._log = console.log
-if ($('#logs').length && FRONT_LOGS) 
-console.log = function(...message) {
-    console._log(message)
-    if (typeof message === 'object') {
-        message = JSON.stringify(message)
-    }
-    $('#logs').append(message + '<br/>')
-   $('#logs').scrollTop($('#logs')[0].scrollHeight)
-}
+// console._log = console.log
+// if ($('#logs').length && FRONT_LOGS) 
+// console.log = function(...message) {
+//     console._log(message)
+//     if (typeof message === 'object') {
+//         message = JSON.stringify(message)
+//     }
+//     $('#logs').append(message + '<br/>')
+//    $('#logs').scrollTop($('#logs')[0].scrollHeight)
+// }
 console._error = console.error
 if ($('#logs').length && FRONT_LOGS) 
 console.error = function(...message) {
