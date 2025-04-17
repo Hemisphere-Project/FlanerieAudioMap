@@ -1,5 +1,5 @@
 const LOAD_EXTRARADIUS = 10
-var stepIndex = -1
+var stepIndex = -2
 
 
 // Generic class Spot, implementing Events
@@ -241,12 +241,12 @@ class Spot extends EventEmitter
 
     center(quick = true) {
         if (this._map) 
-            if (quick) this._map.setView([this._spot.lat, this._spot.lon], this._map.maxZoom())
-            else this._map.flyTo([this._spot.lat, this._spot.lon], this._map.maxZoom())
+            if (quick) this._map.setView([this._spot.lat, this._spot.lon], 18)
+            else this._map.flyTo([this._spot.lat, this._spot.lon], 18)
         return this
     }
 
-    clear() {
+    clear() { 
         if (this._map) this._map.removeLayer(this._marker)
         if (this.player) this.player.clear()
         this.player = null
@@ -485,11 +485,14 @@ class Step extends Spot
         if ( (!this.player.isPlaying() || this.player.isPaused()) && this.near(position) && inside) 
         {
             // Check if previous unrealised steps where optional
-            if (this._index > stepIndex + 1 && stepIndex + 1 >= 0)
-                if (allSteps.filter(s => s._index > stepIndex && s._index < this._index && !(s._spot.optional === false)).length > 0) {
-                    console.warn('Etape précédente obligatoire:', stepIndex, 'cette étape:', this._index)
+            if (this._index > stepIndex + 1 && stepIndex + 1 >= 0) {
+                let mandatory = allSteps.filter(s => s._index > stepIndex && s._index < this._index && !(s._spot.optional === false)).map(s => s._index)
+                if (mandatory.length > 0) {
+                    console.warn('Etape précédente obligatoire:', stepIndex, '->' ,JSON.stringify(mandatory) , 'cette étape:', this._index)
                     return inside
                 }
+            }
+                
 
             // Stop all other steps
             allSteps.filter(s => s._index !== this._index).map( s => {

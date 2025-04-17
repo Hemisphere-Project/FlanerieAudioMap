@@ -6,23 +6,27 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0">
     
     <link rel="stylesheet" href="$BASEPATH$/app.css">
-    <link rel="stylesheet" href="$BASEPATH$/libs/leaflet-1.9.4/leaflet.css">
+    <link rel="stylesheet" href="$BASEPATH$/libs/leaflet-1.9.4.css">
 
     <script src="$BASEPATH$/libs/jquery-3.7.1.min.js"></script>
     <script src="$BASEPATH$/libs/typewriter.min.js"></script>
-    <script src="$BASEPATH$/libs/leaflet-1.9.4/leaflet.js"></script>
+    <script src="$BASEPATH$/libs/leaflet-1.9.4.js"></script>
     <script src="$BASEPATH$/libs/leaflet.editable.js"></script>
-    <script src="$BASEPATH$/libs/howler-2.2.4/howler.min.js"></script>
+    <script src="$BASEPATH$/libs/howler-2.2.4.min.js"></script>
     <script src="$BASEPATH$/libs/nosleep.min.js"></script>
 
     <!-- favicon -->
-    <link rel="icon" type="image/png" href="$BASEPATH$/images/flanerie-192.png" sizes="192x192">
+    <link rel="icon" type="image/png" href="$BASEPATH$/images/flanerie-96.png" sizes="96x96">
 
     <style>
         #select-parcours-start {
             background-image: url('$BASEPATH$/images/arrow-right.png?1');
         }
     </style>
+
+    <script>
+        var BASEURL = "$BASEPATH$";
+    </script>
 
 </head>
 <body>
@@ -34,29 +38,26 @@
         </div>
 
         <div id="intro" class="page">
-            Bienvenue, je vais vous guider. Mais avant je dois vérifier que vous êtes prêt.
+            Bienvenue, je vais vous guider. Mais avant je dois vérifier que tout fonctionne bien.
         </div>
 
         <div id="checkgeo" class="page">
             Mode de géolocalisation: 
             <div id="checkgeo-select">
-                <button id="checkgeo-select-gps" class="btn btn-primary">Position réelle (GPS)</button>
-                <button id="checkgeo-select-simul" class="btn btn-primary">Simulation</button>
+                <button id="checkgeo-select-gps" class="btn btn-primary btn-page">Position réelle (GPS)</button>
+                <button id="checkgeo-select-simul" class="btn btn-primary btn-page">Simulation</button>
             </div>
-            <br /><br />
-            Note: Si vous choisissez "Position Réelle", vous devez vous trouver à moins de 10km de la position de départ d'un parcours.
         </div>
 
         <div id="confirmgeo" class="page">
+            <h3 id="confirmgeo-title">Géolocalisation</h3>
             <div class="content">
-                L'application a besoin de connaitre votre position pour fonctionner.
-                Elle devra notamment accéder à votre position GPS en arrière plan, ce qui vous permettra de profiter 
-                de l'expérience en verrouillant votre appareil dans votre poche.<br /><br />
-                Vous devrez donc activer la géolocalisation de votre appareil, et autoriser l'application à y accéder.<br /><br />
-                Aucune informations personnelle n'est collectée, et votre position ne sera pas partagée en dehors de votre appareil. 
-                Elle sert uniquement à déclencher les audio du parcours.<br /><br />
+                L'application a besoin d'accéder à votre position précise afin de vous guider.<br /><br />
+                Vous devez donc <u>activer le GPS</u> de votre appareil et en autoriser l'accès.<br /><br />
+                Les <u>notifications</u> peuvent être nécessaires pour garder le GPS lorsque le téléphone est en veille.<br /><br />
+                Aucune informations n'est collectée ou transmise: la localisation sert uniquement à déclencher les audios du parcours.<br /><br />
             </div>
-            <button id="confirmgeo-accept" class="btn btn-primary">J'accepte</button> 
+            <button id="confirmgeo-accept" class="btn btn-primary btn-page">J'accepte</button> 
         </div>
 
         <div id="nodata" class="page">
@@ -100,8 +101,9 @@
         </div>
 
         <div id="preload" class="page">
+            <h3 id="load-title">Chargement des médias</h3>
             <div class="content">
-                <p id="preload-desc">Vérification des médias</p>
+                <p id="preload-desc">Vérification ...</p>
             </div>
         </div>
 
@@ -113,19 +115,53 @@
                 <p id="confirmload-size-desc">
                     Taille totale : <span id="confirmload-size"></span><br /><br />
                     Confirmez vous le téléchargement des données de parcours?<br /><br />
-                    <button id="confirmload-accept" class="btn btn-primary">J'accepte</button> 
+                    <button id="confirmload-accept" class="btn btn-primary btn-page">J'accepte</button> 
                 </p>
             </div>
         </div>
 
         <div id="load" class="page">
+            <h3 id="load-title">Chargement des médias</h3>
             <div class="content">
-                <p id="load-desc">Vérification des médias</p>
+                <p id="load-desc">Vérification ...</p>
             </div>
         </div>
 
+        <div id="rdv" class="page">
+            <div class="content">
+                <p>Le parcours est maintenant chargé dans votre téléphone.</p>
+                <p id="rdv-desc">
+                    Rendez-vous le jour J à l'endroit qui vous aura été communiqué.
+                </p>
+                <br />
+                <p id="rdvdistance"></p>
+            </div>
+            <button id="rdv-accept" class="btn btn-primary btn-page">J'y suis</button>
+        </div>
+
+        <div id="checkaudio" class="page">
+            <h3 id="checkaudio-title">Vérification audio</h3>
+            <div class="content">
+                <p id="checkaudio-desc">Mettez vos écouteurs et réglez le volume ...</p>
+            </div>
+            <button id="checkaudio-accept" class="btn btn-primary btn-page">J'entends bien</button>
+            <button id="checkaudio-help" class="btn btn-primary btn-page">Je n'entends pas</button>
+        </div>
+
+        <div id="sas" class="page">
+            <div class="content">
+                <p id="sas-desc">Entrez dans le sas ...</p>
+            </div>
+            <input type="number" id="sas-code" class="form-control input-page " placeholder="Code d'accès" />
+            <button id="sas-help" class="btn btn-primary">?</button>
+            <button id="sas-accept" class="btn btn-primary btn-page">En route !</button>
+        </div>
+
         <div id="parcours" class="page">
-            <h3 id="parcours-title"></h3>
+            <h3 id="parcours-title dev"></h3>
+            <button id="parcours-rearm" class="dev btn btn-dev-parcours">Reset</button>
+            <p id="parcours-run">Suivez la guide...</p>
+            <button id="parcours-lost" class="btn btn-primary btn-page">Je suis perdu.e !</button>
             <div id="parcours-map"></div>
             <p id="parcours-init">Rendez vous au point de départ pour commencer le parcours.</p>
         </div>
@@ -145,6 +181,5 @@
     <script src="$BASEPATH$/assets/player.js"></script>
     <script src="$BASEPATH$/assets/spot.js"></script>
     <script src="$BASEPATH$/pages.js"></script>
-    <script src="$BASEPATH$/app.js"></script>
 </body>
 </html>

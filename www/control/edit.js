@@ -378,6 +378,14 @@ document.getElementById('pCoords').addEventListener('change', () => {
     save().then(loadMap)
 })
 
+// Status on change => save
+document.getElementById('pStatus').addEventListener('change', () => {
+    // check if status is valid
+    const status = document.getElementById('pStatus').value
+    PARCOURS.info.status = status
+    save()
+})
+
 // Load Map 
 var MAP = initMap('map')
 
@@ -431,7 +439,7 @@ $('#setCoords').click(() => {
 // Add spot 
 function addSpot(lat, lon, type) {
     let basespot = { lat: lat, lon: lon, radius: 10}
-    if (type == 'steps') basespot.optional = true
+    if (type == 'steps') basespot.optional = false
     PARCOURS.addSpot(type, basespot)
     save()
 }

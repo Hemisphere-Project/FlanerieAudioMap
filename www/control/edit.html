@@ -5,16 +5,16 @@
     <meta charset="utf-8">
     <link rel="stylesheet" href="/control/bootstrap-5.3.3/css/bootstrap.min.css">
     <link rel="stylesheet" href="/control/bootstrap-icons-1.11.3/font/bootstrap-icons.css">
-    <link rel="stylesheet" href="/app/libs/leaflet-1.9.4/leaflet.css">
+    <link rel="stylesheet" href="/app/libs/leaflet-1.9.4.css">
     <link rel="stylesheet" href="/control/client.css">
 
     <script src="/app/libs/jquery-3.7.1.min.js"></script>
     <script src="/control/bootstrap-5.3.3/js/bootstrap.bundle.min.js"></script>
-    <script src="/app/libs/leaflet-1.9.4/leaflet.js"></script>
+    <script src="/app/libs/leaflet-1.9.4.js"></script>
     <script src="/app/libs/leaflet.editable.js"></script>
-    <script src="/app/libs/howler-2.2.4/howler.min.js"></script>
+    <script src="/app/libs/howler-2.2.4.min.js"></script>
 
-    <link rel="icon" type="image/png" href="/app/images/flanerie-192.png" sizes="192x192">
+    <link rel="icon" type="image/png" href="/app/images/flanerie-96.png" sizes="96x96">
 
 </head>
 <body class="base-layer">
@@ -37,7 +37,7 @@
     
 
     <div class="row">
-        <div class="col-4 text-center p-3"><h1 id="title" class="p-1">Flanerie Parcours</h1></div>
+        <div class="col-8 text-center p-3"><h1 id="title" class="p-1">Flanerie Parcours</h1></div>
     </div>
 
 
@@ -53,7 +53,13 @@
             <div class="form-group row">
                 <label for="pStatus" class="col-sm-3 col-form-label">Status</label>
                 <div class="col-sm-9">
-                    <input type="text" readonly class="form-control-plaintext" id="pStatus" value="">
+                    <!-- <input type="text" readonly class="form-control-plaintext" id="pStatus" value=""> -->
+                    <select class="form-select" id="pStatus">
+                        <option value="draft">Brouillon</option>
+                        <option value="test">Test</option>
+                        <option value="public">Publique</option>
+                        <option value="old">Archive</option>
+                    </select>
                 </div>
             </div>
             <div class="form-group row">
@@ -87,7 +93,7 @@
 
         </div>
 
-        <div class="col-xl-7 col-lg-6 base-layer">
+        <div class="col-xl-7 col-lg-6 base-layer" style="height: 84vh; position:fixed; right:0; top: 10vh;">
             <div id="map"></div>
         </div>
         

@@ -46,7 +46,13 @@ function refreshList() {
 
             // Status
             const tdStatus = document.createElement('td');
-            tdStatus.innerHTML = parcours.status;
+            let status = parcours.status;
+            if (status == 'draft') status = '<i>Brouillon</i'
+            else if (status == 'test') status = 'Test'
+            else if (status == 'public') status = '<strong>Publiée</strong>'
+            else if (status == 'old') status = 'Archive'
+
+            tdStatus.innerHTML = status;
             tr.appendChild(tdStatus);
             const tdLink = document.createElement('td');
             
