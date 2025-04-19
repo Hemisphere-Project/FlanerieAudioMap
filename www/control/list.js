@@ -14,6 +14,21 @@ function refreshList() {
     .then(data => {
         const list = document.getElementById('parcours');
         list.innerHTML = '';
+
+        // reorder data by .name
+        data.sort((a, b) => {
+            if (a.name < b.name) return -1;
+            if (a.name > b.name) return 1;
+            return 0;
+        });
+
+        // put all .name starting with a dot at the end
+        data.sort((a, b) => {
+            if (a.name.startsWith('.') && !b.name.startsWith('.')) return 1;
+            if (!a.name.startsWith('.') && b.name.startsWith('.')) return -1;
+            return 0;
+        });
+
         console.log(data)
         data.forEach(parcours => {
         const tr = document.createElement('tr');
@@ -31,7 +46,13 @@ function refreshList() {
 
             // Status
             const tdStatus = document.createElement('td');
-            tdStatus.innerHTML = parcours.status;
+            let status = parcours.status;
+            if (status == 'draft') status = '<i>Brouillon</i'
+            else if (status == 'test') status = 'Test'
+            else if (status == 'public') status = '<strong>Publiée</strong>'
+            else if (status == 'old') status = 'Archive'
+
+            tdStatus.innerHTML = status;
             tr.appendChild(tdStatus);
             const tdLink = document.createElement('td');
             

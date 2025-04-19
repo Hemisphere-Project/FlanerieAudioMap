@@ -26,7 +26,6 @@ X étape: voix principale puis loop aftervoice
 X facultatif broken
 - objet "ambiance": corssfade in/out (avec réglage éventuel)
 
-- option "étape complète" (attendre afterparty pour déverrouiller)
 - objet lié à étape
 - show // edit :: sequence n+1 : bordure dashed / sequence < n greyed out
 
@@ -34,6 +33,8 @@ X interruptions/offlimit globaux
 X objet toggle: localised / ambiance
 X sequence ordre imposé n+1 après n
 X option "étape facultative"
+X étape: voix principale puis loop aftervoice
+X option "étape complète" (attendre afterparty pour déverrouiller)
 
 ====
 
@@ -46,6 +47,22 @@ X MEDIA are downloaded each time
 - Keep parcours list in memory
 - Keep map in memory !
 - Keep parcours progress in memory
+
+
+======= POST BOULON
+
+X Désactiver la lecture en boucle des étapes
+X Désactiver lecture automatique des médias pendant l'édition du parcours
+X Carte : possibilité supplémentaire de zoomer ?pas sûr que ce soit possible mais je demande quand même :)
+X Goto spot (on select) => limit zoom to 19
+X Rebaptiser les off-limits sur la carte (catégorie) en interruptions
+X en mode site / édition  : ranger les parcours par ordre alphabétique ?
+X Audio step
+
+- ALL: Palette couleur Spots (visibilité)
+- EDIT: Forcer zoom à 19 si supérieur, au Set Map
+- EDIT: undo / redo
+- Obligatoire: fonctionnement à confirmer
 
 
 **************

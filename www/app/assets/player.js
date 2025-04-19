@@ -18,13 +18,24 @@ class PlayerSimple extends EventEmitter
         
         if (!media || !media.src || media.src == '-') return
 
-        if (document.LOCALAPP_PATH) basepath = document.LOCALAPP_PATH + basepath
+        if (document.LOCALMEDIA_PATH) {
+            let localpath = document.LOCALMEDIA_PATH.split('/')
+            let lastlocalelement = localpath[localpath.length - 1] || localpath[localpath.length - 2]
+            let firstBasePath = basepath.split('/')[0] || basepath.split('/')[1]
+
+            if (lastlocalelement == firstBasePath)
+                basepath = document.LOCALMEDIA_PATH + basepath.substr(basepath.indexOf(firstBasePath) + firstBasePath.length)
+            else
+                basepath = document.LOCALMEDIA_PATH + basepath
+        }
         
+        console.log('PlayerSimple load:', basepath + media.src)
+
         this._player = new Howl({
             src: basepath + media.src,
             loop: this._loop,
             autoplay: false,
-            volume: 0
+            volume: 1
         })
         this._player.on('end', () => {
             if (this._player) {
@@ -35,13 +46,13 @@ class PlayerSimple extends EventEmitter
         this._player.on('stop', () => {
             if (this._player) {
                 this.emit('stop', this._player._src)
-                // console.log('PlayerSimple stop:', this._player._src)
+                console.log('PlayerSimple stop:', this._player._src)
             }
         })
         this._player.on('play', () => {
             if (this._player) {
                 this.emit('play', this._player._src)
-                // console.log('PlayerSimple play:', this._player._src)
+                console.log('PlayerSimple play:', this._player._src)
             }
         })
         this._player.on('pause', () => {
@@ -84,13 +95,17 @@ class PlayerSimple extends EventEmitter
     }
 
     play(seek=0, volume=1.0) {
-        if (!this._player) return
+        if (!this._player) {
+            return
+        }
         if (this.isGoingOut) {
             clearTimeout(this.isGoingOut)
             this.isGoingOut = null
             this._player.pause()
         }
-        else if (this._player.playing()) return
+        else if (this._player.playing()) {
+            return
+        }
 
         if (seek >= 0) this._player.seek(seek)
         this._player.play()
@@ -262,6 +277,7 @@ class PlayerStep extends EventEmitter
     }
 
     play() {
+        console.log('PlayerStep play', this.playstate)
         this.offlimit.stop()
         this.ambiant.play()
 

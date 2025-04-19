@@ -1,6 +1,34 @@
 // Load Map 
 document.MAP = null
 
+// Dirty Fix multi scroll
+// const pauseClass = (ele: HTMLElement, className: string, unpause = false) => {
+//     const from = className.concat(unpause ? "-pause" : "")
+//     const to = className.concat(unpause ? "" : "-pause")
+//     Array.from(ele.getElementsByClassName(from)).forEach((ele) => ele.classList.replace(from, to))
+// }
+
+// const stopZoomAnimation = () => {
+//     let paused = false
+//     let timeoutId: ReturnType<typeof setTimeout>
+//     const animationClass = "leaflet-zoom-animated"
+//     return function (e: WheelEvent) {
+//         // pause animation if it isn't already paused
+//         if (!paused) {
+//             pauseClass(e.target as HTMLElement, animationClass)
+//             paused = true
+//             console.log("pausing zoom animations");
+//         }
+//         // unpause after 500ms
+//         clearTimeout(timeoutId);
+//         timeoutId = setTimeout(() => {
+//             pauseClass(e.target as HTMLElement, animationClass, true)
+//             console.log("zoom animations enabled");
+//             paused = false
+//         }, 500);
+//     };
+// }
+
 function initMap(id, options = {}) {
 
     var GEO = document.GEO
@@ -10,8 +38,12 @@ function initMap(id, options = {}) {
         editable: true,
         center: [43, 1],
         zoom: 16, 
-        maxZoom: 19,
+        maxZoom: 21,
         minZoom: 5,
+        zoomDelta: 1,
+        wheelPxPerZoomLevel: 240,
+        wheelDebounceTime: 100,
+        scrollWheelZoom: false,
         ...options
     }
 
@@ -32,6 +64,36 @@ function initMap(id, options = {}) {
 
     // maxZoom
     document.MAP.maxZoom = () => _options.maxZoom
+
+    document.MAP.on('zoomend', function() {
+        // console.log('zoomend', document.MAP.getZoom())
+    });
+
+    // Mouse wheel custom handler
+    this.zoomTimeout = null;
+    this.zoomPaused = false;
+    document.MAP.getContainer().addEventListener('wheel', (e) => {
+        if (this.zoomPaused) {
+            console.log('zoom paused');
+            return;
+        }
+        if (e.deltaY < 0) {
+            console.log('zoom in', e.deltaY);
+            document.MAP.zoomIn();
+        } else {
+            console.log('zoom out', e.deltaY);
+            document.MAP.zoomOut();
+        }
+        this.zoomPaused = true;
+        this.zoomTimeout = setTimeout(() => {
+            if (this.zoomPaused) {
+                this.zoomPaused = false;
+                console.log('zoom unpaused');
+            }    
+        }, 350); // Adjust debounce as needed
+    });
+
+    // document.MAP.getContainer().onwheel = stopZoomAnimation()
 
     // show position
     document.MAP.showPositionMarker = () => {
