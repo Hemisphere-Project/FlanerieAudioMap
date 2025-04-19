@@ -22,8 +22,8 @@
 
 ========= Post Guillotière Décembre 2024
 
--- étape: voix principale puis loop aftervoice
--- facultatif broken
+X étape: voix principale puis loop aftervoice
+X facultatif broken
 - objet "ambiance": corssfade in/out (avec réglage éventuel)
 
 - option "étape complète" (attendre afterparty pour déverrouiller)
@@ -38,13 +38,36 @@ X option "étape facultative"
 ====
 
 - simulation: brider le movement de carte
-- capture d'écran (capture de trajet)
+- DEV: capture d'écran (capture de trajet)
 
 ==== BUGS
-- APP runs before APPUPDATE is done...
-- MEDIA are downloaded each time
+X APP runs before APPUPDATE is done...
+X MEDIA are downloaded each time
 - Keep parcours list in memory
 - Keep map in memory !
 - Keep parcours progress in memory
 
 
+**************
+FRAPPAZ
+**************
+
+- !! BUG: iOS GPS Background
+- BUG : DEVMODE, reset seems broken ?
+- BUG : LIST on clone, new name ignored
+
+- EDIT: trim/clean spot / parcours names
+- EDIT: export parcours CSV (for media check listing)
+- EDIT: point d'insert nouvelle etape (éviter d'ajouter en dernier)
+
+- !! APP: Raccrochage de parcours si quitte app en cours
+- !! APP: parcours / media : full offline
+- APP: Show map on interrupt (or 30s Etape offlimits)
+- APP: pause audio on Call
+- APP: alert() -> better alerts
+- APP: GPS working symbol
+- APP: check Notifications auth android
+- APP: SAS code valide on keyboard enter
+- APP: Test battery level
+
+- AMBIANCE: loop option / start from beggining / fade out time réglagble
