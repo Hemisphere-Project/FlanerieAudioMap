@@ -15,7 +15,7 @@ function githubHook(app, route = '/webhook', secret) {
     webhookHandler.on('*', function (event, repo, data) {
       if (event === 'push') {
         log('processing push event (Pull / Restart)');
-        exec('git stash && git pull && npm i', (err, stdout, stderr) => {
+        exec('git pull && npm i', (err, stdout, stderr) => {
           if (err) {
             console.error(err);
             return; 
