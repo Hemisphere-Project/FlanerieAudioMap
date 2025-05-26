@@ -3,6 +3,7 @@ media/
 parcours/
 _tmp/
 
+
 # Logs
 logs
 *.log

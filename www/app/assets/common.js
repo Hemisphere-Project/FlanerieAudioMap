@@ -16,6 +16,9 @@ const FRONT_LOGS = true
 //     $('#logs').append(message + '<br/>')
 //    $('#logs').scrollTop($('#logs')[0].scrollHeight)
 // }
+
+// catch all error and push it
+
 console._error = console.error
 if ($('#logs').length && FRONT_LOGS) 
 console.error = function(...message) {

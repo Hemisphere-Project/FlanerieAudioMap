@@ -51,6 +51,28 @@ app.get('/proto', (req, res) => {
     res.sendFile(path.join(__dirname, 'www', 'control', 'proto.html'));
 });
 
+// Error handler: receive json report from catch-all-errors front lib
+// append it to a file in logs folder YYYY-MM-MDD.log
+app.post('/errorhandler', express.urlencoded({ extended: true }), (req, res) => {
+  console.log('Parsed body:', req.body);
+
+  const errorLog = path.join(__dirname, 'logs', `${new Date().toISOString().split('T')[0]}.log`);
+  const errorData = {
+    timestamp: new Date().toISOString(),
+    report: req.body
+  };
+  
+  // Ensure logs directory exists
+  if (!fs.existsSync(path.join(__dirname, 'logs'))) {
+    fs.mkdirSync(path.join(__dirname, 'logs'));
+  }
+
+  // Append error data to log file
+  fs.appendFileSync(errorLog, JSON.stringify(errorData) + '\n');
+  
+  res.status(200).send('Error logged');
+});
+
 // List parcours
 app.get('/list', (req, res) => {
   // list of parcours name and status based on json files in parcours folder
