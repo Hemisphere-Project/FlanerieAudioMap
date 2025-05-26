@@ -26,6 +26,7 @@
 
     <script>
         var BASEURL = "$BASEPATH$";
+        console.error("CSS path is: $BASEPATH$/app.css");
     </script>
 
 </head>
@@ -42,22 +43,39 @@
         </div>
 
         <div id="checkgeo" class="page">
-            Mode de géolocalisation: 
+            <h3 id="checkgeo-title">Géolocalisation</h3>
+            <p id="checkgeo-status">Vérification du GPS</p>
             <div id="checkgeo-select">
                 <button id="checkgeo-select-gps" class="btn btn-primary btn-page">Position réelle (GPS)</button>
                 <button id="checkgeo-select-simul" class="btn btn-primary btn-page">Simulation</button>
             </div>
+            <button id="checkgeo-settings" class="btn btn-primary btn-page">Paramètres</button>
+        </div>
+
+        <div id="checkgeo-auth" class="page">
+            <h3 id="checkgeo-auth-title">Géolocalisation</h3>
+            <p id="checkgeo-auth-status">Vérification des autorisations</p>
         </div>
 
         <div id="confirmgeo" class="page">
             <h3 id="confirmgeo-title">Géolocalisation</h3>
             <div class="content">
-                L'application a besoin d'accéder à votre position précise afin de vous guider.<br /><br />
-                Vous devez donc <u>activer le GPS</u> de votre appareil et en autoriser l'accès.<br /><br />
-                Les <u>notifications</u> peuvent être nécessaires pour garder le GPS lorsque le téléphone est en veille.<br /><br />
-                Aucune informations n'est collectée ou transmise: la localisation sert uniquement à déclencher les audios du parcours.<br /><br />
+                <p id="confirmgeo-desc">
+                    L'application nécessite deux autorisations pour accéder à votre position précise en arrière plan afin de vous guider.<br /><br />
+                    Aucune informations n'est collectée ou transmise: la localisation sert uniquement à déclencher les audios du parcours.<br /><br />
+                </p>
+                <p id="confirmgeo-desc2"></p>
             </div>
             <button id="confirmgeo-accept" class="btn btn-primary btn-page">J'accepte</button> 
+            <button id="confirmgeo-settings" class="btn btn-primary btn-page">Paramètres</button>
+        </div>
+
+        <div id="nogeo-auth" class="page">
+            <div class="content">
+                <h3 id="nogeo-auth-title">Géolocalisation</h3>
+                <p id="nogeo-auth-retry">Vous devez autoriser l'application à accéder à votre position.</p>
+                <button id="nogeo-auth-accept" class="btn btn-primary btn-page">C'est fait</button>
+            </div>
         </div>
 
         <div id="nodata" class="page">
@@ -76,14 +94,6 @@
             </div>
         </div>
 
-        <div id="nogeo" class="page">
-            <div class="content">
-                <p>Impossible de détecter votre position.</p>
-                    <br />
-                <p id="nogeo-retry">Activez la géolocalisation pour continuer ...</p>
-            </div>
-        </div>
-        
         <div id="noparcours" class="page">
             <div class="content">
                 <p>Aucun parcours n'a été trouvé à proximité de votre position.</p>
@@ -127,16 +137,23 @@
             </div>
         </div>
 
+        <div id="confirmios" class="page">
+            <h3 id="confirmios-title">Géolocalisation</h3>
+            <p id="rdvios">ATTENTION: sur iPhone la localisation en veille ne fonctionne pas pour le moment.<br />
+                Vous devez laisser l'application ouverte pour que la géolocalisation fonctionne.<br />
+            </p>
+            <!-- <button id="confirmios-settings" class="btn btn-primary btn-page">Réglages</button> -->
+            <button id="confirmios-accept" class="btn btn-primary btn-page">C'est compris</button>
+        </div>
+
         <div id="rdv" class="page">
             <div class="content">
                 <p>Le parcours est maintenant chargé dans votre téléphone.</p>
-                <p id="rdv-desc">
-                    Rendez-vous le jour J à l'endroit qui vous aura été communiqué.
-                </p>
+                <p id="rdv-desc"></p>
                 <br />
-                <p id="rdvdistance"></p>
+                <p id="rdvdistance">Initialisation de votre position...</p>
             </div>
-            <button id="rdv-accept" class="btn btn-primary btn-page">J'y suis</button>
+            <button id="rdv-accept" class="btn btn-primary btn-page">J'y suis !</button>
         </div>
 
         <div id="checkaudio" class="page">
@@ -160,9 +177,9 @@
         <div id="parcours" class="page">
             <h3 id="parcours-title dev"></h3>
             <button id="parcours-rearm" class="dev btn btn-dev-parcours">Reset</button>
-            <p id="parcours-run">Suivez la guide...</p>
             <button id="parcours-lost" class="btn btn-primary btn-page">Je suis perdu.e !</button>
             <div id="parcours-map"></div>
+            <p id="parcours-run"><br />Suivez la guide...</p>
             <p id="parcours-init">Rendez vous au point de départ pour commencer le parcours.</p>
         </div>
 

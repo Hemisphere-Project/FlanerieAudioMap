@@ -118,4 +118,17 @@ document.getElementById('newParcours').addEventListener('click', () => {
         })
 });
 
+// Restart server
+document.getElementById('restartServer').addEventListener('click', () => {
+    if (confirm('Restart server ?')) {
+        get('/restartServer')
+            .then(() => {
+                setTimeout(() => {
+                    alert('Server restarted');
+                    location.reload();
+                }, 3000);
+            })
+    }
+})
+
 refreshList()

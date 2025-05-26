@@ -243,6 +243,7 @@ class GeoLoc extends EventEmitter {
     }
 
     ready() {
+        this.checkPosition()
         return !this.initializing;
     }
 
@@ -253,33 +254,66 @@ class GeoLoc extends EventEmitter {
         this.fakeUpdate(pos);
     }
 
-    // passive start: only start if already authorized and enabled
-    checkGeoAuth() {
+    // showSystemSettings()
+    showLocationSettings() {
+        if (typeof BackgroundGeolocation === 'undefined') {
+            console.error('BackgroundGeolocation is not defined');
+            return;
+        }
+        if (cordova.platformId == 'android') {
+            BackgroundGeolocation.showLocationSettings();
+        }
+        else if (cordova.platformId == 'ios') {
+            alert('Réglages > Confidentialité > Services de localisation > Activez!');
+            // BackgroundGeolocation.showAppSettings();
+        }
+    }
+
+    // showAppSettings()
+    showAppSettings() {
+        if (typeof BackgroundGeolocation === 'undefined') {
+            console.error('BackgroundGeolocation is not defined');
+            return;
+        }
+        BackgroundGeolocation.showAppSettings();
+    }
+
+    // Check if geoloc is enabled
+    checkEnabled() {
         return new Promise((resolve, reject) => {
             if (typeof BackgroundGeolocation === 'undefined') {
                 console.error('BackgroundGeolocation is not defined');
-                reject('BackgroundGeolocation is not defined');
+                resolve('BackgroundGeolocation is not defined');
                 return;
             }
             BackgroundGeolocation.checkStatus(function(status) {
-                console.log('[INFO] BackgroundGeolocation auth status: ' + status.authorization);
-                if (status.authorization !== BackgroundGeolocation.AUTHORIZED) {
-                    reject('gps-no-authorization')
+                if (status.locationServicesEnabled) resolve();
+                else reject('gps-no-location');
+            });
+        });
+    }
+
+    // Check auth
+    checkAuthorized() {
+        return new Promise((resolve, reject) => {
+            if (typeof BackgroundGeolocation === 'undefined') {
+                console.error('BackgroundGeolocation is not defined');
+                resolve();
+                return;
+            }
+            BackgroundGeolocation.checkStatus(function(status) {
+                if (status.authorization == BackgroundGeolocation.AUTHORIZED) {
+                    console.log('[INFO] BackgroundGeolocation auth is OK: ' + status.authorization);
+                    return resolve()
                 }
-                else if (!status.locationServicesEnabled) {
-                    reject('gps-no-location')
+
+                if (status.authorization == BackgroundGeolocation.AUTHORIZED_FOREGROUND) {
+                    console.warn('[WARNING] BackgroundGeolocation auth is partial: ' + status.authorization);
+                    return reject('gps-error-authorization')
                 }
-                else {
-                    GEO.startGeoloc()
-                        .then(() => {
-                            console.log('GEO startGeoloc OK');
-                            resolve();
-                        })
-                        .catch(error => {
-                            console.error('GEO startGeoloc ERROR:', error);
-                            reject(error);
-                        });
-                }
+                
+                console.error('[ERROR] BackgroundGeolocation wrong auth status: ' + status.authorization);
+                return reject('gps-no-authorization')
             });
         });
     }
@@ -315,7 +349,10 @@ class GeoLoc extends EventEmitter {
 
         });
 
+   }
 
+    checkPosition() {
+        return checkBGPosition()
     }
 
     position() {
@@ -370,6 +407,8 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
             desiredAccuracy: BackgroundGeolocation.HIGH_ACCURACY,
             stationaryRadius: 0.1,
             distanceFilter: 0,
+            pauseLocationUpdates: false,
+            saveBatteryOnBackground: false,
             notificationTitle: 'Flanerie',
             notificationText: 'localisation en cours',
             debug: false,
@@ -444,6 +483,8 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
     BackgroundGeolocation.on('error', function(error) {
         console.log('[ERROR] BackgroundGeolocation error:', error.code, error.message);
         if (backgroundGeolocReject) {
+            // alert('Erreur du GPS: ' + error.message);
+
             backgroundGeolocReject(error);
             backgroundGeolocReject = null;
             backgroundGeolocResolve = null;
@@ -455,9 +496,14 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
         console.log('[INFO] BackgroundGeolocation service has been started');
 
         BackgroundGeolocation.checkStatus(function(status) {
-            if (!status.authorization) {
-                alert('Vous devez autoriser l\'application à accéder à votre position !');
-                reject('gps-no-authorization')
+            if (status.authorization !== BackgroundGeolocation.AUTHORIZED) {
+                setTimeout(function() {
+                    if (backgroundGeolocReject) {
+                        backgroundGeolocReject('gps-error-authorization');
+                        backgroundGeolocReject = null;
+                        backgroundGeolocResolve = null;
+                    }
+                }, 200);
             }
             else if (backgroundGeolocResolve) {
                 console.log('[INFO] BackgroundGeolocation service is running');
@@ -470,13 +516,9 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
 
     BackgroundGeolocation.on('authorization', function(status) {
         console.log('[INFO] BackgroundGeolocation authorization status: ' + status);
-        if (status !== BackgroundGeolocation.AUTHORIZED) {
-            // we need to set delay or otherwise alert may not be shown
-            setTimeout(function() {
-                alert('Flanerie a besoin d\'acceder à votre position. Merci de modifier les permissions de l\'application !');
-                return BackgroundGeolocation.showAppSettings();
-            }, 1000);
-        }            
+        // if (status !== BackgroundGeolocation.AUTHORIZED) {
+        //     authError()
+        // }            
     });
 
     BackgroundGeolocation.on('background', function() {
@@ -492,6 +534,32 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
 
     backgroundGeolocSetup = true;
     return true;
+}
+
+function checkBGPosition() {
+    return new Promise((resolve, reject) => {
+        if (typeof BackgroundGeolocation === 'undefined') {
+            console.error('BackgroundGeolocation is not defined');
+            resolve('BackgroundGeolocation is not defined');
+            return;
+        }
+        if (!BackgroundGeolocation) {
+            console.error('BackgroundGeolocation is not available');      
+            resolve('BackgroundGeolocation is not available');
+            return;
+        }
+        BackgroundGeolocation.getCurrentLocation(
+            function(location) {
+              // Got a location, now start background tracking
+              resolve(location)
+            },
+            function(error) {
+              // If failed, still start tracking
+              reject(error)
+            },
+            { enableHighAccuracy: true, timeout: 10000 }
+          );
+    });
 }
 
 

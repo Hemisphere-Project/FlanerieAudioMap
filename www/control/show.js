@@ -6,8 +6,27 @@ const CROSSFADE_DUMP = 4
 const PARCOURS = document.PARCOURS
 const GEO = document.GEO
 
+console._log = console.log
+if ($('#logs').length && FRONT_LOGS) 
+console.log = function(...message) {
+    console._log(message)
+    if (typeof message === 'object') {
+        message = JSON.stringify(message)
+    }
+    $('#logs').append(message + '<br/>')
+   $('#logs').scrollTop($('#logs')[0].scrollHeight)
+}
+
 // MAP
 const MAP = initMap('map')
+
+const mapDiv = document.getElementById('map');
+mapDiv.addEventListener('mouseenter', function () {
+  document.body.style.overflow = 'hidden';
+});
+mapDiv.addEventListener('mouseleave', function () {
+  document.body.style.overflow = '';
+});
 
 // title click -> back to control
 $('#title').click(() => window.location.href = '/control')

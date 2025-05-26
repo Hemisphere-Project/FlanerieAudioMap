@@ -1,3 +1,8 @@
+html, body, #app {
+    overscroll-behavior-y: none;
+    overflow: hidden;
+}
+
 body {
     background-color: #3b3b3f;
     font-family: 'Courier New', 'Roboto', Arial, sans-serif;
@@ -105,7 +110,7 @@ body {
 }
 
 #rdvdistance {
-    opacity: 0.3;
+    opacity: 0.7;
 }
 
 /* #sas-code {
@@ -209,7 +214,7 @@ input[type=number].input-page::-webkit-outer-spin-button {
 
 .position-icon {
     border-radius: 50%;
-    background-color: red;
+    background-color: green;
 }
 
 /* MISC */

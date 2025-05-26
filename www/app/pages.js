@@ -4,6 +4,10 @@ var DISTANCE_RDV = 20; // 10m (to validate RDV)
 var DEVMODE = localStorage.getItem('devmode') == 'true' || false;
 var SELECTED_PARCOURS = localStorage.getItem('selectedparcours') || null;
 
+var PLATFORM = 'browser';
+try {
+    if (cordova.platformId) PLATFORM = cordova.platformId;
+} catch (e) {}
 
 // GLOBALS
 //
@@ -194,11 +198,26 @@ PAGES['load'] = (showProgress) => {
 // GEOLOCATION
 //
 PAGES['checkgeo'] = () => {
+    $('#checkgeo-select').hide();
+    $('#checkgeo-settings').hide().off().on('click', () => GEO.showLocationSettings())
 
+    var recheck = null;
     function checkGeo() {
-        GEO.checkGeoAuth()
-            .then(() => PAGE('rdv'))
-            .catch(() => PAGE('confirmgeo'))
+        GEO.checkEnabled() 
+            .then(() => {
+                console.log('GEO ENABLED');
+                clearTimeout(recheck);
+                PAGE('confirmgeo')
+            }) 
+            .catch(() => {
+                console.log('GEO DISABLED');
+                $('#checkgeo-status').text('Vous devez activer la géolocalisation dans les paramètres de votre appareil pour continuer...');
+                if (PLATFORM == 'ios') 
+                    $('#checkgeo-status').append('<br><br>Réglages > Confidentialité > Services de localisation > Activez !');
+                else if (PLATFORM == 'android') 
+                    $('#checkgeo-settings').show();
+                recheck = setTimeout(() => checkGeo(), 1000);
+            })
     }
 
     if (!DEVMODE) {
@@ -217,40 +236,98 @@ PAGES['checkgeo'] = () => {
     }
 }
 
-PAGES['nogeo'] = () => {
-    TYPEWRITE('nogeo-retry')
-        .pauseFor(2000)
-        .callFunction(() => PAGE('confirmgeo') )
+var retryAuth = 0;
+PAGES['confirmgeo'] = () => {
+    $('#confirmgeo-settings').hide().off().on('click', () => GEO.showAppSettings())
+
+    // if (PLATFORM == 'ios') 
+    //     $('#confirmgeo-desc').append('<br><br>Réglages > Confidentialité > Services de localisation > Activez !');
+    // if (PLATFORM == 'android') 
+        // $('#confirmgeo-desc').text('Vous devrez autoriser l\'application et');
+
+    if (retryAuth > 0) {
+        if (PLATFORM == 'ios') {
+            $('#confirmgeo-desc').html(`Vous devez régler l'autorisation de Localisation sur <u>"Toujours"</u> dans les réglages de votre appareil !
+                <br><br>Réglages > Confidentialité > Services de localisation > Flanerie > "Toujours"`);
+            $('#confirmgeo-settings').show().text('Réglages')
+        }
+        else if (PLATFORM == 'android') {
+            $('#confirmgeo-desc').html(`Vous devez donnez les permissions "Localisation" et "Notifications" à l'application Flanerie dans les paramètres de votre appareil !
+                <br><br>Réglages > Applications > Flanerie > Permissions > "Localisation" et "Notifications"`);
+            $('#confirmgeo-settings').show().text('Paramètres')
+        }
+        $('#confirmgeo-accept').hide()
+    }
+    
+    var recheck = null;
+    function checkAuth() {
+        GEO.checkAuthorized()
+            .then(() => {
+                console.log('GEO AUTHORIZED');
+                clearTimeout(recheck);
+                PAGE('startgeo')
+            })
+            .catch((e) => {
+                console.log('GEO NOT AUTHORIZED');
+                recheck = setTimeout(() => checkAuth(), 1000);
+                onError()
+            })
+    }
+    checkAuth()
+
+    $('#confirmgeo-accept').off().on('click', () => {
+        if (PLATFORM == 'android') {
+            alert('Vous devrez également autoriser les notifications pour que la localisation fonctionne en arrière plan !');
+        }
+        clearTimeout(recheck);
+        PAGE('startgeo')
+    })
 }
 
-PAGES['confirmgeo'] = () => {
-    $('#confirmgeo-accept').off().on('click', () => {
-        GEO.startGeoloc()
-                .then(()=>PAGE('rdv'))
-                .catch(()=>PAGE('nogeo'))
-    })
+PAGES['startgeo'] = () => {
+    GEO.startGeoloc()
+            .then(()=>{
+                if (PLATFORM == 'ios') PAGE('confirmios')
+                else PAGE('rdv')
+            })
+            .catch((e)=>{
+                retryAuth++;
+                PAGE('confirmgeo')
+            })
+}
+
+PAGES['confirmios'] = () => {
+    $('#confirmios-settings').off().on('click', () => GEO.showAppSettings())
+    $('#confirmios-accept').off().on('click', () => PAGE('rdv'))
 }
 
 //
 // RENDEZ-VOUS
 //
 PAGES['rdv'] = () => {
+    $('#rdvdistance').hide()
 
     var checkpos = setInterval(() => {
         if (!GEO.ready()) return;
         let d = PARCOURS.find('steps', 0).distanceToBorder(GEO.position())
-        $('#rdvdistance').show().text(Math.round(d) + ' m');
-        if (d < DISTANCE_RDV) {
-            clearInterval(checkpos);
-            $('#rdv-accept').show() 
-            $('#rdvdistance').hide()
-        }
+
+        
+
+        $('#rdvdistance').show().text('Distance: '+Math.round(d) + ' m');
+        // if (d < 0) {
+            // if (d < DISTANCE_RDV) {
+        clearInterval(checkpos);
+        $('#rdv-accept').show() 
+        $('#rdvdistance').hide()
+        // }
+        
     }, 1000);
 
-
+    // $('#rdv-desc').empty()
     TYPEWRITE('rdv-desc')
+        .typeString('Rendez-vous le jour J au point de départ qui vous aura été indiqué.')
         .callFunction(() => {
-            //$('#rdv-accept').show() 
+            $('#rdvdistance').show()
         })
 
     $('#rdv-accept').hide().off().on('click', () => {
@@ -272,17 +349,24 @@ PAGES['checkaudio'] = () => {
     // Test audio player
     let ok = true;
     if (testplayer) testplayer.stop();
+
+    let testpath = BASEURL+'/images/test.mp3';
+    console.log('[AUDIO] testing with ', testpath);
+
+    let html5enabled = (PLATFORM == 'ios')
+
     testplayer = new Howl({
-        src: BASEURL+'/images/test.mp3',
+        src: testpath,
         loop: true,
         autoplay: false,
-        volume: 1
+        volume: 1,
+        html5: html5enabled
     })
     testplayer.on('play', () => {
-        console.log('AUDIO OK');
+        console.log('[AUDIO] OK!');
     })
-    testplayer.on('loaderror', () => {
-        console.log('AUDIO ERROR');
+    testplayer.on('loaderror', (e) => {
+        console.log('[AUDIO] ERROR', e)
         ok = false
         $('#checkaudio-accept').hide()
         $('#checkaudio-help').hide()
@@ -361,6 +445,8 @@ PAGES['parcours'] = () => {
     console.log('PARCOURS', PARCOURS);
     // if (!PARCOURS.valid()) return PAGE('select')
 
+    Howler.ctx.resume();
+
     // MAP
     var MAP = initMap('parcours-map', {
             zoom: 19,
@@ -410,8 +496,8 @@ PAGES['parcours'] = () => {
             TYPEWRITE('parcours-run')
 
             // Show objects
-            if (PARCOURS.spots.zones) 
-                PARCOURS.spots.zones.map(z => z.showMarker())
+            // if (PARCOURS.spots.zones) 
+            //     PARCOURS.spots.zones.map(z => z.showMarker())
         }
 
         // Hide map
@@ -429,12 +515,12 @@ PAGES['parcours'] = () => {
         // Last step
         if (s._index + 1 == PARCOURS.spots.steps.length) {
             console.log('END OF PARCOURS')
-            PAGE('end')
+            if (!DEVMODE) PAGE('end')
         }
     })
 
     TYPEWRITE('parcours-init')
-    PARCOURS.showSpotMarker('steps', 0)
+    PARCOURS.find('steps', 0).showMarker('red')
     
 
     // SIMULATION: set GEO position to 10m from parcours start
@@ -442,7 +528,7 @@ PAGES['parcours'] = () => {
     {
         // Set fake position
         var position = PARCOURS.find('steps', 0).getCenterPosition()
-        position[0] += 0.0005
+        position[0] += 0.0003
         console.log('SET POSITION', position)
         GEO.setPosition(position)
     }

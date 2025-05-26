@@ -320,6 +320,15 @@ app.get('/show/:file', (req, res) => {
   res.sendFile(path.join(__dirname, 'www', 'control', 'show.html'));
 });
 
+// Restart server
+app.get('/restartServer', (req, res) => {
+  console.log('Restarting server...');
+  res.status(200).send();
+  setTimeout(() => {
+    process.exit(0);
+  }, 200);
+});
+
 ///////////// APP
 app.get('/app', function (req, res) {
   let html = fs.readFileSync(path.join(__dirname, 'www/app/app.html'), 'utf8');

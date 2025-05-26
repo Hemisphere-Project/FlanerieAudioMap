@@ -31,11 +31,15 @@ class PlayerSimple extends EventEmitter
         
         console.log('PlayerSimple load:', basepath + media.src)
 
+        let html5enabled = false
+        try { html5enabled = (cordova.platformId == 'ios') } catch (e) {}
+
         this._player = new Howl({
             src: basepath + media.src,
             loop: this._loop,
             autoplay: false,
-            volume: 1
+            volume: 1,
+            html5: html5enabled
         })
         this._player.on('end', () => {
             if (this._player) {
