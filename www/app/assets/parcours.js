@@ -1,18 +1,8 @@
 class Parcours extends EventEmitter {
     constructor() {
         super()
-        this.info = {
-            name: '',
-            status: '',
-            coords: ''
-        };
-        this.spots = {};
-        this.coords = null;
         this.map = null;
-        this.pID = null;
-        this.medialoaded = false;
-        this.mediaPackSize = 0;
-        this.mediaPackLoaded = 0;
+        this.clear();
     }
 
     add(spot) {
@@ -25,10 +15,46 @@ class Parcours extends EventEmitter {
     }
 
     clear() {
+
+        // Clear all spots        
         for (let type in this.spots) {
             this.spots[type].map(s => s.clear());
             this.spots[type] = [];
         }
+
+        // Clear internals
+        this.spots = {};
+        this.coords = null;
+        
+        // Clear info
+        this.pID = null;
+        this.info = {
+            name: '',
+            status: '',
+            coords: ''
+        };
+
+        // Clear state
+        this.clearState();
+    }
+
+    clearState() {
+        this.state = {
+            stepIndex: -2,
+            geoMode: null,
+            medialoaded: false,
+            mediaPack: [],
+            mediaPackSize: 0,
+            mediaPackLoaded: 0
+        };
+    }
+
+    currentStep(s = null) {
+        if (s !== null) {
+            this.state.stepIndex = s;
+            this.store();
+        }
+        return this.state.stepIndex;
     }
 
     find(type, index) {
@@ -49,7 +75,7 @@ class Parcours extends EventEmitter {
     }
 
     valid() {
-        return this.pID !== null && this.medialoaded === true;
+        return this.pID !== null && this.state.medialoaded === true;
     }
 
     setMap(map) {
@@ -64,6 +90,41 @@ class Parcours extends EventEmitter {
         this.coords = coords;
     }
 
+    // Build parcours from data
+    build(data) {
+        
+        // Check
+        if (!data || !('info' in data)) throw new Error('No data');
+        if (!data.spots) data.spots = {};
+
+        this.clear();
+
+        this.info = data.info || {};
+
+        // Parse pID
+        if (data.pID) this.pID = data.pID;
+
+        // Coords
+        if (!data.info.coords) data.info.coords = "13/45.76537/4.88377";
+        const [zoom, lat, lng] = data.info.coords.split('/');
+        this.coords = { lat: lat, lng: lng };
+
+        // Map
+        if (this.map) this.map.setView(geo_coords(this.coords), zoom);
+
+        // Spots
+        for (let type in data.spots)
+            data.spots[type].forEach((spot, i) => this.addSpot(type, spot));
+        
+
+        // Load State
+        if (data.state) this.state = { ...this.state, ...data.state };
+        this.state.medialoaded = this.state.mediaPackSize > 0 && this.state.mediaPackLoaded >= this.state.mediaPackSize;
+
+        this.store();
+        return this;
+    }
+
     load(parcoursID) {
         return new Promise((resolve, reject) => {
             if (!parcoursID) parcoursID = this.pID;
@@ -76,29 +137,13 @@ class Parcours extends EventEmitter {
 
             get('/edit/' + parcoursID + '/json')
                 .then(data => {
-                    if (!data || !('info' in data)) throw new Error('No data');
 
-                    this.clear();
-                    
-                    if (!data.info.coords) data.info.coords = "13/45.76537/4.88377";
-                    const [zoom, lat, lng] = data.info.coords.split('/');
-                    this.coords = { lat: lat, lng: lng };
+                    // BUILD PARCOURS from remote data
+                    data.pID = parcoursID; // ensure pID is set
+                    this.build(data);
 
-                    if (this.map && data.info.coords && !this.info.coords) {
-                        this.map.setView(geo_coords(this.coords), zoom);
-                    }
-
-                    this.info = data.info;
-                    for (let type in data.spots)
-                        data.spots[type].forEach((spot, i) => this.addSpot(type, spot));
-                    
-                    // Estimate total size of media pack, and already loaded size
-                    this.mediaPackSize = 0;
-                    this.mediaPackLoaded = 0;
-                    this.medialoaded = false;
-
-                    // DOWNLOAD MEDIA
-                    this.loadmedia( true ) // dryrun ! must call loadmedia() to actually load media
+                    // ESTIMATE MEDIA
+                    this.loadmedia( true ) // true -> dryrun ! must call loadmedia() to actually load media
                         .then(() => {
                             console.log('Parcours loaded', data);
                             resolve();
@@ -128,29 +173,30 @@ class Parcours extends EventEmitter {
             .then(data => {
                 console.log('MEDIA', data);
 
-                const mediaFiles = Object.keys(data);
+                this.state.mediaPack = Object.keys(data);
 
                 // mediaPackSize sum of all media files size
-                this.mediaPackSize = mediaFiles.reduce((sum, file) => sum + data[file].size, 0);
-                this.mediaPackLoaded = 0;
+                this.state.mediaPackSize = this.state.mediaPack.reduce((sum, file) => sum + data[file].size, 0);
+                this.state.mediaPackLoaded = 0;
 
                 // WEB MODE: skip media loading
                 if (!document.WEBAPP_URL) {
                     console.log('WEB MODE: Media loading skipped');
-                    this.medialoaded = true;
-                    this.mediaPackLoaded = this.mediaPackSize;
+                    this.state.medialoaded = true;
+                    this.state.mediaPackLoaded = this.state.mediaPackSize;
+                    this.store();
                     resolve();
                     return;
                 }
 
                 // DOWNLOAD MEDIA
-                const downloadSequence = mediaFiles.reduce((promiseChain, file) => {
+                const downloadSequence = this.state.mediaPack.reduce((promiseChain, file) => {
                     let info = data[file];
                     let path = this.pID + '/' + file;
                     return promiseChain.then(() => media_download(path, info, dryrun))
                         .then(() => {
                             console.log('Media loaded', path);
-                            this.mediaPackLoaded += info.size;
+                            this.state.mediaPackLoaded += info.size;
                         })
                         .catch(error => {
                             if (error === 'DRYRUN') {
@@ -164,10 +210,12 @@ class Parcours extends EventEmitter {
 
                 downloadSequence
                     .then(() => {
-                        if (!dryrun) this.medialoaded = true;
+                        if (!dryrun) this.state.medialoaded = true;
+                        this.store();
                         resolve();
                     })
                     .catch(error => {
+                        this.store();
                         reject(error);
                     });
             })
@@ -178,8 +226,8 @@ class Parcours extends EventEmitter {
     }
 
     loadprogress() {
-        if (this.mediaPackSize === 0) return 0;
-        return Math.round(this.mediaPackLoaded / this.mediaPackSize * 100);
+        if (this.state.mediaPackSize === 0) return 0;
+        return Math.round(this.state.mediaPackLoaded / this.state.mediaPackSize * 100);
     }
 
     addSpot(type, spot) {
@@ -232,14 +280,38 @@ class Parcours extends EventEmitter {
         return this;
     }
 
-    export() {
+    export(full = false) 
+    {
         var data = {
             info: this.info,
             spots: {}
         };
         for (let type in this.spots)
             data.spots[type] = this.spots[type].map(s => s._spot);
+
+        // export mediaPack info
+        if (full) {
+            data.state = this.state;
+            data.pID = this.pID;
+        }
+
         return data;
+    }
+
+    exportCSV() {
+        let csv = 'type;index;name;media;voice;music;ambiant;offlimit;afterplay\n';
+        for (let type in this.spots) {
+            this.spots[type].forEach((spot, index) => {
+                csv += `${type};${index};${spot.name()}`;
+                csv += `;${spot._spot.media.src ? spot._spot.media.src : ''}`;
+                csv += `;${spot._spot.media.voice ? spot._spot.media.voice.src : ''}`;
+                csv += `;${spot._spot.media.music ? spot._spot.media.music.src : ''}`;
+                csv += `;${spot._spot.media.ambiant ? spot._spot.media.ambiant.src : ''}`;
+                csv += `;${spot._spot.media.offlimit ? spot._spot.media.offlimit.src : ''}`;
+                csv += `;${spot._spot.media.afterplay ? spot._spot.media.afterplay.src : ''}\n`;
+            });
+        }
+        return csv;
     }
 
     save() {
@@ -257,6 +329,38 @@ class Parcours extends EventEmitter {
                     reject(error);
                 });
         });
+    }
+
+    // Store parcours in localStorage
+    store() {
+        if (!this.valid()) {
+            console.warn('Cannot store parcours: not valid yet');
+            return;
+        }
+        try { localStorage.setItem('currentparcours', JSON.stringify(this.export(true))); } 
+        catch (error) { console.error('Error storing parcours:', error); }
+    }
+
+    // Restore parcours from localStorage
+    restore() {
+        let stored = localStorage.getItem('currentparcours');
+        try { 
+            console.log('Restoring parcours from localStorage:', JSON.parse(stored));
+            this.build(JSON.parse(stored)); 
+            console.log('Parcours restored from localStorage !'); 
+        } 
+        catch (error) { 
+            console.warn('Error restoring parcours:', error); 
+            this.clear(); 
+            this.clearStore();
+            return; 
+        }
+    }
+
+    // clear Store
+    clearStore() {
+        try { localStorage.removeItem('currentparcours'); } 
+        catch (error) { console.error('Error clearing parcours store:', error); }
     }
 
     update(position) {
@@ -281,6 +385,20 @@ class Parcours extends EventEmitter {
             let types = Object.keys(this.spots).filter(t => t !== 'offlimits');
             this.pauseAudio(types);
         }
+    }
+
+    // Start tracking with GEO
+    startTracking() {
+        this.state.geoMode = GEO.mode();
+        GEO.on('position', (position) => {
+            this.update(position)
+        })
+        this.store();
+    }
+
+    // Give current geo mode
+    geomode() {
+        if (this.state.geoMode) return this.state.geoMode;
     }
 
     pauseAudio(types) {
@@ -320,3 +438,4 @@ class Parcours extends EventEmitter {
 
 // Init parcours
 document.PARCOURS = new Parcours();
+const PARCOURS = document.PARCOURS;

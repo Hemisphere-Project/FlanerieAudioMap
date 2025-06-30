@@ -30,6 +30,10 @@ applyGithubHook(app, '/webhook', process.env.GITHOOK_SECRET);
 import applyUpdater from './modules/updater.js';
 applyUpdater(app);
 
+// Apply map download
+import applyMapDownload from './modules/mapdownload.js';
+applyMapDownload(app);
+
 // Set the static path
 app.use(express.static(path.join(__dirname, 'www')));
 
@@ -177,6 +181,10 @@ app.post('/edit/:file/json', express.json(), (req, res) => {
     if (!fs.existsSync('./media/' + fileName + '/Objets'))
       fs.mkdirSync('./media/' + fileName + '/Objets');
 
+    // Maps folder exists
+    if (!fs.existsSync('./media/' + fileName + '/Maps'))
+      fs.mkdirSync('./media/' + fileName + '/Maps');
+
     // Objets name update
     if (content.spots.zones)
       content.spots.zones.forEach((objet, i) => {
@@ -197,8 +205,11 @@ app.post('/edit/:file/json', express.json(), (req, res) => {
     if (content.spots.steps)
       content.spots.steps.forEach((step, i) => 
       {
+        // Clean up step name
+        content.spots.steps[i].name = step.name.trim().replace(/[^a-zA-Z0-9_]/g, '_');
+
         if (!step.folder) content.spots.steps[i].folder = 'Etape';
-        if (!step.name || step.name.startsWith('Etape')) content.spots.steps[i].name = 'Etape ' + i;
+        if (!step.name || step.name.startsWith('Etape')) content.spots.steps[i].name = 'Etape_' + i;
 
         var oldFolder = './media/' + fileName + '/' + step.folder;
         var newFolder = './media/' + fileName + '/' + step.name;

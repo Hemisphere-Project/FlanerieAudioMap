@@ -1,6 +1,4 @@
 const LOAD_EXTRARADIUS = 10
-var stepIndex = -2
-
 
 // Generic class Spot, implementing Events
 class Spot extends EventEmitter
@@ -44,6 +42,7 @@ class Spot extends EventEmitter
                 })
             
             if (this._map) this._marker.addTo(this._map)
+            else console.warn('No map to add marker to:', this._spot.name)
 
             this._loadRadius = this._spot.radius + LOAD_EXTRARADIUS
         }
@@ -63,6 +62,7 @@ class Spot extends EventEmitter
                 })
 
             if (this._map) this._marker.addTo(this._map)
+            else console.warn('No map to add marker to:', this._spot.name)
 
             // Compute radius
             this._loadRadius = Math.max(...this._spot.radius.map(c => 
@@ -479,16 +479,16 @@ class Step extends Spot
         //
 
         // Already played higher steps
-        if (this._index < stepIndex) return inside
+        if (this._index < PARCOURS.currentStep()) return inside
 
         // If inside:
         if ( (!this.player.isPlaying() || this.player.isPaused()) && this.near(position) && inside) 
         {
             // Check if previous unrealised steps where optional
-            if (this._index > stepIndex + 1 && stepIndex + 1 >= 0) {
-                let mandatory = allSteps.filter(s => s._index > stepIndex && s._index < this._index && !(s._spot.optional === false)).map(s => s._index)
+            if (this._index > PARCOURS.currentStep() + 1 && PARCOURS.currentStep() + 1 >= 0) {
+                let mandatory = allSteps.filter(s => s._index > PARCOURS.currentStep() && s._index < this._index && !(s._spot.optional === false)).map(s => s._index)
                 if (mandatory.length > 0) {
-                    console.warn('Etape précédente obligatoire:', stepIndex, '->' ,JSON.stringify(mandatory) , 'cette étape:', this._index)
+                    console.warn('Etape précédente obligatoire:', PARCOURS.currentStep(), '->' ,JSON.stringify(mandatory) , 'cette étape:', this._index)
                     return inside
                 }
             }
@@ -506,7 +506,7 @@ class Step extends Spot
             else this.player.play()
 
             // Update index
-            stepIndex = this._index
+            PARCOURS.currentStep(this._index)
 
             console.log('== ETAPE:', this._index, this._spot.name)
 
@@ -515,7 +515,7 @@ class Step extends Spot
         }
 
         // Handle Offlimit (if media exists)
-        if (stepIndex == this._index && this._spot.media.offlimit.src !== '-') 
+        if (PARCOURS.currentStep() == this._index && this._spot.media.offlimit.src !== '-') 
         {
             // If too far
             if (this.player.isPlaying() && this.distanceToBorder(position) > 3) 

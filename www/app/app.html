@@ -15,6 +15,7 @@
     <script src="$BASEPATH$/libs/typewriter.min.js"></script>
     <script src="$BASEPATH$/libs/leaflet-1.9.4.js"></script>
     <script src="$BASEPATH$/libs/leaflet.editable.js"></script>
+    <script src="$BASEPATH$/libs/leaflet-tilelayer-cordova.js"></script>
     <script src="$BASEPATH$/libs/howler-2.2.4.min.js"></script>
     <script src="$BASEPATH$/libs/nosleep.min.js"></script>
 
@@ -29,7 +30,6 @@
 
     <script>
         var BASEURL = "$BASEPATH$";
-        console.error("CSS path is: $BASEPATH$/app.css");
     </script>
 
 </head>
@@ -79,6 +79,12 @@
                 <p id="nogeo-auth-retry">Vous devez autoriser l'application à accéder à votre position.</p>
                 <button id="nogeo-auth-accept" class="btn btn-primary btn-page">C'est fait</button>
             </div>
+        </div>
+
+        <div id="checkbackground" class="page">
+            <h3 id="checkbackground-title">Arrière-plan</h3>
+            <p id="checkbackground-desc">Un dernier test: verrouillez votre téléphone et écoutez les instructions audio ..
+            </p>
         </div>
 
         <div id="nodata" class="page">
@@ -162,7 +168,7 @@
         <div id="checkaudio" class="page">
             <h3 id="checkaudio-title">Vérification audio</h3>
             <div class="content">
-                <p id="checkaudio-desc">Mettez vos écouteurs et réglez le volume ...</p>
+                <p id="checkaudio-desc">Mettez vos écouteurs et réglez le volume. Si vous ne disposez pas d'écouteurs, demandez à l'accueil.</p>
             </div>
             <button id="checkaudio-accept" class="btn btn-primary btn-page">J'entends bien</button>
             <button id="checkaudio-help" class="btn btn-primary btn-page">Je n'entends pas</button>
@@ -178,18 +184,26 @@
         </div>
 
         <div id="parcours" class="page">
-            <h3 id="parcours-title dev"></h3>
-            <button id="parcours-rearm" class="dev btn btn-dev-parcours">Reset</button>
-            <button id="parcours-lost" class="btn btn-primary btn-page">Je suis perdu.e !</button>
-            <div id="parcours-map"></div>
-            <p id="parcours-run"><br />Suivez la guide...</p>
+            <img id="gps-status" src="$BASEPATH$/images/gps-off.png" alt="GPS Status" width="24" height="24">
+            <h3 id="parcours-title">Flanerie en cours </h3>
+            <h3 id="parcours-title-dev"></h3>
+            <p id="parcours-run">Suivez la voix...</p>
             <p id="parcours-init">Rendez vous au point de départ pour commencer le parcours.</p>
+            <button id="parcours-lost" class="btn btn-primary btn-page">Je suis perdu.e !</button>
+            <button id="parcours-rearm" class="dev btn btn-dev-parcours">Rearm</button>
+            <button id="parcours-restart" class="dev btn btn-dev-parcours2">Restart</button>
+            <div id="parcours-map"></div>
         </div>
 
         <div id="end" class="page">
             <div class="content">
                 <p id="parcours-end"></p>
             </div>
+        </div>
+
+        <div id="sidepanel" class="dev">
+            <h4 id="logs-title">LOGS</h4>
+            <div id="logs"></div>
         </div>
 
     </div>

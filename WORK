@@ -44,9 +44,9 @@ X option "étape complète" (attendre afterparty pour déverrouiller)
 ==== BUGS
 X APP runs before APPUPDATE is done...
 X MEDIA are downloaded each time
-- Keep parcours list in memory
-- Keep map in memory !
-- Keep parcours progress in memory
+- APP: Keep parcours list in memory
+- APP: Keep map in memory !
+- APP: Keep parcours progress in memory
 
 
 ======= POST BOULON
@@ -70,15 +70,15 @@ X Audio step
 FRAPPAZ
 **************
 
-- !! BUG: iOS GPS Background
-- BUG : DEVMODE, reset seems broken ?
+OK BUG: iOS GPS Background
+OK BUG : DEVMODE, reset seems broken ?
 - BUG : LIST on clone, new name ignored
 
-- EDIT: trim/clean spot / parcours names
-- EDIT: export parcours CSV (for media check listing)
+OK EDIT: trim/clean spot / parcours names
+OK EDIT: export parcours CSV (for media check listing)
 - EDIT: point d'insert nouvelle etape (éviter d'ajouter en dernier)
 
-- !! APP: Raccrochage de parcours si quitte app en cours
+OK APP: Raccrochage de parcours si quitte app en cours
 - !! APP: parcours / media : full offline
 - APP: Show map on interrupt (or 30s Etape offlimits)
 - APP: pause audio on Call
@@ -86,6 +86,34 @@ FRAPPAZ
 - APP: GPS working symbol
 - APP: check Notifications auth android
 - APP: SAS code valide on keyboard enter
-- APP: Test battery level
+OK APP: Test battery level
 
 - AMBIANCE: loop option / start from beggining / fade out time réglagble
+
+
+***********************
+
+ONBOARDING
+
+- check notif (Android)
+- check background GPS (ios / android)
+
+J'Y SUIS
+OK Check battery
+OK Check Audio -> si tu as oublié un casque demande en un dans la tente
+- Check position verrouillée: éteint ton tel -> écoute la voix 
+
+CAPTURE d'ECRAN 
+autorisation GPS ios / android
+
+*******************
+
+- !! CALL: pause audio 
+
+***************
+
+- si quitte en cours de parcours:
+    OK Resume : last activated step => try to memorize progress in the step
+    OK Resume : skip audio test / skip battery test / skip code => mini test GPS
+    OK Bouton Reset (DEV only ?)
+

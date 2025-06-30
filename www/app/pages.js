@@ -2,7 +2,6 @@ var DISTANCE_MATCH = 20; // 20m
 var DISTANCE_RDV = 20; // 10m (to validate RDV)
 
 var DEVMODE = localStorage.getItem('devmode') == 'true' || false;
-var SELECTED_PARCOURS = localStorage.getItem('selectedparcours') || null;
 
 var PLATFORM = 'browser';
 try {
@@ -11,10 +10,18 @@ try {
 
 // GLOBALS
 //
-const PARCOURS = document.PARCOURS;
-const GEO = document.GEO;
-
 var noSleep = null;
+
+// BATTERY STATUS
+var BATTERY = 0
+window.addEventListener("batterystatus", (status) => {
+    console.log("Battery Level: " + status.level + " isPlugged: " + status.isPlugged);
+    BATTERY = status.level;
+}, false);
+
+
+// RESTORE 
+PARCOURS.restore(); // Restore parcours from localStorage
 
 // 
 // PAGE SELECT
@@ -86,10 +93,8 @@ PAGES['intro'] = () => {
 //
 PAGES['checkdata'] = () => 
 {
-    // once position check if stored parcours is available and not too far
-    if (PARCOURS.valid()) 
-        if (GEO.distance(PARCOURS) < DISTANCE_MATCH) 
-            return PAGE('parcours')
+    // PARCOURS resume
+    if (PARCOURS.valid()) return PAGE('checkgeo');
 
     // if not, check if parcours are available online
     get('/list')
@@ -154,7 +159,7 @@ PAGES['preload'] = (p) => {
     // Check loaded media
     PARCOURS.load(p.file).then(() => 
     {
-        let dlNeeded = PARCOURS.mediaPackSize - PARCOURS.mediaPackLoaded
+        let dlNeeded = PARCOURS.state.mediaPackSize - PARCOURS.state.mediaPackLoaded
         if (dlNeeded == 0) PAGE('load', false);
         else PAGE('confirmload', dlNeeded);
     })
@@ -186,6 +191,7 @@ PAGES['load'] = (showProgress) => {
 
     PARCOURS.loadmedia().then(() => {
         clearInterval(progress);
+        PARCOURS.store(); // Store parcours in localStorage
         PAGE('checkgeo')
     })
     .catch(() => {
@@ -220,8 +226,15 @@ PAGES['checkgeo'] = () => {
             })
     }
 
-    if (!DEVMODE) {
-    // if (false) {
+    // if (!DEVMODE) {
+    if (false) {
+        checkGeo()
+    }
+    else if (PARCOURS.geomode() == 'simulate') {
+        GEO.simulateGeoloc()
+        PAGE('rdv')
+    }
+    else if (PARCOURS.geomode() == 'gps') {
         checkGeo()
     }
     else {
@@ -234,6 +247,11 @@ PAGES['checkgeo'] = () => {
             PAGE('rdv')
         });
     }
+
+    CHECKGEO = setInterval(() => {
+        const gpsImg = document.getElementById('gps-status');
+        gpsImg.src = gpsImg.src.replace(/gps-(on|off)\.png/, GEO.alive() ? 'gps-on.png' : 'gps-off.png');
+    }, 1000);
 }
 
 var retryAuth = 0;
@@ -305,6 +323,10 @@ PAGES['confirmios'] = () => {
 // RENDEZ-VOUS
 //
 PAGES['rdv'] = () => {
+
+    // PARCOURS resume
+    if (PARCOURS.valid() && PARCOURS.currentStep() >= 0) return PAGE('parcours');
+
     $('#rdvdistance').hide()
 
     var checkpos = setInterval(() => {
@@ -348,19 +370,17 @@ PAGES['checkaudio'] = () => {
 
     // Test audio player
     let ok = true;
-    if (testplayer) testplayer.stop();
+    if (testplayer) testplayer.pause();
 
     let testpath = BASEURL+'/images/test.mp3';
     console.log('[AUDIO] testing with ', testpath);
-
-    let html5enabled = (PLATFORM == 'ios')
 
     testplayer = new Howl({
         src: testpath,
         loop: true,
         autoplay: false,
         volume: 1,
-        html5: html5enabled
+        html5: (PLATFORM == 'ios')
     })
     testplayer.on('play', () => {
         console.log('[AUDIO] OK!');
@@ -389,7 +409,7 @@ PAGES['checkaudio'] = () => {
         testplayer.unload()
         delete testplayer
         testplayer = null;
-        PAGE('sas')
+        PAGE('checkbattery')
     })
 
     $('#checkaudio-help').off().on('click', () => {
@@ -400,9 +420,94 @@ PAGES['checkaudio'] = () => {
 }
 
 //
+// CHECK BATTERY
+//
+PAGES['checkbattery'] = () => {
+
+    if (BATTERY > 0 && BATTERY < 30) 
+        alert('Attention, votre batterie est faible ! Pensez à la charger avant de commencer le parcours..')
+    PAGE('checkbackground')
+}
+
+//
+// CHECK BACKGROUND
+//
+PAGES['checkbackground'] = () => {
+
+    // not WebApp: skip
+    if (!document.WEBAPP_URL) PAGE('sas');
+
+    // Show page
+    // When APP_VISIBILITY goes 'background'
+    // Start "testing background mode" audio
+    // Then if GEO.alive() is true after 10 seconds, 
+    // Play "test success" audio, and got to SAS page 
+    // Else, play "test failed" audio, and stay on this page,
+    // And show error message
+    var testResult = false;
+    
+    function waitForBG() {
+        setTimeout(() => {
+            if (APP_VISIBILITY == 'background') testBG() 
+            else waitForBG()
+        }, 1000);
+    }
+    waitForBG();
+
+    function testBG() {
+        if (testplayer) testplayer.stop();
+        testplayer = new Howl({
+            src: BASEURL+'/images/background-test.mp3', autoplay: false, volume: 1, html5: (PLATFORM == 'ios')
+        })
+        testplayer.play();
+
+        setTimeout(() => {
+
+            if (GEO.alive(1000)) {
+                if (testplayer) testplayer.stop();
+                testplayer = new Howl({
+                    src: BASEURL+'/images/background-ok.mp3', autoplay: false, volume: 1, html5: (PLATFORM == 'ios')
+                })
+                testplayer.play();
+                testResult = true;
+
+            } else {
+                if (testplayer) testplayer.stop();
+                testplayer = new Howl({
+                    src: BASEURL+'/images/background-ko.mp3', autoplay: false, volume: 1, html5: (PLATFORM == 'ios')
+                })
+                testplayer.play();
+                testResult = false;
+            }
+            waitForFG()
+
+        }, 10000);
+    }
+
+    function waitForFG() {
+        setTimeout(() => {
+            if (APP_VISIBILITY == 'foreground') {
+                if (testResult) {
+                    console.log('[BACKGROUND] test success');
+                    PAGE('sas');
+                } else {
+                    console.log('[BACKGROUND] test failed');
+                    alert('Le test de fonctionnement en arrière-plan a échoué ..');
+                    $('#checkbackground-desc').html('Veuillez vérifier les paramètres de localisation et réessayer.<br /><br />\
+                                                Demandez de l\'aide à un membre de l\'équipe si besoin.');
+                    waitForBG();
+                }
+            }
+            else waitForFG()
+        }, 1000);
+    }
+}
+
+//
 // SAS
 //
 PAGES['sas'] = () => {
+    if (testplayer) testplayer.stop();
     $('#sas-code').hide()
 
     TYPEWRITE('sas-desc')
@@ -412,9 +517,16 @@ PAGES['sas'] = () => {
         $('#sas-code').show()
         $('#sas-accept').show() 
         $('#sas-help').show()
-        $('#sas-code').off().on('blur', () => {
-            $('#sas-code').focus()
-        })
+        $('#sas-code').off()
+            .on('blur', () => {
+                $('#sas-code').focus()
+            })
+            .on('keypress', (e) => {
+                if (e.keyCode == 13) { // Enter key
+                    e.preventDefault();
+                    checkCode();
+                }
+            });
     })
     
     function checkCode() {
@@ -431,7 +543,7 @@ PAGES['sas'] = () => {
             $('#sas-accept').attr('disabled', false)
         }, 1000)
     }
-    
+
     $('#sas-accept').hide().off().on('click', () => checkCode())
     $('#sas-help').hide().off().on('click', () => alert('Le code se trouve dans le sas de départ !'));
 
@@ -445,7 +557,9 @@ PAGES['parcours'] = () => {
     console.log('PARCOURS', PARCOURS);
     // if (!PARCOURS.valid()) return PAGE('select')
 
-    Howler.ctx.resume();
+    if (Howler.ctx) Howler.ctx.resume();
+
+    var isResume = PARCOURS.valid() && PARCOURS.currentStep() >= 0;
 
     // MAP
     var MAP = initMap('parcours-map', {
@@ -457,28 +571,21 @@ PAGES['parcours'] = () => {
     
     PARCOURS.hideSpotMarkers()
 
-    // Info
-    $('#parcours-title').text(PARCOURS.info.name);
-    $('#parcours-run').hide()
+    // Function to update markers
+    function updateStepsMarkers() {
 
-    // Lost button
-    $('#parcours-lost').hide().off().on('click', () => {
-        console.log('LOST');
-        $('#parcours-map').css('opacity', 1)
-        $('#parcours-lost').hide()
-    })
+        // Mark passed steps in grey, current step in yellow
+        PARCOURS.spots.steps.forEach((s, i) => {
+            if (i < PARCOURS.currentStep()) {
+                s.showMarker('grey', 0.5)
+            }
+            else if (i == PARCOURS.currentStep()) {
+                s.showMarker('yellow')
+            }
+        })
 
-    // Activate Parcours (TODO: move it somehere else)
-    GEO.on('position', (position) => {
-        PARCOURS.update(position)
-    })
-
-    // ON step fire: show next
-    PARCOURS.on('fire', (s) => {
-        if (s._type != 'steps') return
-        s.showMarker('yellow')
-
-        let i = s.index() + 1;
+        // Show next steps in red
+        let i = PARCOURS.currentStep() + 1;
         let sNext = PARCOURS.find('steps', i)
         while (sNext) {
             sNext.showMarker('red')
@@ -487,7 +594,12 @@ PAGES['parcours'] = () => {
             if (!DEVMODE) break;    // show only next step in normal mode
             sNext = PARCOURS.find('steps', i)
         }
+    }
 
+    // ON step fire: show next
+    PARCOURS.on('fire', (s) => {
+        if (s._type != 'steps') return
+        updateStepsMarkers()
 
         // First step
         if (s._index == 0) {
@@ -501,10 +613,14 @@ PAGES['parcours'] = () => {
         }
 
         // Hide map
-        if (!DEVMODE) {
+        if (!DEVMODE && s._index==PARCOURS.currentStep() && !isResume) {
             $('#parcours-map').css('opacity', 0)
-            $('#parcours-lost').show()
+            setTimeout(() => {
+                $('#parcours-lost').show()
+            }, 5000)
         }
+
+        isResume = false;
     })
 
     // ON step done: hide
@@ -519,16 +635,47 @@ PAGES['parcours'] = () => {
         }
     })
 
-    TYPEWRITE('parcours-init')
-    PARCOURS.find('steps', 0).showMarker('red')
-    
+    // INIT PARCOURS
+    //
+
+    // Info
+    $('#parcours-title').toggle(!DEVMODE)
+    $('#parcours-title-dev').text(PARCOURS.info.name).toggle(DEVMODE)
+    $('#parcours-run').hide()
+
+    // Lost button
+    $('#parcours-lost').hide().off().on('click', () => {
+        console.log('LOST');
+        $('#parcours-map').css('opacity', 1)
+        $('#parcours-lost').hide()
+    })
+
+    // Activate Parcours
+    PARCOURS.startTracking()
+
+    // First RUN
+    if (PARCOURS.currentStep() < 0) {
+        console.log('FIRST RUN')
+        TYPEWRITE('parcours-init')
+        PARCOURS.find('steps', 0).showMarker('red')
+    }
+
+    // RESUME
+    else if (PARCOURS.valid() && PARCOURS.currentStep() >= 0)
+    {
+        console.log('RESUME PARCOURS', PARCOURS.currentStep());
+        $('#parcours-init').hide()
+        $('#parcours-run').show()
+        // TYPEWRITE('parcours-run')
+        updateStepsMarkers()
+    }    
 
     // SIMULATION: set GEO position to 10m from parcours start
     if (GEO.mode() == 'simulate') 
     {
         // Set fake position
         var position = PARCOURS.find('steps', 0).getCenterPosition()
-        position[0] += 0.0003
+        position[0] += 0.0004
         console.log('SET POSITION', position)
         GEO.setPosition(position)
     }
@@ -608,7 +755,31 @@ devmode(DEVMODE);
 // DEV TOOLS
 $('#parcours-rearm').click(() => {
     console.log('REARM');
-    stepIndex = -2
+    PARCOURS.currentStep(-2) // Reset current step
     PARCOURS.stopAudio()
+
+    // set all steps markers to red
+    PARCOURS.spots.steps.forEach((s, i) => {
+        s.showMarker('red')
+    })
+
     setTimeout(() => document.MAP.fire('move'), 2000)
 })
+
+$('#parcours-restart').click(() => {
+    console.log('RESTART');
+    PARCOURS.clearStore()
+    location.reload();
+});
+
+
+// SIDEBAR: translate 0 on swipe left, hide on click
+$('#logs-title').on('click', (e) => {
+    let sidebar = $('#sidepanel')[0];
+    // if translate > 0 -> show sidebar else hide
+    if (sidebar.style.transform == 'translateY(0px)') {
+        sidebar.style.transform = 'translateY(95%)';
+    } else {
+        sidebar.style.transform = 'translateY(0px)';
+    }
+});

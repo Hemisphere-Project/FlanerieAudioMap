@@ -1,4 +1,5 @@
 var CALIBRATION_TIME = 2
+var APP_VISIBILITY = 'foreground' // foreground, background
 
 function geo_coords(c) {
     if (c.coords) return geo_coords(c.coords)
@@ -98,6 +99,7 @@ class GeoLoc extends EventEmitter {
         this.initialPosition = null;
         this.lastPosition = null;
         this.initializing = true;
+        this.lastTimeUpdate = null;
 
         this.follow = false;
         this.map = null;
@@ -136,11 +138,13 @@ class GeoLoc extends EventEmitter {
                 }
             }
 
+            // console.log('Position:', position.coords.latitude, position.coords.longitude, 'Accuracy:', position.coords.accuracy, 'm');
             this.emit('position', position);
         }
 
         // next measure
         this.lastPosition = position;
+        this.lastTimeUpdate = Date.now();
     }
 
     _callbackError(error) {
@@ -247,6 +251,10 @@ class GeoLoc extends EventEmitter {
         return !this.initializing;
     }
 
+    alive(timeout=5000) {
+        return (Date.now() - this.lastTimeUpdate) < timeout;
+    }
+
     // Start simulated geoloc
     simulateGeoloc(pos=null) {
         this.init('simulate');
@@ -257,7 +265,7 @@ class GeoLoc extends EventEmitter {
     // showSystemSettings()
     showLocationSettings() {
         if (typeof BackgroundGeolocation === 'undefined') {
-            console.error('BackgroundGeolocation is not defined');
+            console.warn('BackgroundGeolocation is not defined');
             return;
         }
         if (cordova.platformId == 'android') {
@@ -272,7 +280,7 @@ class GeoLoc extends EventEmitter {
     // showAppSettings()
     showAppSettings() {
         if (typeof BackgroundGeolocation === 'undefined') {
-            console.error('BackgroundGeolocation is not defined');
+            console.warn('BackgroundGeolocation is not defined');
             return;
         }
         BackgroundGeolocation.showAppSettings();
@@ -282,7 +290,7 @@ class GeoLoc extends EventEmitter {
     checkEnabled() {
         return new Promise((resolve, reject) => {
             if (typeof BackgroundGeolocation === 'undefined') {
-                console.error('BackgroundGeolocation is not defined');
+                console.warn('BackgroundGeolocation is not defined');
                 resolve('BackgroundGeolocation is not defined');
                 return;
             }
@@ -297,7 +305,7 @@ class GeoLoc extends EventEmitter {
     checkAuthorized() {
         return new Promise((resolve, reject) => {
             if (typeof BackgroundGeolocation === 'undefined') {
-                console.error('BackgroundGeolocation is not defined');
+                console.warn('BackgroundGeolocation is not defined');
                 resolve();
                 return;
             }
@@ -334,7 +342,9 @@ class GeoLoc extends EventEmitter {
             
             // use classic navigator geolocation
             else {
+                console.warn('BackgroundGeolocation is not available, TESTING classic navigator geolocation');
                 return this.testGPS().then(() => {
+                    console.log('classic GEO TEST OK, starting navigator geolocation');
                     this.watchId = navigator.geolocation.watchPosition(this._callbackPosition.bind(this), this._callbackError.bind(this), {
                         enableHighAccuracy: true,
                         timeout: 10000,
@@ -523,12 +533,14 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
 
     BackgroundGeolocation.on('background', function() {
         console.log('[INFO] App is in background');
+        APP_VISIBILITY = 'background';
         // you can also reconfigure service (changes will be applied immediately)
         // BackgroundGeolocation.configure({ debug: true });
     });
 
     BackgroundGeolocation.on('foreground', function() {
         console.log('[INFO] App is in foreground');
+        APP_VISIBILITY = 'foreground';
         // BackgroundGeolocation.configure({ debug: false });
     });
 
@@ -538,14 +550,9 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
 
 function checkBGPosition() {
     return new Promise((resolve, reject) => {
-        if (typeof BackgroundGeolocation === 'undefined') {
-            console.error('BackgroundGeolocation is not defined');
-            resolve('BackgroundGeolocation is not defined');
-            return;
-        }
-        if (!BackgroundGeolocation) {
-            console.error('BackgroundGeolocation is not available');      
-            resolve('BackgroundGeolocation is not available');
+        if (typeof BackgroundGeolocation === 'undefined' || !BackgroundGeolocation) {
+            console.warn('BackgroundGeolocation is not defined');
+            resolve(this.lastPosition);
             return;
         }
         BackgroundGeolocation.getCurrentLocation(
@@ -618,3 +625,4 @@ function backgroundGeoloc(positionCallback, errorCallback) {
 
 // Init geoloc
 document.GEO = new GeoLoc();
+const GEO = document.GEO;

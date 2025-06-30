@@ -6,16 +6,43 @@
 const FRONT_LOGS = true
 
 // copy console.log and console.error to $('#logs')
-// console._log = console.log
-// if ($('#logs').length && FRONT_LOGS) 
-// console.log = function(...message) {
-//     console._log(message)
-//     if (typeof message === 'object') {
-//         message = JSON.stringify(message)
-//     }
-//     $('#logs').append(message + '<br/>')
-//    $('#logs').scrollTop($('#logs')[0].scrollHeight)
-// }
+console._log = console.log
+console._warn = console.warn
+console._error = console.error
+
+if ($('#logs').length && FRONT_LOGS) {
+    console.log = function(...message) {
+        console._log(message)
+        if (typeof message === 'object') {
+            try {
+                message = JSON.stringify(message, null, 2)
+            }
+            catch (e) {
+                // if JSON.stringify fails, just convert to string
+                message = message.toString()
+            }
+        }
+        $('#logs').append(message + '<br/>')
+        // $('#logs').scrollTop($('#logs')[0].scrollHeight)
+    }
+
+    console.warn = function(...message) {
+        console._warn(message)
+        if (typeof message === 'object') {
+            try {
+                message = JSON.stringify(message, null, 2)
+            }
+            catch (e) {
+                // if JSON.stringify fails, just convert to string
+                message = message.toString()
+            }
+        }
+        $('#logs').append('<span style="color:orange">' + message + '</span><br/>')
+        // $('#logs').scrollTop($('#logs')[0].scrollHeight)
+    }
+}
+
+
 
 // catch all error and push it
 
@@ -27,7 +54,7 @@ console.error = function(...message) {
         message = JSON.stringify(message)
     }
     $('#logs').append('<span style="color:red">' + message + '</span><br/>')
-    $('#logs').scrollTop($('#logs')[0].scrollHeight)
+    // $('#logs').scrollTop($('#logs')[0].scrollHeight)
 }
 
 // PATH functions

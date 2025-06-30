@@ -1,5 +1,3 @@
-const PARCOURS = document.PARCOURS
-
 // title click -> back to control
 document.getElementById('title').addEventListener('click', () => {
     window.location.href = '/control';
@@ -434,6 +432,47 @@ $('#setCoords').click(() => {
     document.getElementById('pCoords').value = coords
     PARCOURS.info.coords = coords
     save()
+})
+
+// Download map
+$('#dlMap').click(() => {
+    const coords = document.getElementById('pCoords').value
+    if (!coords) {
+        toastError('Coordonnées manquantes')
+        return
+    }
+    const [zoom, lat, lon] = coords.split('/')
+
+    post('/map/dl', {
+        name: PARCOURS.pID,
+        lat: parseFloat(lat),
+        lon: parseFloat(lon)})
+        .then(data => {
+            console.log('Map download response', data)
+            if (data.error) {
+                toastError(data.error)
+            } else {
+                toastSuccess('Téléchargement de la carte lancé')
+                console.log('Map download started', data)
+            }
+        })
+        .catch(error => {
+            console.error(error)
+            toastError('Erreur lors du téléchargement de la carte')
+        })
+})
+
+// CSV export
+$('#csvExport').click(() => {
+    const csvData = PARCOURS.exportCSV()
+    const blob = new Blob([csvData], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = PARCOURS.pID + '.csv'
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
 })
 
 // Add spot 

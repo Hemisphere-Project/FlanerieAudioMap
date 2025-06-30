@@ -3,8 +3,6 @@ const CROSSFADE_DISTANCE = 10
 const CROSSFADE_DUMP = 4
 
 // GLOBALS
-const PARCOURS = document.PARCOURS
-const GEO = document.GEO
 
 console._log = console.log
 if ($('#logs').length && FRONT_LOGS) 
