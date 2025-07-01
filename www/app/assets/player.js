@@ -1,3 +1,70 @@
+var ALL_PLAYERS = []
+var PAUSED_PLAYERS = []  // Interrupted players that are paused and can be resumed later
+var AUDIOFOCUS = -1  // Audio focus state, -1 means not available, 0 means no focus, 1 means focus gained
+
+// Watch for audio focus changes
+document.addEventListener('deviceready', function() {
+    if (typeof cordova.plugins.audiofocus === 'undefined') {
+        console.warn('[AudioFocus] plugin not available. Audio focus will not be handled.');
+        return;
+    }
+    cordova.plugins.audiofocus.onFocusChange( function(focusState) {
+            console.log('[AudioFocus] change:', focusState);
+            if (focusState === "AUDIOFOCUS_LOSS" || focusState === "AUDIOFOCUS_LOSS_TRANSIENT") {
+                // Pause your audio playback here
+                pauseAllPlayers();
+            } else if (focusState === "AUDIOFOCUS_GAIN") {
+                // Resume your audio playback here
+                resumeAllPlayers();
+            } else if (focusState === "AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK") {
+                // Optionally lower your audio volume ("duck")
+            }
+        });
+    console.log('[AudioFocus] plugin available. Audio focus will be handled.');
+    requestAudioFocus()
+});
+
+function pauseAllPlayers() {
+    // Pause your audio playback here
+    PAUSED_PLAYERS = [];
+    ALL_PLAYERS.forEach(player => {
+        if (player.playing()) {
+            player.pause();
+            PAUSED_PLAYERS.push(player);
+        }
+    });
+    AUDIOFOCUS = 0;  // No focus
+    $('#resume-overlay').show();
+}
+
+function resumeAllPlayers() {
+    PAUSED_PLAYERS.forEach(player => player.play());
+    PAUSED_PLAYERS = [];
+    AUDIOFOCUS = 1;  // Focus gained
+    $('#resume-overlay').hide();
+}
+
+function requestAudioFocus() {
+    if (typeof cordova.plugins.audiofocus === 'undefined') return Promise.resolve();
+    return new Promise((resolve, reject) => {
+        cordova.plugins.audiofocus.requestFocus(
+            function() {
+                console.log('[AudioFocus] requested successfully.');
+                resumeAllPlayers();
+                resolve();
+            },
+            function(error) {
+                console.error('[AudioFocus] failed to request:', error);
+                reject(error);
+            }
+        );
+    });
+}
+
+$('#resume-button').on('click', function() { requestAudioFocus() })
+$('#resume-overlay').hide();
+
+
 class PlayerSimple extends EventEmitter
 {
     constructor(loop = false, fadetime = 1500) {
@@ -41,6 +108,10 @@ class PlayerSimple extends EventEmitter
             volume: 1,
             html5: html5enabled
         })
+
+        // Register the player in the global ALL_PLAYERS array
+        ALL_PLAYERS.push(this._player)
+
         this._player.on('end', () => {
             if (this._player) {
                 this.emit('end', this._player._src)
@@ -54,6 +125,7 @@ class PlayerSimple extends EventEmitter
             }
         })
         this._player.on('play', () => {
+
             if (this._player) {
                 this.emit('play', this._player._src)
                 console.log('PlayerSimple play:', this._player._src)
@@ -112,13 +184,15 @@ class PlayerSimple extends EventEmitter
         }
 
         if (seek >= 0) this._player.seek(seek)
-        this._player.play()
-        
-        if (this._fadeTime > 0) {
-            this._volume = volume
-            this._player.fade(this._player.volume() , this._volume * this._media.master, this._fadeTime)
-        }
-        else this.volume(volume)
+        requestAudioFocus().then(() => {
+            this._player.play()
+
+            if (this._fadeTime > 0) {
+                this._volume = volume
+                this._player.fade(this._player.volume(), this._volume * this._media.master, this._fadeTime)
+            }
+            else this.volume(volume)
+        })
     }
 
     resume(volume=1.0) {

@@ -81,15 +81,22 @@
             </div>
         </div>
 
+        <div id="checknotifications" class="page">
+            <h3 id="checknotifications-title">Notifications</h3>
+            <p id="checknotifications-desc">Vous devez autoriser les notifications pour que la localisation fonctionne en arrière plan.<br /><br />
+            Aucune notification ne vous sera envoyée.</p>
+            <button id="checknotifications-settings" class="btn btn-primary btn-page">Paramètres</button>
+        </div>
+
         <div id="checkbackground" class="page">
             <h3 id="checkbackground-title">Arrière-plan</h3>
-            <p id="checkbackground-desc">Un dernier test: verrouillez votre téléphone et écoutez les instructions audio ..
-            </p>
+            <p id="checkbackground-desc">Un dernier test: verrouillez votre téléphone et écoutez les instructions audio ..</p>
+            <button id="checkbackground-force" class="btn btn-primary btn-page">Passer cette étape</button>
         </div>
 
         <div id="nodata" class="page">
             <div class="content">
-                <p>Aucun parcours proche n'a été trouvé sur votre appareil.</p>
+                <p>Aucun parcours n'est chargé sur votre appareil.</p>
                     <br />
                 <p id="nodata-retry">Connectez vous à internet pour télécharger un parcours ...</p>
             </div>
@@ -148,8 +155,9 @@
 
         <div id="confirmios" class="page">
             <h3 id="confirmios-title">Géolocalisation</h3>
-            <p id="rdvios">ATTENTION: sur iPhone la localisation en veille ne fonctionne pas pour le moment.<br />
-                Vous devez laisser l'application ouverte pour que la géolocalisation fonctionne.<br />
+            <p id="rdvios">ATTENTION: sur iPhone la localisation en veille ne fonctionne pas directement.<br /><br />
+                Vous devez régler vous même les paramètres de localisation de l'application sur "Toujours".<br /><br />
+                Réglages > Apps > Flanerie > Position > Toujours.<br /><br />
             </p>
             <!-- <button id="confirmios-settings" class="btn btn-primary btn-page">Réglages</button> -->
             <button id="confirmios-accept" class="btn btn-primary btn-page">C'est compris</button>
@@ -204,6 +212,10 @@
         <div id="sidepanel" class="dev">
             <h4 id="logs-title">LOGS</h4>
             <div id="logs"></div>
+        </div>
+
+        <div id="resume-overlay">
+            <button id="resume-button" class="btn btn-primary">Reprendre l'écoute</button>
         </div>
 
     </div>

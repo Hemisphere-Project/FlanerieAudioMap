@@ -413,9 +413,9 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
         console.log('[INFO] Setting up BackgroundGeolocation');
     
         BackgroundGeolocation.configure({
-            locationProvider: BackgroundGeolocation.DISTANCE_FILTER_PROVIDER,
+            locationProvider: BackgroundGeolocation.RAW_PROVIDER, //BackgroundGeolocation.DISTANCE_FILTER_PROVIDER,
             desiredAccuracy: BackgroundGeolocation.HIGH_ACCURACY,
-            stationaryRadius: 0.1,
+            stationaryRadius: 0.01,
             distanceFilter: 0,
             pauseLocationUpdates: false,
             saveBatteryOnBackground: false,
@@ -536,13 +536,31 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
         APP_VISIBILITY = 'background';
         // you can also reconfigure service (changes will be applied immediately)
         // BackgroundGeolocation.configure({ debug: true });
+
+        // triggers document pause event
+        document.dispatchEvent(new Event('pause'));
     });
 
     BackgroundGeolocation.on('foreground', function() {
         console.log('[INFO] App is in foreground');
         APP_VISIBILITY = 'foreground';
         // BackgroundGeolocation.configure({ debug: false });
+
+        // triggers document resume event
+        document.dispatchEvent(new Event('resume'));
     });
+
+    document.addEventListener('pause', function() {
+        console.log('[INFO] App is paused');
+        APP_VISIBILITY = 'background';
+        // BackgroundGeolocation.switchMode(BackgroundGeolocation.BACKGROUND_MODE);
+    }, false);
+
+    document.addEventListener('resume', function() {
+        console.log('[INFO] App is resumed');
+        APP_VISIBILITY = 'foreground';
+        // BackgroundGeolocation.switchMode(BackgroundGeolocation.FOREGROUND_MODE);
+    }, false);
 
     backgroundGeolocSetup = true;
     return true;

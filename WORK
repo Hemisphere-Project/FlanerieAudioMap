@@ -72,48 +72,50 @@ FRAPPAZ
 
 OK BUG: iOS GPS Background
 OK BUG : DEVMODE, reset seems broken ?
-- BUG : LIST on clone, new name ignored
 
 OK EDIT: trim/clean spot / parcours names
 OK EDIT: export parcours CSV (for media check listing)
-- EDIT: point d'insert nouvelle etape (éviter d'ajouter en dernier)
 
 OK APP: Raccrochage de parcours si quitte app en cours
-- !! APP: parcours / media : full offline
-- APP: Show map on interrupt (or 30s Etape offlimits)
-- APP: pause audio on Call
-- APP: alert() -> better alerts
-- APP: GPS working symbol
-- APP: check Notifications auth android
-- APP: SAS code valide on keyboard enter
+OK APP: parcours / media : full offline
+OK APP: pause audio on Call Android
+OK APP: GPS working symbol
+OK APP: check Notifications auth android
+OK APP: SAS code valide on keyboard enter
 OK APP: Test battery level
 
+- APP: Show map on interrupt (or 30s Etape offlimits)
+- APP: check audio on Call iOS
+- APP: alert() -> better alerts
+- APP: MAP offline !
+- APP: Store progress time in media in steps => restore jumps to that point
+
+- BUG : LIST on clone, new name ignored
+- BUG: étudier les journeaux de logs
+- EDIT: hysteresis store value (volume inc)
+- EDIT: point d'insert nouvelle etape (éviter d'ajouter en dernier)
 - AMBIANCE: loop option / start from beggining / fade out time réglagble
+- Check position verrouillée: éteint ton tel -> écoute la voix 
 
 
 ***********************
 
 ONBOARDING
 
-- check notif (Android)
-- check background GPS (ios / android)
+OK check notif (Android)
+OK check background GPS (ios / android)
 
 J'Y SUIS
 OK Check battery
 OK Check Audio -> si tu as oublié un casque demande en un dans la tente
-- Check position verrouillée: éteint ton tel -> écoute la voix 
 
 CAPTURE d'ECRAN 
 autorisation GPS ios / android
 
 *******************
 
-- !! CALL: pause audio 
-
-***************
-
 - si quitte en cours de parcours:
-    OK Resume : last activated step => try to memorize progress in the step
+    - Resume : last activated step => try to memorize progress in the step
     OK Resume : skip audio test / skip battery test / skip code => mini test GPS
     OK Bouton Reset (DEV only ?)
 

@@ -116,7 +116,7 @@ PAGES['checkdata'] = () =>
             if (availableParcours.length > 0) PAGE('select', availableParcours);
             else PAGE('noparcours');
         })
-        // .catch(error => PAGE('nodata'));
+        .catch(error => PAGE('nodata'));
 }
     
 PAGES['nodata'] = () => {
@@ -226,8 +226,8 @@ PAGES['checkgeo'] = () => {
             })
     }
 
-    // if (!DEVMODE) {
-    if (false) {
+    if (!DEVMODE) {
+    // if (false) {
         checkGeo()
     }
     else if (PARCOURS.geomode() == 'simulate') {
@@ -306,6 +306,7 @@ PAGES['startgeo'] = () => {
     GEO.startGeoloc()
             .then(()=>{
                 if (PLATFORM == 'ios') PAGE('confirmios')
+                else if (PLATFORM == 'android') PAGE('checknotifications')
                 else PAGE('rdv')
             })
             .catch((e)=>{
@@ -317,6 +318,27 @@ PAGES['startgeo'] = () => {
 PAGES['confirmios'] = () => {
     $('#confirmios-settings').off().on('click', () => GEO.showAppSettings())
     $('#confirmios-accept').off().on('click', () => PAGE('rdv'))
+}
+
+PAGES['checknotifications'] = () => {
+    if (PLATFORM != 'android' || cordova.plugins.permissions == undefined) 
+        return PAGE('rdv');
+
+    $('#checknotifications-settings').show().off().on('click', () => GEO.showAppSettings());
+
+    function checkNotif() {
+        var permissions = cordova.plugins.permissions;
+        permissions.checkPermission(permissions.POST_NOTIFICATIONS, function(status) {
+            console.log('Notification permission status:', status.hasPermission);
+            if (status.hasPermission && APP_VISIBILITY == 'foreground') PAGE('rdv')
+            else setTimeout(() => { checkNotif() }, 1000);
+            }, function(e) {
+                // Error handling
+                console.error('Error checking notification permission', e);
+                return PAGE('rdv');
+            });
+    }
+    checkNotif();
 }
 
 //
@@ -423,91 +445,115 @@ PAGES['checkaudio'] = () => {
 // CHECK BATTERY
 //
 PAGES['checkbattery'] = () => {
-
-    if (BATTERY > 0 && BATTERY < 30) 
+    
+    if (BATTERY > 0 && BATTERY < 30) {
+        console.warn('[BATTERY] LOW:', BATTERY);
         alert('Attention, votre batterie est faible ! Pensez à la charger avant de commencer le parcours..')
+    }
+    else console.log('[BATTERY] OK:', BATTERY);
     PAGE('checkbackground')
 }
 
 //
 // CHECK BACKGROUND
 //
+var timersBG = null
 PAGES['checkbackground'] = () => {
-
-    // not WebApp: skip
-    if (!document.WEBAPP_URL) PAGE('sas');
-
-    // Show page
-    // When APP_VISIBILITY goes 'background'
-    // Start "testing background mode" audio
-    // Then if GEO.alive() is true after 10 seconds, 
-    // Play "test success" audio, and got to SAS page 
-    // Else, play "test failed" audio, and stay on this page,
-    // And show error message
-    var testResult = false;
     
-    function waitForBG() {
-        setTimeout(() => {
-            if (APP_VISIBILITY == 'background') testBG() 
-            else waitForBG()
-        }, 1000);
+    // not WebApp: skip
+    if (!document.WEBAPP_URL || GEO.mode() == 'simulate') {
+        return PAGE('sas');
     }
-    waitForBG();
 
-    function testBG() {
-        if (testplayer) testplayer.stop();
-        testplayer = new Howl({
-            src: BASEURL+'/images/background-test.mp3', autoplay: false, volume: 1, html5: (PLATFORM == 'ios')
-        })
-        testplayer.play();
+    // Players
+    var playerTEST = new Howl({
+        src: BASEURL+'/images/background-test.mp3', autoplay: false, volume: 1, html5: (PLATFORM == 'ios')
+    })
+    var playerOK = new Howl({
+        src: BASEURL+'/images/background-ok.mp3', autoplay: false, volume: 1, html5: (PLATFORM == 'ios')
+    })
+    var playerKO = new Howl({
+        src: BASEURL+'/images/background-ko.mp3', autoplay: false, volume: 1, html5: (PLATFORM == 'ios')
+    })
 
-        setTimeout(() => {
+    function cleanupTest() {
+        stopTest();
+        delete playerTEST;
+        delete playerOK;
+        delete playerKO;
+    }
+    function stopTest() {
+        clearTimeout(timersBG);
+        document.removeEventListener('pause', wentBG);
+        document.removeEventListener('resume', wentFG);
+        playerTEST.stop();
+        playerOK.stop();
+        playerKO.stop();
+    }
 
-            if (GEO.alive(1000)) {
-                if (testplayer) testplayer.stop();
-                testplayer = new Howl({
-                    src: BASEURL+'/images/background-ok.mp3', autoplay: false, volume: 1, html5: (PLATFORM == 'ios')
-                })
-                testplayer.play();
-                testResult = true;
+    // Skip button
+    $('#checkbackground-force').toggle(DEVMODE).off().on('click', () => {
+        cleanupTest();
+        PAGE('sas');
+    })
 
-            } else {
-                if (testplayer) testplayer.stop();
-                testplayer = new Howl({
-                    src: BASEURL+'/images/background-ko.mp3', autoplay: false, volume: 1, html5: (PLATFORM == 'ios')
-                })
-                testplayer.play();
-                testResult = false;
-            }
-            waitForFG()
+    var testResult = false;
+    var testCount = 0;
+    stopTest();
 
+    // Background test
+    function wentBG() {
+        console.log('[STATE] APP_VISIBILITY', APP_VISIBILITY);
+        stopTest();
+        document.addEventListener('resume', wentFG);        // listen for foreground
+        playerTEST.play();
+        console.log('[BACKGROUND] test started, playing wait instructions');
+        clearTimeout(timersBG);
+        testResult = false; 
+        timersBG = setTimeout(() => {
+            testResult = GEO.alive(5000);
         }, 10000);
+        testCount++;
     }
 
-    function waitForFG() {
-        setTimeout(() => {
-            if (APP_VISIBILITY == 'foreground') {
-                if (testResult) {
-                    console.log('[BACKGROUND] test success');
-                    PAGE('sas');
-                } else {
-                    console.log('[BACKGROUND] test failed');
-                    alert('Le test de fonctionnement en arrière-plan a échoué ..');
-                    $('#checkbackground-desc').html('Veuillez vérifier les paramètres de localisation et réessayer.<br /><br />\
-                                                Demandez de l\'aide à un membre de l\'équipe si besoin.');
-                    waitForBG();
-                }
-            }
-            else waitForFG()
-        }, 1000);
+    // Foreground test
+    function wentFG() {
+        console.log('[STATE] APP_VISIBILITY', APP_VISIBILITY);
+        stopTest();
+     
+        if (testResult) 
+        {
+            console.log('[BACKGROUND] test success');
+            $('#checkbackground-desc').html('TEST réussi ! Le GPS fonctionne bien en arrière-plan.');  
+            $('#checkbackground-force').toggle(DEVMODE)
+            playerOK.play();
+            setTimeout(() => {
+                cleanupTest();
+                PAGE('sas');
+            }, 4000);
+        } 
+        else {
+            console.log('[BACKGROUND] test failed');
+            playerKO.play();
+            $('#checkbackground-desc').html('ECHEC DU TEST: Veuillez vérifier les paramètres de localisation, désactivez le mode économie d\'énergie et réessayer de mettre en veille<br /><br />\
+                Demandez de l\'aide à un membre de l\'équipe si besoin.');
+            document.addEventListener('pause', wentBG);
+            if (testCount > 1) $('#checkbackground-force').show()
+        }
     }
+
+    document.addEventListener('pause', wentBG);
 }
 
 //
 // SAS
 //
 PAGES['sas'] = () => {
-    if (testplayer) testplayer.stop();
+    if (timersBG) clearTimeout(timersBG);
+    if (testplayer) {
+        testplayer.stop();
+        delete testplayer;
+    }
     $('#sas-code').hide()
 
     TYPEWRITE('sas-desc')
@@ -554,6 +600,7 @@ PAGES['sas'] = () => {
 // PARCOURS
 //
 PAGES['parcours'] = () => {
+    if (testplayer) testplayer.stop();
     console.log('PARCOURS', PARCOURS);
     // if (!PARCOURS.valid()) return PAGE('select')
 
@@ -779,7 +826,9 @@ $('#logs-title').on('click', (e) => {
     // if translate > 0 -> show sidebar else hide
     if (sidebar.style.transform == 'translateY(0px)') {
         sidebar.style.transform = 'translateY(95%)';
+        $('#logs').scrollTop($('#logs')[0].scrollHeight)
     } else {
         sidebar.style.transform = 'translateY(0px)';
+        $('#logs').scrollTop($('#logs')[0].scrollHeight)
     }
 });
