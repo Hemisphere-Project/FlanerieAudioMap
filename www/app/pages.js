@@ -352,19 +352,12 @@ PAGES['rdv'] = () => {
     $('#rdvdistance').hide()
 
     var checkpos = setInterval(() => {
-        if (!GEO.ready()) return;
+        if (PLATFORM != 'browser' && !GEO.ready()) return;
         let d = PARCOURS.find('steps', 0).distanceToBorder(GEO.position())
-
-        
-
         $('#rdvdistance').show().text('Distance: '+Math.round(d) + ' m');
-        // if (d < 0) {
-            // if (d < DISTANCE_RDV) {
         clearInterval(checkpos);
         $('#rdv-accept').show() 
         $('#rdvdistance').hide()
-        // }
-        
     }, 1000);
 
     // $('#rdv-desc').empty()

@@ -45,7 +45,12 @@ function resumeAllPlayers() {
 }
 
 function requestAudioFocus() {
-    if (typeof cordova.plugins.audiofocus === 'undefined') return Promise.resolve();
+    // if (!cordova || !cordova.plugins.audiofocus) return Promise.resolve();
+    // check if cordova and cordova.plugins.audiofocus are defined
+    if (typeof cordova === 'undefined' || typeof cordova.plugins.audiofocus === 'undefined') {
+        console.warn('[AudioFocus] plugin not available. Audio focus will not be requested.');
+        return Promise.resolve();
+    }
     return new Promise((resolve, reject) => {
         cordova.plugins.audiofocus.requestFocus(
             function() {
