@@ -321,8 +321,14 @@ PAGES['confirmios'] = () => {
 }
 
 PAGES['checknotifications'] = () => {
+
+    // Not Android or no permissions plugin: skip
     if (PLATFORM != 'android' || cordova.plugins.permissions == undefined) 
         return PAGE('rdv');
+
+    // Check Android version >= 13
+    var apiLevel = parseInt(device.version.split('.')[0], 10); // "13" for Android 13
+    if (apiLevel < 13) return PAGE('rdv');
 
     $('#checknotifications-settings').show().off().on('click', () => GEO.showAppSettings());
 
