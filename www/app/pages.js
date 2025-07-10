@@ -549,10 +549,6 @@ PAGES['checkbackground'] = () => {
 //
 PAGES['sas'] = () => {
     if (timersBG) clearTimeout(timersBG);
-    if (testplayer) {
-        testplayer.stop();
-        delete testplayer;
-    }
     $('#sas-code').hide()
 
     TYPEWRITE('sas-desc')
@@ -598,8 +594,36 @@ PAGES['sas'] = () => {
 //
 // PARCOURS
 //
+var SILENT_PLAYER = new PlayerSimple(true, 0);
+SILENT_PLAYER.load(BASEURL+'/images/', 'flanerie.mp3', false);
+
 PAGES['parcours'] = () => {
-    if (testplayer) testplayer.stop();
+
+    SILENT_PLAYER.play(); // Play silent track
+    
+    // Dummy player
+    if (testplayer) {
+        testplayer.stop();
+        delete testplayer;
+    }
+    testplayer = new Howl({
+        src: BASEURL+'/images/flanerie.mp3',
+        loop: true,
+        autoplay: false,
+        volume: 1,
+        html5: (PLATFORM == 'ios')
+    })
+    testplayer.play()
+    testplayer.on('play', () => {
+        console.log('[AUDIO] Playing silent track');
+    })
+    testplayer.on('pause', () => {
+        console.log('[AUDIO] Paused silent track');
+    })
+
+
+
+
     console.log('PARCOURS', PARCOURS);
     // if (!PARCOURS.valid()) return PAGE('select')
 

@@ -284,6 +284,12 @@ class Spot extends EventEmitter
             console.log('Spot load:', this._spot.name, this.player.isLoaded())
         }
 
+        // Far: unload if loaded
+        if (this.player && this.player.isLoaded() && !this.near(pos)) {
+            this.player.clear()
+            console.log('Spot unload:', this._spot.name, this.player.isLoaded())
+        }
+
         // Enter / Leave event
         let inside = this.inside(pos)
         if (inside && !this._wasInside) {
@@ -498,7 +504,11 @@ class Step extends Spot
             allSteps.filter(s => s._index !== this._index).map( s => {
                 let wasPlaying = s.player.isPlaying() || s.player.isPaused()
                 s.player.stop() 
-                if (wasPlaying) s.emit('done', s)
+                if (wasPlaying) {
+                    s.player.clear()
+                    s.emit('done', s)
+                }
+                // console.log('Stopping step:', s._index, s._spot.name, 'wasPlaying:', wasPlaying)
             })
             
             // Play

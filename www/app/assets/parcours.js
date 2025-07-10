@@ -419,7 +419,14 @@ class Parcours extends EventEmitter {
             if (this.spots[type]) this.spots[type].map(s => s.player.stop());
         }
         else {
-            for (let type in this.spots) this.spots[type].map(s => s.player.stop());
+            for (let type in this.spots) {
+                console.log('Stopping audio for type', type);
+                this.spots[type].map(s => {
+                    s.player.stop(0)
+                    // if (s.player.isPlaying()) 
+                    //     console.warn('IS PLAYING:', s.name(), s.player._media);
+                });
+            }
         }
     }
 

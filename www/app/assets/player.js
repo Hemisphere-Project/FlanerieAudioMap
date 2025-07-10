@@ -2,6 +2,9 @@ var ALL_PLAYERS = []
 var PAUSED_PLAYERS = []  // Interrupted players that are paused and can be resumed later
 var AUDIOFOCUS = -1  // Audio focus state, -1 means not available, 0 means no focus, 1 means focus gained
 
+Howler.autoUnlock = true; // Enable automatic context unlocking
+Howler.autoSuspend = false; // Prevent automatic context suspension
+
 // Watch for audio focus changes
 document.addEventListener('deviceready', function() {
     if (typeof cordova.plugins.audiofocus === 'undefined') {
@@ -23,6 +26,16 @@ document.addEventListener('deviceready', function() {
     console.log('[AudioFocus] plugin available. Audio focus will be handled.');
     requestAudioFocus()
 });
+
+setInterval(() => {
+    // List all players and state, every 5 seconds
+    let playingPlayers = ALL_PLAYERS.filter(player => player.playing());
+    console.log('PLAYING:', playingPlayers.map(player => ({
+        src: player._src,
+        playing: player.playing(),
+        volume: player.volume()
+    })));
+}, 5000);
 
 function pauseAllPlayers() {
     // Pause your audio playback here
@@ -48,7 +61,7 @@ function requestAudioFocus() {
     // if (!cordova || !cordova.plugins.audiofocus) return Promise.resolve();
     // check if cordova and cordova.plugins.audiofocus are defined
     if (typeof cordova === 'undefined' || typeof cordova.plugins.audiofocus === 'undefined') {
-        console.warn('[AudioFocus] plugin not available. Audio focus will not be requested.');
+        // console.warn('[AudioFocus] plugin not available. Audio focus will not be requested.');
         return Promise.resolve();
     }
     return new Promise((resolve, reject) => {
@@ -78,19 +91,17 @@ class PlayerSimple extends EventEmitter
         this._fadeTime = fadetime 
         this._player = null
         this.isGoingOut = null
+        this._playRequested = false
         this._volume = 0
-
         this._media = null
     }
 
-    load(basepath, media) {
-        this.clear()
-
+    load(basepath, media, usemediapath = true) {
         this._media = media
         
         if (!media || !media.src || media.src == '-') return
 
-        if (document.LOCALMEDIA_PATH) {
+        if (usemediapath && document.LOCALMEDIA_PATH) {
             let localpath = document.LOCALMEDIA_PATH.split('/')
             let lastlocalelement = localpath[localpath.length - 1] || localpath[localpath.length - 2]
             let firstBasePath = basepath.split('/')[0] || basepath.split('/')[1]
@@ -106,6 +117,7 @@ class PlayerSimple extends EventEmitter
         let html5enabled = false
         try { html5enabled = (cordova.platformId == 'ios') } catch (e) {}
 
+        this.clear()
         this._player = new Howl({
             src: basepath + media.src,
             loop: this._loop,
@@ -118,33 +130,41 @@ class PlayerSimple extends EventEmitter
         ALL_PLAYERS.push(this._player)
 
         this._player.on('end', () => {
-            if (this._player) {
-                this.emit('end', this._player._src)
-                // console.log('PlayerSimple end:', this._player._src)
-            }
+            if (!this._player) return
+            console.log('PlayerSimple end:', this._player._src)
+            this._playRequested = false
+            this.emit('end', this._player._src)
+            // console.log('PlayerSimple end:', this._player._src)
         })
         this._player.on('stop', () => {
+            if (!this._player) return
+            console.log('PlayerSimple stop:', this._player._src)
+            this._playRequested = false
             if (this._player) {
                 this.emit('stop', this._player._src)
                 console.log('PlayerSimple stop:', this._player._src)
             }
         })
         this._player.on('play', () => {
-
-            if (this._player) {
-                this.emit('play', this._player._src)
-                console.log('PlayerSimple play:', this._player._src)
+            if (!this._player) return
+            if (!this._playRequested) {
+                console.warn('PlayerSimple play but not is not requested ...')
+                this._player.stop()
+                return
             }
+            this._playRequested = false
+            this.emit('play', this._player._src)
+            console.log('PlayerSimple play:', this._player._src)
         })
         this._player.on('pause', () => {
-            if (this._player) {
-                this.emit('pause', this._player._src)
-                // console.log('PlayerSimple pause:', this._player._src)
+            if (!this._player) return
+            console.log('PlayerSimple pause:', this._player._src)
+            this.emit('pause', this._player._src)
+            // console.log('PlayerSimple pause:', this._player._src)
 
-                if (this._rewindOnPause !== undefined) {
-                    let d = this._rewindOnPause > 0 ? this._rewindOnPause : this._fadeTime
-                    this._player.seek(this._player.seek() - d / 1000)
-                }
+            if (this._rewindOnPause !== undefined) {
+                let d = this._rewindOnPause > 0 ? this._rewindOnPause : this._fadeTime
+                this._player.seek(this._player.seek() - d / 1000)
             }
         })
         this._player.on('load', () => {
@@ -160,6 +180,9 @@ class PlayerSimple extends EventEmitter
 
     clear() {  
         if (this._player !== null) {
+            // remove from global ALL_PLAYERS array
+            ALL_PLAYERS = ALL_PLAYERS.filter(player => player !== this._player)
+            PAUSED_PLAYERS = PAUSED_PLAYERS.filter(player => player !== this._player)
             this._player.stop()
             this._player.unload()
             this._player = null
@@ -176,9 +199,12 @@ class PlayerSimple extends EventEmitter
     }
 
     play(seek=0, volume=1.0) {
-        if (!this._player) {
+        if (!this._player) return
+        if (this._playRequested) {
+            // console.warn('PlayerSimple play requested but already requesting ...')
             return
         }
+        
         if (this.isGoingOut) {
             clearTimeout(this.isGoingOut)
             this.isGoingOut = null
@@ -187,10 +213,15 @@ class PlayerSimple extends EventEmitter
         else if (this._player.playing()) {
             return
         }
+        this._player.pause()
+
 
         if (seek >= 0) this._player.seek(seek)
+        this._playRequested = true
         requestAudioFocus().then(() => {
+            if (!this._player) return
             this._player.play()
+            console.log('PlayerSimple PLAY:', this._player._src, 'seek:', seek, 'volume:', volume)
 
             if (this._fadeTime > 0) {
                 this._volume = volume
@@ -198,6 +229,10 @@ class PlayerSimple extends EventEmitter
             }
             else this.volume(volume)
         })
+        .catch(error => {
+            console.error('[AudioFocus] Error requesting focus:', error);
+            this._playRequested = false;
+        });
     }
 
     resume(volume=1.0) {
@@ -206,6 +241,11 @@ class PlayerSimple extends EventEmitter
 
     stop() {
         if (!this._player) return
+        if (this._playRequested) {
+            console.warn('PlayerSimple stop but play requesting ...')
+            this._playRequested = false
+            return
+        }
         if (!this._player.playing()) return
         this._player.stop()
     }
@@ -259,7 +299,7 @@ class PlayerSimple extends EventEmitter
     }
 
     isPlaying() {
-        return this._player.playing() && !this.isGoingOut
+        return this._player && (this._player.playing() || this._playRequested) && !this.isGoingOut
     }
 
     isLoaded() {
@@ -280,6 +320,7 @@ class PlayerSimple extends EventEmitter
         this._volume = 0
 
         this.isGoingOut = setTimeout(() => {
+            if (!this._player) return
             this._player.stop()
             this.isGoingOut = null
             // console.log('PlayerSimple stopOut done')
@@ -295,6 +336,7 @@ class PlayerSimple extends EventEmitter
         this._volume = 0
 
         this.isGoingOut = setTimeout(() => {
+            if (!this._player) return
             this._player.pause()
             this.isGoingOut = null
             // console.log('PlayerSimple pauseOut done')
@@ -376,12 +418,14 @@ class PlayerStep extends EventEmitter
         if (wasNotPlay) this.emit('play')
     }
 
-    stop() {
-        this.voice.stopOut()
-        this.music.stopOut()
-        this.ambiant.stopOut()
-        this.offlimit.stopOut()
-        this.afterplay.stopOut()    
+    stop(d=-1) {
+        this.voice.stopOut(d)
+        this.music.stopOut(d)
+        this.ambiant.stopOut(d)
+        this.offlimit.stopOut(d)
+        this.afterplay.stopOut(d)
+
+
         let wasNotStop = this.state !== 'stop'
         this.state = 'stop'
         if (wasNotStop) this.emit('stop')
