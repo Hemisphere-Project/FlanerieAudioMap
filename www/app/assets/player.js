@@ -186,6 +186,7 @@ class PlayerSimple extends EventEmitter
             this._player.stop()
             this._player.unload()
             this._player = null
+            this._playRequested = false
         }
     }
 
