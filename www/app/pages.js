@@ -60,6 +60,9 @@ function TYPEWRITE(id, delay = 50, initialDelay = 0) {
 //
 PAGES['title'] = () => {
     TYPEWRITE('title', 90, 1000)
+        .pauseFor(2000)
+        .callFunction(() => {if(currentPage=='title') PAGE('intro')} );
+
     $('#title').off('click').on('click', () => {
         PAGE('intro') 
     });
@@ -603,6 +606,7 @@ SILENT_PLAYER.load(BASEURL+'/images/', 'flanerie.mp3', false);
 PAGES['parcours'] = () => {
 
     SILENT_PLAYER.play(); // Play silent track
+    scheduleWakeupNotification();
     
     // Dummy player
     if (testplayer) {
@@ -864,6 +868,7 @@ $('#logs-title').on('click', (e) => {
 // var GPSLOST_PLAYER = new PlayerSimple(true, 0);
 // GPSLOST_PLAYER.load(BASEURL+'/images/', 'gpslost.mp3', false);
 
+
 var GPSLOST_PLAYER = new Howl({
         src: BASEURL+'/images/gpslost.mp3',
         loop: true,
@@ -872,16 +877,88 @@ var GPSLOST_PLAYER = new Howl({
         html5: (PLATFORM == 'ios')
     })
 
-GEO.stateUpdateTimeout = 10000 // 10 seconds to update state
+GEO.stateUpdateTimeout = (PLATFORM == 'ios') ? 300000 : 10000; // iOS: 5minutes, Android: 10s
 GEO.on('stateUpdate', (state) => {
     if (state == 'lost') {
+        if (currentPage != 'parcours') return; // only if on parcours paged
+        if (AUDIOFOCUS == 0) return
         console.warn('GEO lost position');
         pauseAllPlayers()
         GPSLOST_PLAYER.play();
     }
     if (state == 'ok') {
+        if (currentPage != 'parcours') return; // only if on parcours page
+        if (AUDIOFOCUS == 0) return
         console.log('GEO position ok');
         GPSLOST_PLAYER.stop();
         resumeAllPlayers();
     }
+    console.log('GEO stateUpdate', state, currentPage, AUDIOFOCUS);
 })
+
+
+/// NOTIFICATIONS TRIGGER
+// Trigger a silent notification
+const NOTIF_REPEAT = 1 * 59 * 1000; // 59 seconds
+var NOTIF_COUNTER = 37;
+function scheduleWakeupNotification() {
+    if (!cordova || !cordova.plugins || !cordova.plugins.notification || !cordova.plugins.notification.local) {
+        console.warn('NOTIF: cordova.plugins.notification.local not available, notifications will not work');
+        return
+    }
+
+    // cordova.plugins.notification.local.clear(999, () => {
+    //     console.log('NOTIF: cleared wakeup notification');
+    // });
+
+    if (currentPage === 'parcours')
+        cordova.plugins.notification.local.schedule({
+            id: NOTIF_COUNTER,
+            text: 'Flanerie en cours..', // Empty text for minimal visibility
+            at: new Date(Date.now() + NOTIF_REPEAT),
+            sound: null,
+            silent: false, // Must be false on Android to appear
+            launch: false,
+            // priority: -2, // PRIORITY_MIN (Android)
+            visibility: 0, // Secret visibility (Android)
+            channel: 'silent', 
+            // smallIcon: 'res://icon', // Use app icon
+            androidAutoCancel: true, // Auto-remove after trigger
+            // wakeup: false, // Don't wake screen
+            iOSForeground: false,
+            foreground: false // Don't show when app is foreground
+        });
+
+    setTimeout(() => {
+        scheduleWakeupNotification()
+    }, NOTIF_REPEAT); // Clear after 59 seconds
+    console.log('NOTIF: Prepare next wakeup notification');
+}
+
+document.addEventListener('deviceready', () => {
+    console.log('Device is ready');
+
+    cordova.plugins.notification.local.clear(NOTIF_COUNTER, () => {
+        console.log('NOTIF: cleared wakeup notification', NOTIF_COUNTER);
+    });
+
+    // Listen for notification triggers to wake up JS context
+    if (cordova && cordova.plugins && cordova.plugins.notification && cordova.plugins.notification.local) {
+        cordova.plugins.notification.local.on('trigger', function(notification) {
+            if (notification.id == NOTIF_COUNTER) {
+                console.log('NOTIF: Wakeup notification triggered, JS context awakened');
+
+                // clear the notification
+                cordova.plugins.notification.local.clear(notification.id, () => {
+                    console.log('NOTIF: cleared wakeup notification', notification.id);
+                });
+                
+                // Refresh coordination logic if on parcours page
+                // if (currentPage === 'parcours') scheduleWakeupNotification()
+            }
+        });
+    }
+    
+}, false);
+
+

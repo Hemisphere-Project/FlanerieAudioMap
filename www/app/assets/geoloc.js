@@ -107,7 +107,7 @@ class GeoLoc extends EventEmitter {
         this.runMode = 'off';   // off, gps, simulate
 
         this.stateUpdate = 'off'; // off, ok, lost
-        this.stateUpdateTimeout = 3000; // 10 seconds
+        this.stateUpdateTimeout = 10000; // 10 seconds
 
         this.stateUpdateTimer = setInterval(() => {
             let nextStep = this.stateUpdate;

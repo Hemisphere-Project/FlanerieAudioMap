@@ -278,7 +278,7 @@ input[type=number].input-page::-webkit-outer-spin-button {
     right: 0;
     bottom: 0;
     background-color: rgba(0, 0, 0, 0.8);
-    display: flex;
+    display: none;
     justify-content: center;
     align-items: center;
     z-index: 1001;
