@@ -458,7 +458,10 @@ PAGES['checkbattery'] = () => {
 //
 var timersBG = null
 PAGES['checkbackground'] = () => {
-    
+
+    // SKIP TEST
+    return PAGE('sas');
+
     // not WebApp: skip
     if (!document.WEBAPP_URL || GEO.mode() == 'simulate') {
         return PAGE('sas');
