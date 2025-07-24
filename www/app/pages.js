@@ -858,3 +858,30 @@ $('#logs-title').on('click', (e) => {
         $('#logs').scrollTop($('#logs')[0].scrollHeight)
     }
 });
+
+
+// GPS LOST
+// var GPSLOST_PLAYER = new PlayerSimple(true, 0);
+// GPSLOST_PLAYER.load(BASEURL+'/images/', 'gpslost.mp3', false);
+
+var GPSLOST_PLAYER = new Howl({
+        src: BASEURL+'/images/gpslost.mp3',
+        loop: true,
+        autoplay: false,
+        volume: 1,
+        html5: (PLATFORM == 'ios')
+    })
+
+GEO.stateUpdateTimeout = 10000 // 10 seconds to update state
+GEO.on('stateUpdate', (state) => {
+    if (state == 'lost') {
+        console.warn('GEO lost position');
+        pauseAllPlayers()
+        GPSLOST_PLAYER.play();
+    }
+    if (state == 'ok') {
+        console.log('GEO position ok');
+        GPSLOST_PLAYER.stop();
+        resumeAllPlayers();
+    }
+})

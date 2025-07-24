@@ -105,6 +105,21 @@ class GeoLoc extends EventEmitter {
         this.map = null;
 
         this.runMode = 'off';   // off, gps, simulate
+
+        this.stateUpdate = 'off'; // off, ok, lost
+        this.stateUpdateTimeout = 3000; // 10 seconds
+
+        this.stateUpdateTimer = setInterval(() => {
+            let nextStep = this.stateUpdate;
+            if (this.lastTimeUpdate == null) nextStep = 'off';
+            else if ( (this.lastTimeUpdate + this.stateUpdateTimeout) < Date.now()) nextStep = 'lost';
+            else nextStep = 'ok';
+
+            if (this.stateUpdate != nextStep) {
+                this.stateUpdate = nextStep;
+                this.emit('stateUpdate', nextStep);
+            }
+        }, 1000);
     }
 
     _callbackPosition(position) 

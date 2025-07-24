@@ -16,9 +16,13 @@ document.addEventListener('deviceready', function() {
             if (focusState === "AUDIOFOCUS_LOSS" || focusState === "AUDIOFOCUS_LOSS_TRANSIENT") {
                 // Pause your audio playback here
                 pauseAllPlayers();
+                AUDIOFOCUS = 0;  // No focus
+                $('#resume-overlay').show();
             } else if (focusState === "AUDIOFOCUS_GAIN") {
                 // Resume your audio playback here
                 resumeAllPlayers();
+                AUDIOFOCUS = 1;  // Focus gained
+                $('#resume-overlay').hide();
             } else if (focusState === "AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK") {
                 // Optionally lower your audio volume ("duck")
             }
@@ -27,34 +31,34 @@ document.addEventListener('deviceready', function() {
     requestAudioFocus()
 });
 
-setInterval(() => {
-    // List all players and state, every 5 seconds
-    let playingPlayers = ALL_PLAYERS.filter(player => player.playing());
-    console.log('PLAYING:', playingPlayers.map(player => ({
-        src: player._src,
-        playing: player.playing(),
-        volume: player.volume()
-    })));
-}, 5000);
+// setInterval(() => {
+//     // List all players and state, every 5 seconds
+//     let playingPlayers = ALL_PLAYERS.filter(player => player.playing());
+//     console.log('PLAYING:', playingPlayers.map(player => ({
+//         src: player._src,
+//         playing: player.playing(),
+//         volume: player.volume()
+//     })));
+// }, 5000);
 
 function pauseAllPlayers() {
     // Pause your audio playback here
     PAUSED_PLAYERS = [];
     ALL_PLAYERS.forEach(player => {
-        if (player.playing()) {
+        if (player.isPlaying()) {
             player.pause();
             PAUSED_PLAYERS.push(player);
+            console.log('Paused player:', player._src);
         }
     });
-    AUDIOFOCUS = 0;  // No focus
-    $('#resume-overlay').show();
 }
 
 function resumeAllPlayers() {
-    PAUSED_PLAYERS.forEach(player => player.play());
+    PAUSED_PLAYERS.forEach(player => {
+        player.resume();
+        console.log('Resumed player:', player._src);
+    });
     PAUSED_PLAYERS = [];
-    AUDIOFOCUS = 1;  // Focus gained
-    $('#resume-overlay').hide();
 }
 
 function requestAudioFocus() {
@@ -69,10 +73,15 @@ function requestAudioFocus() {
             function() {
                 console.log('[AudioFocus] requested successfully.');
                 resumeAllPlayers();
+                AUDIOFOCUS = 1;  // Focus gained
+                $('#resume-overlay').hide();
                 resolve();
             },
             function(error) {
                 console.error('[AudioFocus] failed to request:', error);
+                pauseAllPlayers();
+                AUDIOFOCUS = 0;  // No focus
+                $('#resume-overlay').show();
                 reject(error);
             }
         );
@@ -127,7 +136,7 @@ class PlayerSimple extends EventEmitter
         })
 
         // Register the player in the global ALL_PLAYERS array
-        ALL_PLAYERS.push(this._player)
+        ALL_PLAYERS.push(this)
 
         this._player.on('end', () => {
             if (!this._player) return
@@ -148,7 +157,7 @@ class PlayerSimple extends EventEmitter
         this._player.on('play', () => {
             if (!this._player) return
             if (!this._playRequested) {
-                console.warn('PlayerSimple play but not is not requested ...')
+                console.warn('PlayerSimple play but is not requested ...')
                 this._player.stop()
                 return
             }
@@ -181,8 +190,8 @@ class PlayerSimple extends EventEmitter
     clear() {  
         if (this._player !== null) {
             // remove from global ALL_PLAYERS array
-            ALL_PLAYERS = ALL_PLAYERS.filter(player => player !== this._player)
-            PAUSED_PLAYERS = PAUSED_PLAYERS.filter(player => player !== this._player)
+            ALL_PLAYERS = ALL_PLAYERS.filter(player => player !== this)
+            PAUSED_PLAYERS = PAUSED_PLAYERS.filter(player => player !== this)
             this._player.stop()
             this._player.unload()
             this._player = null
