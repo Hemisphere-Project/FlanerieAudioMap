@@ -938,12 +938,12 @@ function scheduleWakeupNotification() {
 document.addEventListener('deviceready', () => {
     console.log('Device is ready');
 
-    cordova.plugins.notification.local.clear(NOTIF_COUNTER, () => {
-        console.log('NOTIF: cleared wakeup notification', NOTIF_COUNTER);
-    });
-
     // Listen for notification triggers to wake up JS context
     if (cordova && cordova.plugins && cordova.plugins.notification && cordova.plugins.notification.local) {
+        cordova.plugins.notification.local.clear(NOTIF_COUNTER, () => {
+            console.log('NOTIF: cleared wakeup notification', NOTIF_COUNTER);
+        });
+
         cordova.plugins.notification.local.on('trigger', function(notification) {
             if (notification.id == NOTIF_COUNTER) {
                 console.log('NOTIF: Wakeup notification triggered, JS context awakened');
