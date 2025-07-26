@@ -65,7 +65,7 @@ function requestAudioFocus() {
     // if (!cordova || !cordova.plugins.audiofocus) return Promise.resolve();
     // check if cordova and cordova.plugins.audiofocus are defined
     if (typeof cordova === 'undefined' || typeof cordova.plugins.audiofocus === 'undefined') {
-        // console.warn('[AudioFocus] plugin not available. Audio focus will not be requested.');
+        console.warn('[AudioFocus] plugin not available. Audio focus will not be requested.');
         return Promise.resolve();
     }
     return new Promise((resolve, reject) => {
@@ -211,13 +211,14 @@ class PlayerSimple extends EventEmitter
     play(seek=0, volume=1.0) {
         if (!this._player) return
         if (this._playRequested) {
-            // console.warn('PlayerSimple play requested but already requesting ...')
+            console.warn('PlayerSimple play requested but already requesting ...')
             return
         }
         
         if (this.isGoingOut) {
             clearTimeout(this.isGoingOut)
             this.isGoingOut = null
+            console.warn('PlayerSimple play requested but going out ...')
             this._player.pause()
         }
         else if (this._player.playing()) {
@@ -228,9 +229,12 @@ class PlayerSimple extends EventEmitter
 
         if (seek >= 0) this._player.seek(seek)
         this._playRequested = true
-        requestAudioFocus().then(() => {
+        console.log('PlayerSimple play requested:', this._player._src, 'seek:', seek, 'volume:', volume)
+
+        if (PLATFORM == 'ios' || AUDIOFOCUS < 1) {
             if (!this._player) return
             this._player.play()
+
             console.log('PlayerSimple PLAY:', this._player._src, 'seek:', seek, 'volume:', volume)
 
             if (this._fadeTime > 0) {
@@ -238,11 +242,24 @@ class PlayerSimple extends EventEmitter
                 this._player.fade(this._player.volume(), this._volume * this._media.master, this._fadeTime)
             }
             else this.volume(volume)
-        })
-        .catch(error => {
-            console.error('[AudioFocus] Error requesting focus:', error);
-            this._playRequested = false;
-        });
+        }
+        else {
+            requestAudioFocus().then(() => {
+                if (!this._player) return
+                this._player.play()
+                console.log('PlayerSimple PLAY:', this._player._src, 'seek:', seek, 'volume:', volume)
+    
+                if (this._fadeTime > 0) {
+                    this._volume = volume
+                    this._player.fade(this._player.volume(), this._volume * this._media.master, this._fadeTime)
+                }
+                else this.volume(volume)
+            })
+            .catch(error => {
+                console.error('[AudioFocus] Error requesting focus:', error);
+                this._playRequested = false;
+            });
+        }
     }
 
     resume(volume=1.0) {
