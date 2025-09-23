@@ -118,3 +118,31 @@ autorisation GPS ios / android
     OK Resume : skip audio test / skip battery test / skip code => mini test GPS
     OK Bouton Reset (DEV only ?)
 
+
+***********************
+
+CALL 09/09/25
+
+********** En mode SIMULATION sur téléphone, pourrais-tu désactiver le test de mouvement GPS ? Ou le cantonner à la première zone? Sans ça je dois garder constamment le doigt sur l'écran pour le faire bouger et déjouer le test : ) 
+
+BUG: clone -> ne prend pas en compte le nom du clone
+
+dans l'éditeur de parcours, quand on crée un objet sur la carte ça a tendance à dézoomer et à recentrer l'objet. Mais en général j'ai plutôt envie de continuer de voir ma zone en cours à la taille d'affichage actuelle (et sans recentrage)
+Idem quand on sélectionne un objet dans la liste à gauche : peut-on essayer qu'il ne se passe rien d'autre hormis contraste plus important de couleur (mais sans zoom ni recentrage) 
+
+
+zone en cours jaune , target rouge => changer ce code couleur
+
+BUG: notif -> disable audio ducking
+
+Fade de sortie: 
+- ambiance un peu plus long 
+- mettre un fade de sortie sur les étapes => après Tarare ?
+
+Crash quand relance d'appli manuel (dé-instace notif interne ?)
+
+Hebergement APP infomaniak NodeJS
+
+Etape numerotation commence à 0
+
+Chitchatter -> instance sur infomaniak

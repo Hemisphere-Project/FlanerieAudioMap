@@ -10,6 +10,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
+import crypto from 'crypto';
 
 // Create express app
 const app = express();
@@ -39,6 +40,34 @@ app.use(express.static(path.join(__dirname, 'www')));
 
 // static audio files
 app.use('/media', express.static(path.join(__dirname, 'media')));
+
+// json media list: send list of files in media folder in format
+// { filepath1: checksum, filepath2: checksum, ...}
+// filepath is relative to media folder
+// checksum is md5 checksum of the file
+app.get('/medialist', (req, res) => {
+  const mediaDir = path.join(__dirname, 'media');
+  const fileList = {};
+  function walkDir(currentPath) {
+    const files = fs.readdirSync(currentPath);
+    files.forEach(file => {
+      const filePath = path.join(currentPath, file);
+      const stat = fs.statSync(filePath);
+      if (stat.isDirectory()) {
+        walkDir(filePath);
+      } else {
+        const relativePath = path.relative(mediaDir, filePath).replace(/\\/g, '/');
+        const fileBuffer = fs.readFileSync(filePath);
+        const hashSum = crypto.createHash('md5');
+        hashSum.update(fileBuffer);
+        const hex = hashSum.digest('hex');
+        fileList[relativePath] = hex;
+      }
+    });
+  }
+  walkDir(mediaDir);
+  res.json(fileList);
+});
 
 // Default endpoint: redirect to /app
 app.get("/", (req, res) => {

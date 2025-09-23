@@ -877,7 +877,7 @@ var GPSLOST_PLAYER = new Howl({
         html5: (PLATFORM == 'ios')
     })
 
-GEO.stateUpdateTimeout = (PLATFORM == 'ios') ? 300000 : 10000; // iOS: 5minutes, Android: 10s
+GEO.stateUpdateTimeout = (PLATFORM == 'android') ? 10 * 1000 : 5 * 60 * 1000; // 10s on Android, 5 min on iOS
 GEO.on('stateUpdate', (state) => {
     if (state == 'lost') {
         if (currentPage != 'parcours') return; // only if on parcours paged
@@ -902,6 +902,7 @@ GEO.on('stateUpdate', (state) => {
 const NOTIF_REPEAT = 1 * 59 * 1000; // 59 seconds
 var NOTIF_COUNTER = 37;
 function scheduleWakeupNotification() {
+    if (PLATFORM != 'android' && PLATFORM != 'ios') return
     if (!cordova || !cordova.plugins || !cordova.plugins.notification || !cordova.plugins.notification.local) {
         console.warn('NOTIF: cordova.plugins.notification.local not available, notifications will not work');
         return
@@ -937,6 +938,7 @@ function scheduleWakeupNotification() {
 
 document.addEventListener('deviceready', () => {
     console.log('Device is ready');
+    if (PLATFORM != 'android' && PLATFORM != 'ios') return
 
     // Listen for notification triggers to wake up JS context
     if (cordova && cordova.plugins && cordova.plugins.notification && cordova.plugins.notification.local) {
