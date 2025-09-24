@@ -12,9 +12,15 @@ import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import crypto from 'crypto';
 
+// Simple Auth
+import { useSimpleAuth, requireAuth, handleLogin } from './modules/simpleAuth.js';
+
 // Create express app
 const app = express();
 const upload = multer({ dest: 'media/' });
+
+// Use simple auth (cookie parser)
+useSimpleAuth(app);
 
 // Set the port
 const port = process.env.PORT || 3000;
@@ -137,17 +143,20 @@ app.get('/sync/:type/:subdomain', async (req, res) => {
   }
 });
 
+// Login route
+app.all('/login', (req, res) => handleLogin(req, res));
+
 // Default endpoint: redirect to /app
 app.get("/", (req, res) => {
   res.redirect('/app');
 });
 
-// Default endpoint
-app.get('/control', (req, res) => {
+// Protected /control
+app.get('/control', requireAuth, (req, res) => {
     res.sendFile(path.join(__dirname, 'www', 'control', 'list.html'));
 }); 
 
-// Proto endpoint
+// Proto endpoint (not protected)
 app.get('/proto', (req, res) => {
     res.sendFile(path.join(__dirname, 'www', 'control', 'proto.html'));
 });
@@ -196,7 +205,7 @@ app.get('/list', (req, res) => {
 });
 
 // new parcours
-app.post('/newParcours', express.json(), (req, res) => {
+app.post('/newParcours', requireAuth, express.json(), (req, res) => {
   const name = req.body.name;
   const fileName = name.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
 
@@ -215,7 +224,7 @@ app.post('/newParcours', express.json(), (req, res) => {
 });
 
 // delete parcours
-app.post('/deleteParcours', express.json(), (req, res) => {
+app.post('/deleteParcours', requireAuth, express.json(), (req, res) => {
   const fileName = req.body.file;
   const filePath = './parcours/' + fileName + '.json';
   fs.unlinkSync(filePath);
@@ -228,7 +237,7 @@ app.post('/deleteParcours', express.json(), (req, res) => {
 });
 
 // clone Parcours
-app.post('/cloneParcours', express.json(), (req, res) => {
+app.post('/cloneParcours', requireAuth, express.json(), (req, res) => {
   const fileName = req.body.file;
   const filePath = './parcours/' + fileName + '.json';
   const content = JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -254,7 +263,7 @@ app.post('/cloneParcours', express.json(), (req, res) => {
   res.status(200).send();
 });
 
-// edit parcours
+// edit parcours (protected)
 app.get('/edit/:file', (req, res) => {
   res.sendFile(path.join(__dirname, 'www', 'control', 'edit.html'));
 });
@@ -268,7 +277,7 @@ app.get('/edit/:file/json', (req, res) => {
 });
 
 // save parcours json
-app.post('/edit/:file/json', express.json(), (req, res) => {
+app.post('/edit/:file/json', requireAuth, express.json(), (req, res) => {
   try {
     const fileName = req.params.file;
     const filePath = './parcours/' + fileName + '.json';
@@ -410,7 +419,7 @@ app.get('/mediaList/:parcours', (req, res) => {
 });  
 
 // Upload media file with folder argument from file argument
-app.post('/mediaUpload/:parcours/:folder/:name?', upload.single('file'), (req, res) => 
+app.post('/mediaUpload/:parcours/:folder/:name?', requireAuth, upload.single('file'), (req, res) => 
 {
 
   console.log('mediaUpload', req.file, req.params.parcours, req.params.folder, req.params.name);
@@ -425,7 +434,7 @@ app.post('/mediaUpload/:parcours/:folder/:name?', upload.single('file'), (req, r
 });
 
 // Remove media file
-app.get('/mediaRemove/:parcours/:folder/:file', (req, res) => {
+app.get('/mediaRemove/:parcours/:folder/:file', requireAuth, (req, res) => {
   const mediaFolder = './media/' + req.params.parcours + '/' + req.params.folder + '/';
   const filePath = mediaFolder + req.params.file;
   fs.unlinkSync(filePath, (err) => {
@@ -435,7 +444,7 @@ app.get('/mediaRemove/:parcours/:folder/:file', (req, res) => {
 });
 
 // Remove folder and all files inside
-app.get('/mediaRemoveFolder/:parcours/:folder', (req, res) => {
+app.get('/mediaRemoveFolder/:parcours/:folder', requireAuth, (req, res) => {
   const mediaFolder = './media/' + req.params.parcours + '/' + req.params.folder;
   if (req.params.folder)
     fs.rm(mediaFolder, { recursive: true }, (err) => {
@@ -451,7 +460,7 @@ app.get('/show/:file', (req, res) => {
 });
 
 // Restart server
-app.get('/restartServer', (req, res) => {
+app.get('/restartServer', requireAuth, (req, res) => {
   console.log('Restarting server...');
   res.status(200).send();
   setTimeout(() => {
