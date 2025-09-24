@@ -41,6 +41,8 @@ app.use(express.static(path.join(__dirname, 'www')));
 // static audio files
 app.use('/media', express.static(path.join(__dirname, 'media')));
 
+// static parcours files
+app.use('/parcours', express.static(path.join(__dirname, 'parcours')));
 
 // utils
 function walkDir(basePath, currentPath, list = {}) {
@@ -88,11 +90,11 @@ app.get('/sync/:type/:subdomain', async (req, res) => {
   const domain = process.env.DOMAIN || 'example.com';
   let listUrl, localDir, remoteList, localList = {}, fileUrlPrefix;
   if (type === 'media') {
-    listUrl = `https://${subdomain}.${domain}/medialist`;
+    listUrl = `https://${subdomain}.${domain}/list/media`;
     localDir = path.join(__dirname, 'media');
     fileUrlPrefix = `https://${subdomain}.${domain}/media/`;
   } else if (type === 'parcours') {
-    listUrl = `https://${subdomain}.${domain}/parcourslist`;
+    listUrl = `https://${subdomain}.${domain}/list/parcours`;
     localDir = path.join(__dirname, 'parcours');
     fileUrlPrefix = `https://${subdomain}.${domain}/parcours/`;
   } else {
