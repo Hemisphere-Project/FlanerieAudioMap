@@ -41,32 +41,98 @@ app.use(express.static(path.join(__dirname, 'www')));
 // static audio files
 app.use('/media', express.static(path.join(__dirname, 'media')));
 
-// json media list: send list of files in media folder in format
-// { filepath1: checksum, filepath2: checksum, ...}
-// filepath is relative to media folder
-// checksum is md5 checksum of the file
-app.get('/medialist', (req, res) => {
-  const mediaDir = path.join(__dirname, 'media');
-  const fileList = {};
-  function walkDir(currentPath) {
-    const files = fs.readdirSync(currentPath);
-    files.forEach(file => {
-      const filePath = path.join(currentPath, file);
-      const stat = fs.statSync(filePath);
-      if (stat.isDirectory()) {
-        walkDir(filePath);
-      } else {
-        const relativePath = path.relative(mediaDir, filePath).replace(/\\/g, '/');
-        const fileBuffer = fs.readFileSync(filePath);
-        const hashSum = crypto.createHash('md5');
-        hashSum.update(fileBuffer);
-        const hex = hashSum.digest('hex');
-        fileList[relativePath] = hex;
-      }
-    });
+
+// utils
+function walkDir(basePath, currentPath, list = {}) {
+  const files = fs.readdirSync(currentPath);
+  files.forEach(file => {
+    const filePath = path.join(currentPath, file);
+    const stat = fs.statSync(filePath);
+    if (stat.isDirectory()) {
+      walkDir(basePath, filePath, list);
+    } else {
+      const relativePath = path.relative(basePath, filePath).replace(/\\/g, '/');
+      const fileBuffer = fs.readFileSync(filePath);
+      const hashSum = crypto.createHash('md5');
+      hashSum.update(fileBuffer);
+      const hex = hashSum.digest('hex');
+      list[relativePath] = hex;
+    }
+  });
+}
+
+
+// Unified list route for media and parcours
+// /list/:type where type is 'media' or 'parcours'
+app.get('/list/:type', (req, res) => {
+  const { type } = req.params;
+  let dir;
+  if (type === 'media') {
+    dir = path.join(__dirname, 'media');
+  } else if (type === 'parcours') {
+    dir = path.join(__dirname, 'parcours');
+  } else {
+    res.status(400).json({ error: 'Invalid list type' });
+    return;
   }
-  walkDir(mediaDir);
+  const fileList = {};
+  walkDir(dir, dir, fileList);
   res.json(fileList);
+});
+
+
+// Unified sync route for media and parcours
+// /sync/:type/:subdomain where type is 'media' or 'parcours'
+app.get('/sync/:type/:subdomain', async (req, res) => {
+  const { type, subdomain } = req.params;
+  const domain = process.env.DOMAIN || 'example.com';
+  let listUrl, localDir, remoteList, localList = {}, fileUrlPrefix;
+  if (type === 'media') {
+    listUrl = `https://${subdomain}.${domain}/medialist`;
+    localDir = path.join(__dirname, 'media');
+    fileUrlPrefix = `https://${subdomain}.${domain}/media/`;
+  } else if (type === 'parcours') {
+    listUrl = `https://${subdomain}.${domain}/parcourslist`;
+    localDir = path.join(__dirname, 'parcours');
+    fileUrlPrefix = `https://${subdomain}.${domain}/parcours/`;
+  } else {
+    res.status(400).json({ error: 'Invalid sync type' });
+    return;
+  }
+  console.log(`Syncing ${type} from`, listUrl);
+  try {
+    const response = await fetch(listUrl);
+    if (!response.ok) throw new Error(`Failed to fetch ${type} list: ${response.statusText}`);
+    remoteList = await response.json();
+    walkDir(localDir, localDir, localList);
+    const filesToDownload = [];
+    for (const [filePath, remoteChecksum] of Object.entries(remoteList)) {
+      if (localList[filePath] !== remoteChecksum) {
+        filesToDownload.push(filePath);
+      }
+    }
+    console.log('Files to download:', filesToDownload);
+    for (const filePath of filesToDownload) {
+      const fileUrl = fileUrlPrefix + filePath;
+      const localFilePath = path.join(localDir, filePath);
+      const localDirPath = path.dirname(localFilePath);
+      if (!fs.existsSync(localDirPath)) fs.mkdirSync(localDirPath, { recursive: true });
+      console.log('Downloading', fileUrl);
+      const fileResponse = await fetch(fileUrl);
+      if (!fileResponse.ok) {
+        console.error(`Failed to download ${fileUrl}: ${fileResponse.statusText}`);
+        continue;
+      }
+      const fileStream = fs.createWriteStream(localFilePath);
+      const { pipeline } = await import('stream/promises');
+      await pipeline(fileResponse.body, fileStream);
+      console.log('Downloaded', filePath);
+    }
+    res.json({ message: `${type.charAt(0).toUpperCase() + type.slice(1)} sync completed`, filesDownloaded: filesToDownload.length });
+  } catch (error) {
+    console.error(`Error during ${type} sync:`, error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // Default endpoint: redirect to /app
