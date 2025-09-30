@@ -1,6 +1,10 @@
 var DISTANCE_MATCH = 20; // 20m 
 var DISTANCE_RDV = 20; // 10m (to validate RDV)
 
+var COLOR_DONE = 'grey';
+var COLOR_NEXT = 'blue';
+var COLOR_CURRENT = '#43FAF2';
+
 var DEVMODE = localStorage.getItem('devmode') == 'true' || false;
 
 var PLATFORM = 'browser';
@@ -646,29 +650,35 @@ PAGES['parcours'] = () => {
             dragging: false,
         })
     
-    PARCOURS.hideSpotMarkers()
+    PARCOURS.hideSpotMarkers() // hide all markers
+
+    // DEV: show
+    if (DEVMODE) {
+        PARCOURS.showSpotMarkers('offlimits');
+        PARCOURS.showSpotMarkers('steps');
+    } 
 
     // Function to update markers
     function updateStepsMarkers() {
 
-        // Mark passed steps in grey, current step in yellow
+        // Mark passed steps in grey, current step in red
         PARCOURS.spots.steps.forEach((s, i) => {
             if (i < PARCOURS.currentStep()) {
-                s.showMarker('grey', 0.5)
+                s.showMarker(COLOR_DONE, 0.5)
             }
             else if (i == PARCOURS.currentStep()) {
-                s.showMarker('yellow')
+                s.showMarker(COLOR_CURRENT, 0.5)
             }
         })
 
-        // Show next steps in red
+        // Show next steps in yellow
         let i = PARCOURS.currentStep() + 1;
         let sNext = PARCOURS.find('steps', i)
         while (sNext) {
-            sNext.showMarker('red')
-            if (!sNext._spot.optional) break;
+            sNext.showMarker(COLOR_NEXT)
+            if (!DEVMODE && !sNext._spot.optional) break;
             i++;
-            if (!DEVMODE) break;    // show only next step in normal mode
+            // if (!DEVMODE) break;    // show only next step in normal mode
             sNext = PARCOURS.find('steps', i)
         }
     }
@@ -703,7 +713,7 @@ PAGES['parcours'] = () => {
     // ON step done: hide
     PARCOURS.on('done', (s) => {
         if (s._type != 'steps') return
-        s.showMarker('grey', 0.5)
+        s.showMarker(COLOR_DONE, 0.5)
 
         // Last step
         if (s._index + 1 == PARCOURS.spots.steps.length) {
@@ -734,7 +744,7 @@ PAGES['parcours'] = () => {
     if (PARCOURS.currentStep() < 0) {
         console.log('FIRST RUN')
         TYPEWRITE('parcours-init')
-        PARCOURS.find('steps', 0).showMarker('red')
+        PARCOURS.find('steps', 0).showMarker(COLOR_NEXT)
     }
 
     // RESUME
@@ -752,7 +762,7 @@ PAGES['parcours'] = () => {
     {
         // Set fake position
         var position = PARCOURS.find('steps', 0).getCenterPosition()
-        position[0] += 0.0004
+        // position[0] += 0.0004
         console.log('SET POSITION', position)
         GEO.setPosition(position)
     }
@@ -835,9 +845,9 @@ $('#parcours-rearm').click(() => {
     PARCOURS.currentStep(-2) // Reset current step
     PARCOURS.stopAudio()
 
-    // set all steps markers to red
+    // set all steps markers to yellow
     PARCOURS.spots.steps.forEach((s, i) => {
-        s.showMarker('red')
+        s.showMarker(COLOR_NEXT)
     })
 
     setTimeout(() => document.MAP.fire('move'), 2000)
@@ -881,6 +891,7 @@ GEO.stateUpdateTimeout = (PLATFORM == 'android') ? 10 * 1000 : 5 * 60 * 1000; //
 GEO.on('stateUpdate', (state) => {
     if (state == 'lost') {
         if (currentPage != 'parcours') return; // only if on parcours paged
+        if (GEO.mode() == 'simulate') return; // not in simulate mode
         if (AUDIOFOCUS == 0) return
         console.warn('GEO lost position');
         pauseAllPlayers()

@@ -4,6 +4,8 @@ const CROSSFADE_DUMP = 4
 
 // GLOBALS
 
+var PLATFORM = 'browser';
+
 console._log = console.log
 if ($('#logs').length && FRONT_LOGS) 
 console.log = function(...message) {

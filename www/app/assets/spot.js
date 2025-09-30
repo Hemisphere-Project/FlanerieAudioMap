@@ -102,7 +102,7 @@ class Spot extends EventEmitter
             this._marker.setStyle({color: color, fillColor: color})
         }
         if (opacity) this._marker.setStyle({
-            fillOpacity: opacity/2,
+            fillOpacity: opacity/1.5,
             opacity: opacity,
         })
 
@@ -334,7 +334,7 @@ class Zone extends Spot
         this._marker.bindTooltip(this._spot.media.src)
 
         // player
-        this.player = new PlayerSimple(true, spot.mode == 'Ambiance' ? 1500 : 0)
+        this.player = new PlayerSimple(true, spot.mode == 'Ambiance' ? 4000 : 0)
     }
     
 

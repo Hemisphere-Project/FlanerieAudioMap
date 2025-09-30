@@ -1,10 +1,7 @@
 
 - Etape ne peut jouer avant la précédente (optional ?)
-
 - Nouveau type d'objet: Interruption (pause Etapes, trigger) 
-
 - Edit fade in/out time par étape
-
 - autosave -> history -> ctrl-z
 - export / import backup
 
@@ -13,11 +10,8 @@
     - prepare Geoloc on start ?
 
 - Back inside offlimit => play précurseur "bon j'en étais où ?"
-
 - Reglage temps de latence avant de lancement du média 
-
 - Temps de "confirmation" avant du lancement d'une étape
-
 - Balise GPS
 
 ========= Post Guillotière Décembre 2024
@@ -83,18 +77,8 @@ OK APP: GPS working symbol
 OK APP: check Notifications auth android
 OK APP: SAS code valide on keyboard enter
 OK APP: Test battery level
-
-- APP: monitor and AUDIO ALERT when GPS lost for too long !
-- APP: Show map on interrupt (or 30s Etape offlimits)
-- APP: check audio on Call iOS
-- APP: alert() -> better alerts
-- APP: MAP offline !
-- APP: Store progress time in media in steps => restore jumps to that point
-
-- BUG : LIST on clone, new name ignored
-- EDIT: hysteresis store value (volume inc)
-- EDIT: point d'insert nouvelle etape (éviter d'ajouter en dernier)
-- AMBIANCE: loop option / start from beggining / fade out time réglagble
+OK APP: monitor and AUDIO ALERT when GPS lost for too long !
+OK BUG : LIST on clone, new name ignored
 
 
 ***********************
@@ -123,26 +107,33 @@ autorisation GPS ios / android
 
 CALL 09/09/25
 
-********** En mode SIMULATION sur téléphone, pourrais-tu désactiver le test de mouvement GPS ? Ou le cantonner à la première zone? Sans ça je dois garder constamment le doigt sur l'écran pour le faire bouger et déjouer le test : ) 
+x Disable GPS test in sim
+x zone en cours jaune , target rouge => changer ce code couleur
+x EDIT: disable FlyTo on select
+x EDIT: disable FlyTo on new
+x BUG: clone -> ne prend pas en compte le nom du clone
+x Hebergement APP infomaniak NodeJS
+x Restart on crash (infomaniak)
+x Fade de sortie ambiance un peu plus long => passé de 1500 à 2500 
+x Update icons
+X BUG: in edit listen audio broken !
+X on name edit -> prevent flyto
 
-BUG: clone -> ne prend pas en compte le nom du clone
-
-dans l'éditeur de parcours, quand on crée un objet sur la carte ça a tendance à dézoomer et à recentrer l'objet. Mais en général j'ai plutôt envie de continuer de voir ma zone en cours à la taille d'affichage actuelle (et sans recentrage)
-Idem quand on sélectionne un objet dans la liste à gauche : peut-on essayer qu'il ne se passe rien d'autre hormis contraste plus important de couleur (mais sans zoom ni recentrage) 
-
-
-zone en cours jaune , target rouge => changer ce code couleur
-
-BUG: notif -> disable audio ducking
-
-Fade de sortie: 
-- ambiance un peu plus long 
+- BUG: notif -> disable audio ducking (to be tested to be sure silent notif DOES it stuff !)
 - mettre un fade de sortie sur les étapes => après Tarare ?
 
-Crash quand relance d'appli manuel (dé-instace notif interne ?)
+- BUG: Crash quand relance d'appli manuel (dé-instace notif interne ?)
 
-Hebergement APP infomaniak NodeJS
+- Chitchatter -> instance sur infomaniak
 
-Etape numerotation commence à 0
+- EDIT: Etape numerotation commence à 0
+- AMBIANCE: loop option / fade out time réglagble
+- EDIT: hysteresis store value (volume inc)
+- EDIT: point d'insert nouvelle etape (éviter d'ajouter en dernier)
+- APP: Show map on interrupt (or 30s Etape offlimits)
+- APP: check audio on Call iOS
+- APP: alert() -> better alerts
+- APP: MAP offline !
+- APP: Store progress time in media in steps => restore jumps to that point
 
-Chitchatter -> instance sur infomaniak
+- En DEV: afficher les sorties de route sur la carte

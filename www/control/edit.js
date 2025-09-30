@@ -1,3 +1,5 @@
+var PLATFORM = 'browser';
+
 // title click -> back to control
 document.getElementById('title').addEventListener('click', () => {
     window.location.href = '/control';
@@ -45,7 +47,7 @@ function fillZones(type, divID, mediaFolder) {
             // li element
             const li = $('<li class="list-group-item spots-edit zones-edit">')
                             .appendTo(divID)
-                            .click(() => z.select().center())
+                            .click(() => z.select())  // .center()
             
             
             // header div : title + buttons
@@ -147,8 +149,9 @@ function fillZones(type, divID, mediaFolder) {
 // LOAD
 //
 // Get parcours json
+var reloading = false
 function load() {
-    return PARCOURS.load(parcoursID)
+    return PARCOURS.load(parcoursID, reloading)
             .then(() => {
 
                 // Set info
@@ -158,6 +161,7 @@ function load() {
                 document.getElementById('pCoordsLink').href = 'https://www.openstreetmap.org/#map=' + PARCOURS.info.coords 
 
                 // Editable all
+                reloading = false
                 PARCOURS.editable()
                 PARCOURS.loadAudio()
 
@@ -288,7 +292,7 @@ function load() {
                         })
 
                         // Spot select
-                        li.click(() => s.select().center())
+                        li.click(() => s.select()) // .center()
 
                         // on select
                         s.on('selected', () => {
@@ -328,7 +332,10 @@ function save(reload = true) {
 
             PARCOURS.save().then(() => {
                 toastSuccess('Sauvegardé')
-                if (reload) loadMediaList().then(load).then(resolve)
+                if (reload) {
+                    reloading = true
+                    loadMediaList().then(load).then(resolve)
+                }
                 else resolve()
             })
             .catch(error => {

@@ -31,7 +31,7 @@ const __dirname = dirname(__filename);
 
 // Apply Github Hooks
 import applyGithubHook from './modules/github-hook.js';
-applyGithubHook(app, '/webhook', process.env.GITHOOK_SECRET);
+// applyGithubHook(app, '/webhook', process.env.GITHOOK_SECRET);
 
 // Apply updater
 import applyUpdater from './modules/updater.js';
@@ -241,7 +241,7 @@ app.post('/cloneParcours', requireAuth, express.json(), (req, res) => {
   const fileName = req.body.file;
   const filePath = './parcours/' + fileName + '.json';
   const content = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-  content.name = req.body.name;
+  content.info.name = req.body.name;
   const newFileName = req.body.name.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
   const newFilePath = './parcours/' + newFileName + '.json';
   fs.writeFileSync(newFilePath, JSON.stringify(content, null, 2));

@@ -91,7 +91,7 @@ class Parcours extends EventEmitter {
     }
 
     // Build parcours from data
-    build(data) {
+    build(data, reloading = false) {
         
         // Check
         if (!data || !('info' in data)) throw new Error('No data');
@@ -110,7 +110,7 @@ class Parcours extends EventEmitter {
         this.coords = { lat: lat, lng: lng };
 
         // Map
-        if (this.map) this.map.setView(geo_coords(this.coords), zoom);
+        if (this.map && !reloading) this.map.setView(geo_coords(this.coords), zoom);
 
         // Spots
         for (let type in data.spots)
@@ -125,7 +125,7 @@ class Parcours extends EventEmitter {
         return this;
     }
 
-    load(parcoursID) {
+    load(parcoursID, reloading = false) {
         return new Promise((resolve, reject) => {
             if (!parcoursID) parcoursID = this.pID;
             else this.pID = parcoursID;
@@ -140,7 +140,7 @@ class Parcours extends EventEmitter {
 
                     // BUILD PARCOURS from remote data
                     data.pID = parcoursID; // ensure pID is set
-                    this.build(data);
+                    this.build(data, reloading);
 
                     // ESTIMATE MEDIA
                     this.loadmedia( true ) // true -> dryrun ! must call loadmedia() to actually load media
@@ -267,6 +267,18 @@ class Parcours extends EventEmitter {
     hideSpotMarkers() {
         for (let type in this.spots) {
             this.spots[type].map(s => s.hideMarker());
+        }
+        return this;
+    }
+
+    showSpotMarkers(type = null) {
+        if (type) {
+            if (this.spots[type]) this.spots[type].map(s => s.showMarker());
+        }
+        else {
+            for (let t in this.spots) {
+                this.spots[t].map(s => s.showMarker());
+            }
         }
         return this;
     }
