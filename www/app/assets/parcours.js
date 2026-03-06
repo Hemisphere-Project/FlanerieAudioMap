@@ -31,7 +31,8 @@ class Parcours extends EventEmitter {
         this.info = {
             name: '',
             status: '',
-            coords: ''
+            coords: '',
+            cutoff: -1
         };
 
         // Clear state
@@ -120,6 +121,11 @@ class Parcours extends EventEmitter {
         // Load State
         if (data.state) this.state = { ...this.state, ...data.state };
         this.state.medialoaded = this.state.mediaPackSize > 0 && this.state.mediaPackLoaded >= this.state.mediaPackSize;
+
+        // Link with GEO
+        GEO.on('position', (position) => {
+            this.update(position)
+        })
 
         this.store();
         return this;
@@ -376,6 +382,7 @@ class Parcours extends EventEmitter {
     }
 
     update(position) {
+        if (this.state.geoMode === null) return;
 
         let offlimit = false;
 
@@ -402,10 +409,12 @@ class Parcours extends EventEmitter {
     // Start tracking with GEO
     startTracking() {
         this.state.geoMode = GEO.mode();
-        GEO.on('position', (position) => {
-            this.update(position)
-        })
         this.store();
+    }
+
+    // Stop tracking with GEO
+    stopTracking() {
+        this.state.geoMode = null;
     }
 
     // Give current geo mode

@@ -287,7 +287,7 @@ class Spot extends EventEmitter
         // Far: unload if loaded
         if (this.player && this.player.isLoaded() && !this.near(pos)) {
             this.player.clear()
-            console.log('Spot unload:', this._spot.name, this.player.isLoaded())
+            // console.log('Spot unload:', this._spot.name, this.player.isLoaded())
         }
 
         // Enter / Leave event

@@ -159,6 +159,7 @@ function load() {
                 document.getElementById('pStatus').value = PARCOURS.info.status
                 document.getElementById('pCoords').value = PARCOURS.info.coords
                 document.getElementById('pCoordsLink').href = 'https://www.openstreetmap.org/#map=' + PARCOURS.info.coords 
+                document.getElementById('pCutoff').value = PARCOURS.info.cutoff !== undefined ? PARCOURS.info.cutoff : -1
 
                 // Editable all
                 reloading = false
@@ -364,6 +365,22 @@ document.getElementById('pName').addEventListener('change', () => {
     $('#pName').removeClass('is-invalid')
 
     PARCOURS.info.name = name
+    save()
+})
+
+// Cutoff on change => save
+document.getElementById('pCutoff').addEventListener('change', () => {
+
+    // check if cutoff is valid
+    const cutoff = parseInt(document.getElementById('pCutoff').value)
+    if (isNaN(cutoff) || cutoff < -1) {
+        toastError('Coupure GPS invalide')
+        $('#pCutoff').addClass('is-invalid')
+        return
+    }
+    $('#pCutoff').removeClass('is-invalid')
+
+    PARCOURS.info.cutoff = cutoff
     save()
 })
 

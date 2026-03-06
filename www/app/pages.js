@@ -633,8 +633,6 @@ PAGES['parcours'] = () => {
     })
 
 
-
-
     console.log('PARCOURS', PARCOURS);
     // if (!PARCOURS.valid()) return PAGE('select')
 
@@ -705,6 +703,18 @@ PAGES['parcours'] = () => {
             setTimeout(() => {
                 $('#parcours-lost').show()
             }, 5000)
+        }
+
+        // Last step: prepare GPS cutoff
+        if (PARCOURS.currentStep() + 1 == PARCOURS.spots.steps.length) {
+            if (PARCOURS.info.cutoff === undefined || PARCOURS.info.cutoff <= 0) return;
+            console.log('LAST STEP: prepare GPS cutoff in '+PARCOURS.info.cutoff+' seconds');
+            setTimeout(() => {
+                if (PARCOURS.currentStep() + 1 == PARCOURS.spots.steps.length) {
+                    console.log('LAST STEP: cut GPS');
+                    PARCOURS.stopTracking()
+                }
+            }, PARCOURS.info.cutoff * 1000); // seconds
         }
 
         isResume = false;
@@ -843,6 +853,7 @@ devmode(DEVMODE);
 $('#parcours-rearm').click(() => {
     console.log('REARM');
     PARCOURS.currentStep(-2) // Reset current step
+    PARCOURS.startTracking()
     PARCOURS.stopAudio()
 
     // set all steps markers to yellow
@@ -890,8 +901,9 @@ var GPSLOST_PLAYER = new Howl({
 GEO.stateUpdateTimeout = (PLATFORM == 'android') ? 10 * 1000 : 5 * 60 * 1000; // 10s on Android, 5 min on iOS
 GEO.on('stateUpdate', (state) => {
     if (state == 'lost') {
-        if (currentPage != 'parcours') return; // only if on parcours paged
-        if (GEO.mode() == 'simulate') return; // not in simulate mode
+        if (currentPage != 'parcours') return;                                  // only if on parcours paged
+        if (GEO.mode() == 'simulate') return;                                   // not in simulate mode
+        if (PARCOURS.currentStep() == PARCOURS.spots.steps.length - 1) return;  // not if last step
         if (AUDIOFOCUS == 0) return
         console.warn('GEO lost position');
         pauseAllPlayers()

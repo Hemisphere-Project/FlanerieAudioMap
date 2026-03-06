@@ -139,3 +139,27 @@ option[value=\*] {
 .bg-ambiant {
     background-color: #5958a7;
 }
+
+.mr-1 {
+    margin-right: 0.25rem;
+}
+
+tr.parcours-row td {
+    background-color: transparent;
+}
+
+tr.status-test {
+    background-color: darkgoldenrod;
+}
+
+tr.status-draft {
+    /* background-color: darkgray; */
+}
+
+tr.status-public {
+    background-color: darkgreen;
+}
+
+tr.status-old {
+    background-color: #000;
+}

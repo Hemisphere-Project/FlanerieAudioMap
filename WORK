@@ -118,6 +118,7 @@ x Fade de sortie ambiance un peu plus long => passé de 1500 à 2500
 x Update icons
 X BUG: in edit listen audio broken !
 X on name edit -> prevent flyto
+x En DEV: afficher les sorties de route sur la carte
 
 - BUG: notif -> disable audio ducking (to be tested to be sure silent notif DOES it stuff !)
 - mettre un fade de sortie sur les étapes => après Tarare ?
@@ -136,4 +137,3 @@ X on name edit -> prevent flyto
 - APP: MAP offline !
 - APP: Store progress time in media in steps => restore jumps to that point
 
-- En DEV: afficher les sorties de route sur la carte

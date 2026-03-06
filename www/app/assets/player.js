@@ -467,7 +467,10 @@ class PlayerStep extends EventEmitter
         this.afterplay.pauseOut()
         let wasNotPause = this.state !== 'pause'
         this.state = 'pause'
-        if (wasNotPause) this.emit('pause')
+        if (wasNotPause) {
+            this.emit('pause')
+            console.log('PlayerStep pause')
+        }
     }
 
     resume() {

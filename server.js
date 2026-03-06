@@ -198,7 +198,8 @@ app.get('/list', (req, res) => {
       name: parcoursContent.info.name, 
       status: parcoursContent.info.status, 
       time: fs.statSync(parcoursFolder + file).mtime,
-      coords: parcoursContent.info.coords
+      coords: parcoursContent.info.coords,
+      cutoff: parcoursContent.info.cutoff !== undefined ? parcoursContent.info.cutoff : -1
     });
   });
   res.json(parcours);  
@@ -216,7 +217,7 @@ app.post('/newParcours', requireAuth, express.json(), (req, res) => {
 
   const filePath = './parcours/' + fileName + '.json';
 
-  const content = {info: {name: name, status: 'draft'}};
+  const content = {info: {name: name, status: 'draft', coords: '', cutoff: -1}, spots: {zones: [], steps: [], offlimits: []}};
 
   // write beautiful json file
   fs.writeFileSync(filePath, JSON.stringify(content, null, 2));
