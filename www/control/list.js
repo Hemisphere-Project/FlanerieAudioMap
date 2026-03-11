@@ -112,9 +112,16 @@ function refreshList() {
 
 // New Parcours btn
 document.getElementById('newParcours').addEventListener('click', () => {
-
-    // prompt
-    const name = prompt('Enter the name of the new parcours').trim()
+    let name;
+    if (USER_ROLE === 'guest') {
+        name = prompt('Nom du nouveau parcours');
+        if (!name) return;
+        name = 'GUEST_' + name.trim();
+    } else {
+        name = prompt('Enter the name of the new parcours');
+        if (!name) return;
+        name = name.trim();
+    }
     if (!name) return;
 
     post('/newParcours', {name: name})
@@ -136,4 +143,29 @@ document.getElementById('restartServer').addEventListener('click', () => {
     }
 })
 
-refreshList()
+// Guest Password management
+document.getElementById('guestPassword').addEventListener('click', () => {
+    fetchRemote('/guestPassword')
+        .then(r => r.json())
+        .then(data => {
+            const newPassword = prompt('Mot de passe Guest actuel: ' + data.password + '\n\nNouveau mot de passe:', data.password);
+            if (newPassword === null) return;
+            if (!newPassword.trim()) { alert('Le mot de passe ne peut pas être vide'); return; }
+            post('/guestPassword', { password: newPassword.trim() })
+                .then(() => alert('Mot de passe Guest mis à jour'))
+        })
+})
+
+// Fetch role and initialize
+var USER_ROLE = 'guest';
+fetchRemote('/auth/role')
+    .then(r => r.json())
+    .then(data => {
+        USER_ROLE = data.role;
+        if (USER_ROLE === 'guest') {
+            document.getElementById('restartServer').style.display = 'none';
+            document.getElementById('guestPassword').style.display = 'none';
+        }
+        refreshList();
+    })
+    .catch(() => refreshList());

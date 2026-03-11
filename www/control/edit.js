@@ -1,5 +1,16 @@
 var PLATFORM = 'browser';
 
+// User role
+var USER_ROLE = 'guest';
+fetchRemote('/auth/role')
+    .then(r => r.json())
+    .then(data => {
+        USER_ROLE = data.role;
+        if (USER_ROLE === 'guest') {
+            document.getElementById('pStatus').disabled = true;
+        }
+    });
+
 // title click -> back to control
 document.getElementById('title').addEventListener('click', () => {
     window.location.href = '/control';
@@ -356,7 +367,14 @@ function save(reload = true) {
 document.getElementById('pName').addEventListener('change', () => {
 
     // check if name is valid
-    const name = document.getElementById('pName').value
+    let name = document.getElementById('pName').value
+
+    // Guest: enforce GUEST_ prefix
+    if (USER_ROLE === 'guest' && !name.startsWith('GUEST_')) {
+        name = 'GUEST_' + name
+        document.getElementById('pName').value = name
+    }
+
     if (name.length < 3) {
         toastError('Nom trop court')
         $('#pName').addClass('is-invalid')
@@ -402,7 +420,7 @@ document.getElementById('pCoords').addEventListener('change', () => {
 
 // Status on change => save
 document.getElementById('pStatus').addEventListener('change', () => {
-    // check if status is valid
+    if (USER_ROLE === 'guest') return;
     const status = document.getElementById('pStatus').value
     PARCOURS.info.status = status
     save()

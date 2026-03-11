@@ -13,7 +13,7 @@ import { dirname } from 'path';
 import crypto from 'crypto';
 
 // Simple Auth
-import { useSimpleAuth, requireAuth, handleLogin } from './modules/simpleAuth.js';
+import { useSimpleAuth, requireAuth, requireAdmin, handleLogin, getUserRole, getGuestPassword, setGuestPassword } from './modules/simpleAuth.js';
 
 // Create express app
 const app = express();
@@ -146,6 +146,25 @@ app.get('/sync/:type/:subdomain', async (req, res) => {
 // Login route
 app.all('/login', (req, res) => handleLogin(req, res));
 
+// Auth role endpoint
+app.get('/auth/role', requireAuth, (req, res) => {
+  res.json({ role: req.userRole });
+});
+
+// Guest password management (admin only)
+app.get('/guestPassword', requireAdmin, (req, res) => {
+  res.json({ password: getGuestPassword() });
+});
+
+app.post('/guestPassword', requireAdmin, express.json(), (req, res) => {
+  const password = req.body.password;
+  if (!password || password.length < 1) {
+    return res.status(400).json({ error: 'Password is required' });
+  }
+  setGuestPassword(password);
+  res.json({ ok: true });
+});
+
 // Default endpoint: redirect to /app
 app.get("/", (req, res) => {
   res.redirect('/app');
@@ -185,14 +204,20 @@ app.post('/errorhandler', express.urlencoded({ extended: true }), (req, res) => 
 
 // List parcours
 app.get('/list', (req, res) => {
-  // list of parcours name and status based on json files in parcours folder
+  const role = getUserRole(req);
   const parcoursFolder = './parcours/';
   const parcours = [];
   fs.readdirSync(parcoursFolder).forEach(file => {
     if (!file.endsWith('.json')) return;
     const parcoursFileName = file.split('.json')[0];
-    // console.log('parcours', parcoursFileName);
     const parcoursContent = JSON.parse(fs.readFileSync(parcoursFolder + file, 'utf8'));
+
+    // Guest filtering: only GUEST_ prefixed, non-archived
+    if (role === 'guest') {
+      if (!parcoursContent.info.name.startsWith('GUEST_')) return;
+      if (parcoursContent.info.status === 'old') return;
+    }
+
     parcours.push({
       file: parcoursFileName, 
       name: parcoursContent.info.name, 
@@ -207,7 +232,13 @@ app.get('/list', (req, res) => {
 
 // new parcours
 app.post('/newParcours', requireAuth, express.json(), (req, res) => {
-  const name = req.body.name;
+  let name = req.body.name;
+
+  // Guest: enforce GUEST_ prefix
+  if (req.userRole === 'guest' && !name.startsWith('GUEST_')) {
+    name = 'GUEST_' + name;
+  }
+
   const fileName = name.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
 
   if (fileName.length < 3) {
@@ -228,6 +259,17 @@ app.post('/newParcours', requireAuth, express.json(), (req, res) => {
 app.post('/deleteParcours', requireAuth, express.json(), (req, res) => {
   const fileName = req.body.file;
   const filePath = './parcours/' + fileName + '.json';
+
+  // Guest: can only delete GUEST_ parcours
+  if (req.userRole === 'guest') {
+    try {
+      const content = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      if (!content.info.name.startsWith('GUEST_')) {
+        return res.status(403).json({ error: 'Access denied' });
+      }
+    } catch { return res.status(404).json({ error: 'Parcours not found' }); }
+  }
+
   fs.unlinkSync(filePath);
 
   // remove media folder
@@ -242,6 +284,17 @@ app.post('/cloneParcours', requireAuth, express.json(), (req, res) => {
   const fileName = req.body.file;
   const filePath = './parcours/' + fileName + '.json';
   const content = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+
+  // Guest: can only clone GUEST_ parcours, new name must keep prefix
+  if (req.userRole === 'guest') {
+    if (!content.info.name.startsWith('GUEST_')) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    if (!req.body.name.startsWith('GUEST_')) {
+      req.body.name = 'GUEST_' + req.body.name;
+    }
+  }
+
   content.info.name = req.body.name;
   const newFileName = req.body.name.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
   const newFilePath = './parcours/' + newFileName + '.json';
@@ -265,15 +318,29 @@ app.post('/cloneParcours', requireAuth, express.json(), (req, res) => {
 });
 
 // edit parcours (protected)
-app.get('/edit/:file', (req, res) => {
+app.get('/edit/:file', requireAuth, (req, res) => {
+  // Guest: can only edit GUEST_ parcours
+  if (req.userRole === 'guest') {
+    try {
+      const content = JSON.parse(fs.readFileSync('./parcours/' + req.params.file + '.json', 'utf8'));
+      if (!content.info.name.startsWith('GUEST_')) return res.redirect('/control');
+    } catch { return res.redirect('/control'); }
+  }
   res.sendFile(path.join(__dirname, 'www', 'control', 'edit.html'));
 });
 
 // get parcours json
 app.get('/edit/:file/json', (req, res) => {
+  const role = getUserRole(req);
   const fileName = req.params.file;
   const filePath = './parcours/' + fileName + '.json';
   const content = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+
+  // Guest: can only view GUEST_ parcours
+  if (role === 'guest' && !content.info.name.startsWith('GUEST_')) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
+
   res.json(content);
 });
 
@@ -283,6 +350,20 @@ app.post('/edit/:file/json', requireAuth, express.json(), (req, res) => {
     const fileName = req.params.file;
     const filePath = './parcours/' + fileName + '.json';
     var content = req.body;
+
+    // Guest restrictions
+    if (req.userRole === 'guest') {
+      const original = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      if (!original.info.name.startsWith('GUEST_')) {
+        return res.status(403).json({ error: 'Access denied' });
+      }
+      // Cannot change status
+      content.info.status = original.info.status;
+      // Must keep GUEST_ prefix
+      if (!content.info.name.startsWith('GUEST_')) {
+        content.info.name = 'GUEST_' + content.info.name;
+      }
+    }
 
     // Objets Media folders exists
     if (!fs.existsSync('./media/' + fileName + '/Objets'))
@@ -422,6 +503,13 @@ app.get('/mediaList/:parcours', (req, res) => {
 // Upload media file with folder argument from file argument
 app.post('/mediaUpload/:parcours/:folder/:name?', requireAuth, upload.single('file'), (req, res) => 
 {
+  // Guest: can only upload to GUEST_ parcours
+  if (req.userRole === 'guest') {
+    try {
+      const pc = JSON.parse(fs.readFileSync('./parcours/' + req.params.parcours + '.json', 'utf8'));
+      if (!pc.info.name.startsWith('GUEST_')) return res.status(403).json({ error: 'Access denied' });
+    } catch { return res.status(403).json({ error: 'Access denied' }); }
+  }
 
   console.log('mediaUpload', req.file, req.params.parcours, req.params.folder, req.params.name);
   
@@ -436,6 +524,14 @@ app.post('/mediaUpload/:parcours/:folder/:name?', requireAuth, upload.single('fi
 
 // Remove media file
 app.get('/mediaRemove/:parcours/:folder/:file', requireAuth, (req, res) => {
+  // Guest: can only remove from GUEST_ parcours
+  if (req.userRole === 'guest') {
+    try {
+      const pc = JSON.parse(fs.readFileSync('./parcours/' + req.params.parcours + '.json', 'utf8'));
+      if (!pc.info.name.startsWith('GUEST_')) return res.status(403).json({ error: 'Access denied' });
+    } catch { return res.status(403).json({ error: 'Access denied' }); }
+  }
+
   const mediaFolder = './media/' + req.params.parcours + '/' + req.params.folder + '/';
   const filePath = mediaFolder + req.params.file;
   fs.unlinkSync(filePath, (err) => {
@@ -446,6 +542,14 @@ app.get('/mediaRemove/:parcours/:folder/:file', requireAuth, (req, res) => {
 
 // Remove folder and all files inside
 app.get('/mediaRemoveFolder/:parcours/:folder', requireAuth, (req, res) => {
+  // Guest: can only remove from GUEST_ parcours
+  if (req.userRole === 'guest') {
+    try {
+      const pc = JSON.parse(fs.readFileSync('./parcours/' + req.params.parcours + '.json', 'utf8'));
+      if (!pc.info.name.startsWith('GUEST_')) return res.status(403).json({ error: 'Access denied' });
+    } catch { return res.status(403).json({ error: 'Access denied' }); }
+  }
+
   const mediaFolder = './media/' + req.params.parcours + '/' + req.params.folder;
   if (req.params.folder)
     fs.rm(mediaFolder, { recursive: true }, (err) => {
@@ -460,8 +564,8 @@ app.get('/show/:file', (req, res) => {
   res.sendFile(path.join(__dirname, 'www', 'control', 'show.html'));
 });
 
-// Restart server
-app.get('/restartServer', requireAuth, (req, res) => {
+// Restart server (admin only)
+app.get('/restartServer', requireAdmin, (req, res) => {
   console.log('Restarting server...');
   res.status(200).send();
   setTimeout(() => {
