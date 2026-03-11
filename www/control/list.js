@@ -156,6 +156,11 @@ document.getElementById('guestPassword').addEventListener('click', () => {
         })
 })
 
+// Logout
+document.getElementById('logout').addEventListener('click', () => {
+    window.location.href = '/logout';
+})
+
 // Fetch role and initialize
 var USER_ROLE = 'guest';
 fetchRemote('/auth/role')

@@ -146,6 +146,12 @@ app.get('/sync/:type/:subdomain', async (req, res) => {
 // Login route
 app.all('/login', (req, res) => handleLogin(req, res));
 
+// Logout route
+app.get('/logout', (req, res) => {
+  res.clearCookie('simple_auth');
+  res.redirect('/login');
+});
+
 // Auth role endpoint
 app.get('/auth/role', requireAuth, (req, res) => {
   res.json({ role: req.userRole });
