@@ -590,7 +590,7 @@ function checkBGPosition() {
     return new Promise((resolve, reject) => {
         if (typeof BackgroundGeolocation === 'undefined' || !BackgroundGeolocation) {
             console.warn('BackgroundGeolocation is not defined');
-            resolve(this.lastPosition);
+            resolve(GEO.lastPosition);
             return;
         }
         BackgroundGeolocation.getCurrentLocation(

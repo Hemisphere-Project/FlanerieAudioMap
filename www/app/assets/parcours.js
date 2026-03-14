@@ -87,7 +87,7 @@ class Parcours extends EventEmitter {
         if (this.coords) this.map.setView(geo_coords(this.coords), this.map.getZoom());
     }
 
-    setCoords() {
+    setCoords(coords) {
         this.coords = coords;
     }
 

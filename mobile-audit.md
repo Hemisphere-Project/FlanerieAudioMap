@@ -426,8 +426,8 @@ These issues exist in the code but do not manifest on FLANERIE_ELYSEE or current
 - iOS WebView has a limit of ~16 simultaneous audio sources. Not a problem today but compounds with stale players from incomplete cleanup.
 - File: `www/app/pages.js` lines ~602-622
 
-### `delete variable` no-op
-- `delete testplayer` in `pages.js` lines ~360, ~613 does nothing in JavaScript (only works on object properties, not variables). Memory leak pattern.
+### `delete variable` no-op ✅ FIXED
+- `delete testplayer` replaced with `testplayer = null` in `pages.js` (two occurrences). Fixed in P1.9c.
 - File: `www/app/pages.js`
 
 ### Console.log HTML injection in dev panel
@@ -436,24 +436,21 @@ These issues exist in the code but do not manifest on FLANERIE_ELYSEE or current
 - Dev-only panel, not user-facing. Low risk but worth noting.
 - File: `www/app/assets/common.js`
 
-## Trivial Code Fixes [SAFE-TODAY]
+## Trivial Code Fixes [SAFE-TODAY] ✅ DONE
 
-One-line fixes with zero behavioral risk. Can be applied anytime.
+All applied 2026-03-14. Zero behavioral risk — each fixes already-broken or never-called code.
 
-### P1.9a `setCoords()` ignores its parameter
-- `parcours.js` line 82: `setCoords() { this.coords = coords; }` references undefined variable `coords`.
-- Should be `setCoords(coords) { this.coords = coords; }`
-- Will throw ReferenceError if called. Currently never called from app code.
-- File: `www/app/assets/parcours.js`
+### P1.9a `setCoords()` ignores its parameter ✅
+- Fixed: `setCoords()` → `setCoords(coords)` in `parcours.js`.
+- Was never called from app code, so no behavioral change.
 
-### P1.9b `checkBGPosition()` wrong `this` context
-- `geoloc.js`: `checkBGPosition` is a standalone function that references `this.lastPosition`. Called via `GEO.checkPosition()` → `checkBGPosition()`, `this` is not the GeoLoc instance.
-- The resolve always passes `undefined`.
-- File: `www/app/assets/geoloc.js`
+### P1.9b `checkBGPosition()` wrong `this` context ✅
+- Fixed: `this.lastPosition` → `GEO.lastPosition` in standalone function `checkBGPosition()` in `geoloc.js`.
+- Previously always resolved `undefined` since `this` was not the GeoLoc instance.
 
-### P1.9c `delete testplayer` cleanup
-- Replace `delete testplayer` with `testplayer = null` in `pages.js` (two occurrences).
-- File: `www/app/pages.js`
+### P1.9c `delete testplayer` cleanup ✅
+- Replaced `delete testplayer` with `testplayer = null` in `pages.js` (two occurrences).
+- `delete` on a variable is a no-op in JavaScript; `= null` actually releases the reference.
 
 ## Deliverables
 

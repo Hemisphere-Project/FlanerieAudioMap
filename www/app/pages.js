@@ -447,7 +447,6 @@ PAGES['checkaudio'] = () => {
     $('#checkaudio-accept').off().on('click', () => {
         testplayer.stop();
         testplayer.unload()
-        delete testplayer
         testplayer = null;
         PAGE('checkbattery')
     })
@@ -629,7 +628,7 @@ PAGES['parcours'] = () => {
     // Dummy player
     if (testplayer) {
         testplayer.stop();
-        delete testplayer;
+        testplayer = null;
     }
     testplayer = new Howl({
         src: BASEURL+'/images/flanerie.mp3',
