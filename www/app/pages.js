@@ -136,6 +136,11 @@ PAGES['noparcours'] = () => {
     TYPEWRITE('noparcours-retry')
 }
 
+PAGES['nomedia'] = () => {
+    $('#nomedia-retry-btn').off().on('click', () => PAGE('load', true));
+    TYPEWRITE('nomedia-retry')
+}
+
 //
 // SELECT PARCOURS
 //
@@ -170,6 +175,10 @@ PAGES['preload'] = (p) => {
         if (dlNeeded == 0) PAGE('load', false);
         else PAGE('confirmload', dlNeeded);
     })
+    .catch(error => {
+        console.error('Failed to load parcours data:', error);
+        PAGE('nodata');
+    })
     TYPEWRITE('preload-desc')
 }
 
@@ -201,9 +210,10 @@ PAGES['load'] = (showProgress) => {
         PARCOURS.store(); // Store parcours in localStorage
         PAGE('checkgeo')
     })
-    .catch(() => {
+    .catch((error) => {
         clearInterval(progress);
-        PAGE('nodata')
+        console.error('Media loading failed:', error);
+        PAGE('nomedia')
     })
 }
 
