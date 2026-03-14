@@ -586,11 +586,13 @@ PAGES['sas'] = () => {
         $('#sas-code').attr('disabled', true)
         setTimeout(() => {
             if (code == '4321') {
+                $('#sas-code').off().blur()
                 PAGE('parcours')
-                $('#sas-code').off()
             }
-            else $('#sas-help').click()
-            $('#sas-code').attr('disabled', false).val('').focus() 
+            else {
+                $('#sas-help').click()
+                $('#sas-code').attr('disabled', false).val('').focus() 
+            }
             $('#sas-accept').attr('disabled', false)
         }, 1000)
     }
