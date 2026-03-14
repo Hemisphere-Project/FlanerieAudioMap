@@ -697,6 +697,7 @@ PAGES['parcours'] = () => {
     // ON step fire: show next
     PARCOURS.on('fire', (s) => {
         if (s._type != 'steps') return
+        TELEMETRY.log('step_fire', {step: s._index, name: s._spot.name});
         updateStepsMarkers()
 
         // First step
@@ -736,11 +737,13 @@ PAGES['parcours'] = () => {
     // ON step done: hide
     PARCOURS.on('done', (s) => {
         if (s._type != 'steps') return
+        TELEMETRY.log('step_done', {step: s._index, name: s._spot.name});
         s.showMarker(COLOR_DONE, 0.5)
 
         // Last step
         if (s._index + 1 == PARCOURS.spots.steps.length) {
             console.log('END OF PARCOURS')
+            TELEMETRY.end();
             if (!DEVMODE) PAGE('end')
         }
     })
@@ -762,6 +765,7 @@ PAGES['parcours'] = () => {
 
     // Activate Parcours
     PARCOURS.startTracking()
+    TELEMETRY.start(PARCOURS.info.file, PARCOURS.info.name);
 
     // First RUN
     if (PARCOURS.currentStep() < 0) {
@@ -951,19 +955,12 @@ function scheduleWakeupNotification() {
     if (currentPage === 'parcours')
         cordova.plugins.notification.local.schedule({
             id: NOTIF_COUNTER,
-            text: 'Flanerie en cours..', // Empty text for minimal visibility
-            at: new Date(Date.now() + NOTIF_REPEAT),
+            text: 'Flanerie en cours..',
+            trigger: { at: new Date(Date.now() + NOTIF_REPEAT) },
             sound: null,
-            silent: false, // Must be false on Android to appear
+            silent: false,
             launch: false,
-            // priority: -2, // PRIORITY_MIN (Android)
-            visibility: 0, // Secret visibility (Android)
-            channel: 'silent', 
-            // smallIcon: 'res://icon', // Use app icon
-            androidAutoCancel: true, // Auto-remove after trigger
-            // wakeup: false, // Don't wake screen
-            iOSForeground: false,
-            foreground: false // Don't show when app is foreground
+            foreground: false
         });
 
     setTimeout(() => {

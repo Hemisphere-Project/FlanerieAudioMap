@@ -186,6 +186,11 @@ app.get('/proto', (req, res) => {
     res.sendFile(path.join(__dirname, 'www', 'control', 'proto.html'));
 });
 
+// Telemetry admin page
+app.get('/control/telemetry', requireAdmin, (req, res) => {
+    res.sendFile(path.join(__dirname, 'www', 'control', 'telemetry.html'));
+});
+
 // Error handler: receive json report from catch-all-errors front lib
 // append it to a file in logs folder YYYY-MM-MDD.log
 app.post('/errorhandler', express.urlencoded({ extended: true }), (req, res) => {
@@ -207,6 +212,85 @@ app.post('/errorhandler', express.urlencoded({ extended: true }), (req, res) => 
   
   res.status(200).send('Error logged');
 });
+
+
+// Telemetry: receive events from app
+app.post('/telemetry', express.json({limit: '1mb'}), (req, res) => {
+  const { sessionId, parcoursId, parcoursName, events } = req.body;
+  if (!sessionId || !events || !Array.isArray(events)) return res.status(400).send('Invalid data');
+
+  // Sanitize sessionId to prevent path traversal
+  const safeId = sessionId.replace(/[^a-zA-Z0-9_\-]/g, '');
+  if (!safeId || safeId.length > 60) return res.status(400).send('Invalid session ID');
+
+  const telemetryDir = path.join(__dirname, 'telemetry');
+  if (!fs.existsSync(telemetryDir)) fs.mkdirSync(telemetryDir);
+
+  const filePath = path.join(telemetryDir, safeId + '.json');
+
+  let session;
+  if (fs.existsSync(filePath)) {
+    session = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } else {
+    session = {
+      sessionId: safeId,
+      parcoursId: parcoursId || '',
+      parcoursName: parcoursName || '',
+      startTime: new Date().toISOString(),
+      events: []
+    };
+  }
+
+  session.events = session.events.concat(events);
+  fs.writeFileSync(filePath, JSON.stringify(session));
+  res.status(200).send('OK');
+});
+
+// Telemetry: list sessions
+app.get('/telemetry/sessions', requireAdmin, (req, res) => {
+  const telemetryDir = path.join(__dirname, 'telemetry');
+  if (!fs.existsSync(telemetryDir)) return res.json([]);
+
+  const sessions = [];
+  fs.readdirSync(telemetryDir).forEach(file => {
+    if (!file.endsWith('.json')) return;
+    try {
+      const data = JSON.parse(fs.readFileSync(path.join(telemetryDir, file), 'utf8'));
+      sessions.push({
+        sessionId: data.sessionId,
+        parcoursId: data.parcoursId,
+        parcoursName: data.parcoursName,
+        startTime: data.startTime,
+        eventCount: data.events.length,
+        lastEvent: data.events.length > 0 ? data.events[data.events.length - 1].t : null
+      });
+    } catch(e) { /* skip corrupt files */ }
+  });
+
+  sessions.sort((a, b) => (b.lastEvent || 0) - (a.lastEvent || 0));
+  res.json(sessions);
+});
+
+// Telemetry: get session detail
+app.get('/telemetry/session/:id', requireAdmin, (req, res) => {
+  const safeId = req.params.id.replace(/[^a-zA-Z0-9_\-]/g, '');
+  const filePath = path.join(__dirname, 'telemetry', safeId + '.json');
+  if (!fs.existsSync(filePath)) return res.status(404).send('Not found');
+
+  const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  res.json(data);
+});
+
+// Telemetry: delete session
+app.delete('/telemetry/session/:id', requireAdmin, (req, res) => {
+  const safeId = req.params.id.replace(/[^a-zA-Z0-9_\-]/g, '');
+  const filePath = path.join(__dirname, 'telemetry', safeId + '.json');
+  if (!fs.existsSync(filePath)) return res.status(404).send('Not found');
+
+  fs.unlinkSync(filePath);
+  res.status(200).send('Deleted');
+});
+
 
 // List parcours
 app.get('/list', (req, res) => {

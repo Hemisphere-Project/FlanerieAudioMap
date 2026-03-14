@@ -283,7 +283,7 @@ Priority note:
 
 Regression risk: **NONE** if deferred.
 
-#### P2.10 Telemetry and operational diagnostics [TEST-FIRST]
+#### P2.10 Telemetry and operational diagnostics [TEST-FIRST] ✅ DONE
 
 Priority note:
 - High value.

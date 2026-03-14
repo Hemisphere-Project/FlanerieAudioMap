@@ -118,6 +118,7 @@ class GeoLoc extends EventEmitter {
             if (this.stateUpdate != nextStep) {
                 this.stateUpdate = nextStep;
                 this.emit('stateUpdate', nextStep);
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_state', {state: nextStep});
             }
         }, 1000);
     }
@@ -165,6 +166,7 @@ class GeoLoc extends EventEmitter {
         // next measure
         this.lastPosition = position;
         this.lastTimeUpdate = Date.now();
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.gps(position);
     }
 
     _callbackError(error) {

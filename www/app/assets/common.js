@@ -90,7 +90,7 @@ function post(path, data) {
                 return response.json().then((json) => Promise.reject(json.error))
             }
             // no JSON, just throw an error
-            throw new Error('Something went wrong..')
+            throw new Error('Erreur ' + response.status + ' sur ' + path)
         }
         else {
             const contentType = response.headers.get('Content-Type')
@@ -102,7 +102,7 @@ function post(path, data) {
             }
         }
     })
-    .catch(error => alert(error))
+    .catch(error => console.warn('POST ' + path + ':', error))
 }
 
 function postFile(path, data) {
@@ -120,7 +120,7 @@ function postFile(path, data) {
                 return response.json().then((json) => Promise.reject(json.error))
             }
             // no JSON, just throw an error
-            throw new Error('Something went wrong..')
+            throw new Error('Erreur ' + response.status + ' sur ' + path)
         }
         else {
             const contentType = response.headers.get('Content-Type')
@@ -132,7 +132,7 @@ function postFile(path, data) {
             }
         }
     })
-    .catch(error => alert(error))
+    .catch(error => console.warn('POST file ' + path + ':', error))
 }
 
 
@@ -149,7 +149,7 @@ function get(path, data) {
                     return response.json().then((json) => Promise.reject(json.error))
                 }
                 // no JSON, just throw an error
-                throw new Error('Something went wrong..')
+                throw new Error('Erreur ' + response.status + ' sur ' + path)
             }
             else {
                 return response.text().then((text) => {

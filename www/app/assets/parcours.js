@@ -197,6 +197,7 @@ class Parcours extends EventEmitter {
                 }
 
                 // DOWNLOAD MEDIA
+                var failedFiles = [];
                 const downloadSequence = this.state.mediaPack.reduce((promiseChain, file) => {
                     let info = data[file];
                     let path = this.pID + '/' + file;
@@ -210,20 +211,19 @@ class Parcours extends EventEmitter {
                                 console.log('Media dryrun', path);
                                 return;
                             }
-                            console.warn('Error loading media', error);
-                            throw error;
+                            console.warn('Error loading media', path, error);
+                            failedFiles.push(path);
+                            this.state.mediaPackLoaded += info.size; // count as processed
                         });
                 }, Promise.resolve());
 
                 downloadSequence
                     .then(() => {
+                        if (failedFiles.length > 0)
+                            console.warn('Media download: ' + failedFiles.length + ' file(s) failed:', failedFiles);
                         if (!dryrun) this.state.medialoaded = true;
                         this.store();
                         resolve();
-                    })
-                    .catch(error => {
-                        this.store();
-                        reject(error);
                     });
             })
             .catch(error => {

@@ -170,6 +170,7 @@ fetchRemote('/auth/role')
         if (USER_ROLE === 'guest') {
             document.getElementById('restartServer').style.display = 'none';
             document.getElementById('guestPassword').style.display = 'none';
+            document.getElementById('telemetryBtn').style.display = 'none';
         }
         refreshList();
     })
