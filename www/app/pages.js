@@ -15,6 +15,7 @@ try {
 // GLOBALS
 //
 var noSleep = null;
+var CHECKGEO = null;
 
 // BATTERY STATUS
 var BATTERY = 0
