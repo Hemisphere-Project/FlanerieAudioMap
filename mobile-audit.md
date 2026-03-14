@@ -143,39 +143,22 @@ Files:
 
 ### P1: Correctness and stability
 
-#### P1.5 Listener accumulation and timing cleanup [TEST-FIRST]
+#### P1.5 Listener accumulation and timing cleanup [TEST-FIRST] — Partial ✅
 
-Why it matters:
-- This is not just code hygiene.
-- Duplicate listeners or uncleared timers can create very real field bugs:
-	- duplicated trigger evaluation
-	- repeated audio starts/stops
-	- weird “GPS lost” alerts after recovery
-	- growing instability after reload/resume or multiple staff tests on the same device
+Partially implemented 2026-03-14.
 
-Risk assessment:
-- Medium to high operational risk.
-- Especially relevant because team members may test multiple starts on one device before a visitor begins.
+What was done:
+- **GEO.on('position') stacking fixed:** `parcours.js` `build()` now calls `GEO.removeAllListeners('position')` before re-attaching the listener. Prevents duplicate position handlers on restore + reload.
+- **CHECKGEO interval stacking fixed:** `pages.js` `checkgeo` now calls `clearInterval(CHECKGEO)` before setting a new interval. Prevents multiple GPS icon updaters running in parallel.
+- **checkGeo() timeout:** confirmed harmless — it self-terminates on success (`clearTimeout` + `PAGE('confirmgeo')`). Added `recheck = null` after clear for hygiene.
 
-Known instances:
-- `parcours.js` `build()`: adds `GEO.on('position')` every time without removing previous listener. On restore + reload, position events fire duplicate handlers.
-- `pages.js` `checkGeo()`: `recheck = setTimeout(() => checkGeo(), 1000)` is never cleared when leaving the page, continues polling in background.
-- `pages.js` `CHECKGEO = setInterval(...)`: GPS icon updater runs forever, never cleared.
-- `spot.js` global `allSteps` array: filters by `_index` on construction, but if a new parcours with fewer steps is loaded, stale Step objects persist and may interfere with sequencing logic.
+What was NOT done (deferred):
+- `allSteps` cleanup on parcours rebuild — minor issue since parcours don't change during the walk.
+- Full timer/listener audit across all pages — deferred until P0 lifecycle work.
 
-Plan:
-- Fix `removeAllListeners()` semantics.
-- Ensure parcours load/reload does not stack `GEO` listeners.
-- Clean up `allSteps` on parcours clear/rebuild.
-- Review page-level intervals and recurring timers with explicit cleanup rules.
-
-Regression risk: **MEDIUM**. Changing listener wiring can inadvertently disconnect a callback that was previously working via duplication. Each fix should be tested with: fresh start, restart from parcours page, and multiple staff test cycles on one device.
-
-Files:
-- `www/app/assets/common.js`
-- `www/app/assets/parcours.js`
-- `www/app/assets/spot.js`
-- `www/app/pages.js`
+Files changed:
+- `www/app/assets/parcours.js` — `removeAllListeners('position')` before `on('position')` in `build()`
+- `www/app/pages.js` — `clearInterval(CHECKGEO)` before re-setting; `recheck = null` on success
 
 Acceptance:
 - One GPS event produces one logical route update.

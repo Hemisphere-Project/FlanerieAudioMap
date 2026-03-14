@@ -123,6 +123,7 @@ class Parcours extends EventEmitter {
         this.state.medialoaded = this.state.mediaPackSize > 0 && this.state.mediaPackLoaded >= this.state.mediaPackSize;
 
         // Link with GEO
+        GEO.removeAllListeners('position');
         GEO.on('position', (position) => {
             this.update(position)
         })

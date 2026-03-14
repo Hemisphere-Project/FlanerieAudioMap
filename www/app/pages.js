@@ -230,6 +230,7 @@ PAGES['checkgeo'] = () => {
             .then(() => {
                 console.log('GEO ENABLED');
                 clearTimeout(recheck);
+                recheck = null;
                 PAGE('confirmgeo')
             }) 
             .catch(() => {
@@ -265,6 +266,7 @@ PAGES['checkgeo'] = () => {
         });
     }
 
+    if (CHECKGEO) clearInterval(CHECKGEO);
     CHECKGEO = setInterval(() => {
         const gpsImg = document.getElementById('gps-status');
         gpsImg.src = gpsImg.src.replace(/gps-(on|off)\.png/, GEO.alive() ? 'gps-on.png' : 'gps-off.png');
