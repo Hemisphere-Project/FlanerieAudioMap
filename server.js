@@ -214,14 +214,35 @@ app.post('/errorhandler', express.urlencoded({ extended: true }), (req, res) => 
 });
 
 
-// Telemetry: receive events from app
-app.post('/telemetry', express.json({limit: '1mb'}), (req, res) => {
+// Telemetry: receive events from app (CORS for Cordova app on file://)
+app.options('/telemetry', (req, res) => {
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.set('Access-Control-Allow-Headers', 'Content-Type');
+  res.sendStatus(204);
+});
+app.post('/telemetry', (req, res, next) => {
+  res.set('Access-Control-Allow-Origin', '*');
+  console.log('[Telemetry] POST /telemetry hit, content-type:', req.headers['content-type'], 'content-length:', req.headers['content-length']);
+  next();
+}, express.json({limit: '1mb'}), (err, req, res, next) => {
+  // JSON parse error
+  console.error('[Telemetry] JSON parse error:', err.message);
+  res.status(400).json({ error: 'Invalid JSON: ' + err.message });
+}, (req, res) => {
+  console.log('[Telemetry] POST /telemetry received, body keys:', Object.keys(req.body || {}));
   const { sessionId, parcoursId, parcoursName, events } = req.body;
-  if (!sessionId || !events || !Array.isArray(events)) return res.status(400).send('Invalid data');
+  if (!sessionId || !events || !Array.isArray(events)) {
+    console.warn('[Telemetry] Invalid data: sessionId=' + sessionId + ' events=' + typeof events);
+    return res.status(400).send('Invalid data');
+  }
 
   // Sanitize sessionId to prevent path traversal
   const safeId = sessionId.replace(/[^a-zA-Z0-9_\-]/g, '');
-  if (!safeId || safeId.length > 60) return res.status(400).send('Invalid session ID');
+  if (!safeId || safeId.length > 60) {
+    console.warn('[Telemetry] Invalid session ID:', sessionId);
+    return res.status(400).send('Invalid session ID');
+  }
 
   const telemetryDir = path.join(__dirname, 'telemetry');
   if (!fs.existsSync(telemetryDir)) fs.mkdirSync(telemetryDir);
@@ -243,6 +264,7 @@ app.post('/telemetry', express.json({limit: '1mb'}), (req, res) => {
 
   session.events = session.events.concat(events);
   fs.writeFileSync(filePath, JSON.stringify(session));
+  console.log('[Telemetry] Saved', events.length, 'events for session', safeId, '(total:', session.events.length + ')');
   res.status(200).send('OK');
 });
 

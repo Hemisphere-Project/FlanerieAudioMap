@@ -102,7 +102,10 @@ function post(path, data) {
             }
         }
     })
-    .catch(error => console.warn('POST ' + path + ':', error))
+    .catch(error => {
+        console.warn('POST ' + path + ':', error)
+        return Promise.reject(error)
+    })
 }
 
 function postFile(path, data) {

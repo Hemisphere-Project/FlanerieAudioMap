@@ -62,11 +62,12 @@ var TELEMETRY = (function() {
     }
 
     function _log(type, data) {
-        if (!sessionId) return;
+        if (!sessionId) { console.warn('[TELEMETRY] _log skipped, no sessionId'); return; }
         if (buffer.length >= BUFFER_CAP) {
             buffer = buffer.slice(Math.floor(BUFFER_CAP * 0.1));
         }
         buffer.push({ t: Date.now(), type: type, data: data || {} });
+        console.log('[TELEMETRY] buffered event:', type, 'buffer size:', buffer.length);
     }
 
     function log(type, data) {
@@ -90,17 +91,23 @@ var TELEMETRY = (function() {
 
     function flush() {
         try {
-            if (!sessionId || buffer.length === 0) return;
+            if (!sessionId || buffer.length === 0) {
+                console.log('[TELEMETRY] flush skipped: sessionId=' + sessionId + ' buffer=' + buffer.length);
+                return;
+            }
             var events = buffer.splice(0, buffer.length);
+            console.log('[TELEMETRY] flushing', events.length, 'events via post()');
             post('/telemetry', {
                 sessionId: sessionId,
                 parcoursId: parcoursId,
                 parcoursName: parcoursName,
                 events: events
+            }).then(function(r) {
+                console.log('[TELEMETRY] flush OK:', r);
             }).catch(function(e) {
                 buffer = events.concat(buffer);
                 if (buffer.length > BUFFER_CAP) buffer = buffer.slice(-BUFFER_CAP);
-                console.warn('[TELEMETRY] flush failed', e);
+                console.warn('[TELEMETRY] flush FAILED', e);
             });
         } catch(e) { console.warn('[TELEMETRY] flush error', e); }
     }
