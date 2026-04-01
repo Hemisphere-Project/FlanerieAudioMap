@@ -11,12 +11,14 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import crypto from 'crypto';
+import { createStandaloneFlanerieChat } from 'flanerie-chat';
 
 // Simple Auth
 import { useSimpleAuth, requireAuth, requireAdmin, handleLogin, getUserRole, getGuestPassword, setGuestPassword } from './modules/simpleAuth.js';
 
 // Create express app
 const app = express();
+const server = http.createServer(app);
 const upload = multer({ dest: 'media/' });
 
 // Use simple auth (cookie parser)
@@ -40,6 +42,13 @@ applyUpdater(app);
 // Apply map download
 import applyMapDownload from './modules/mapdownload.js';
 applyMapDownload(app);
+
+createStandaloneFlanerieChat({
+  expressApp: app,
+  httpServer: server,
+  mountPath: '/chat',
+  socketPath: '/chat/socket.io'
+});
 
 // Set the static path
 app.use(express.static(path.join(__dirname, 'www')));
@@ -693,7 +702,6 @@ app.get('/app', function (req, res) {
 });
 
 // Start the server
-const server = http.createServer(app);
 server.listen(port, () => {
     console.log(`Server running on port ${port}`);
 });
