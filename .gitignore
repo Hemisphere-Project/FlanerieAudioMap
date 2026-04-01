@@ -2,6 +2,7 @@ certs/
 media/
 parcours/
 _tmp/
+telemetry/
 guest_password.json
 
 # Logs

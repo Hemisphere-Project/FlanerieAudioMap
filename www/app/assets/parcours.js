@@ -87,7 +87,7 @@ class Parcours extends EventEmitter {
         if (this.coords) this.map.setView(geo_coords(this.coords), this.map.getZoom());
     }
 
-    setCoords() {
+    setCoords(coords) {
         this.coords = coords;
     }
 
@@ -123,6 +123,7 @@ class Parcours extends EventEmitter {
         this.state.medialoaded = this.state.mediaPackSize > 0 && this.state.mediaPackLoaded >= this.state.mediaPackSize;
 
         // Link with GEO
+        GEO.removeAllListeners('position');
         GEO.on('position', (position) => {
             this.update(position)
         })
@@ -196,6 +197,7 @@ class Parcours extends EventEmitter {
                 }
 
                 // DOWNLOAD MEDIA
+                var failedFiles = [];
                 const downloadSequence = this.state.mediaPack.reduce((promiseChain, file) => {
                     let info = data[file];
                     let path = this.pID + '/' + file;
@@ -209,20 +211,19 @@ class Parcours extends EventEmitter {
                                 console.log('Media dryrun', path);
                                 return;
                             }
-                            console.warn('Error loading media', error);
-                            throw error;
+                            console.warn('Error loading media', path, error);
+                            failedFiles.push(path);
+                            this.state.mediaPackLoaded += info.size; // count as processed
                         });
                 }, Promise.resolve());
 
                 downloadSequence
                     .then(() => {
+                        if (failedFiles.length > 0)
+                            console.warn('Media download: ' + failedFiles.length + ' file(s) failed:', failedFiles);
                         if (!dryrun) this.state.medialoaded = true;
                         this.store();
                         resolve();
-                    })
-                    .catch(error => {
-                        this.store();
-                        reject(error);
                     });
             })
             .catch(error => {

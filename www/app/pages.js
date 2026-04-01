@@ -15,6 +15,7 @@ try {
 // GLOBALS
 //
 var noSleep = null;
+var CHECKGEO = null;
 
 // BATTERY STATUS
 var BATTERY = 0
@@ -136,6 +137,11 @@ PAGES['noparcours'] = () => {
     TYPEWRITE('noparcours-retry')
 }
 
+PAGES['nomedia'] = () => {
+    $('#nomedia-retry-btn').off().on('click', () => PAGE('load', true));
+    TYPEWRITE('nomedia-retry')
+}
+
 //
 // SELECT PARCOURS
 //
@@ -170,6 +176,10 @@ PAGES['preload'] = (p) => {
         if (dlNeeded == 0) PAGE('load', false);
         else PAGE('confirmload', dlNeeded);
     })
+    .catch(error => {
+        console.error('Failed to load parcours data:', error);
+        PAGE('nodata');
+    })
     TYPEWRITE('preload-desc')
 }
 
@@ -201,9 +211,10 @@ PAGES['load'] = (showProgress) => {
         PARCOURS.store(); // Store parcours in localStorage
         PAGE('checkgeo')
     })
-    .catch(() => {
+    .catch((error) => {
         clearInterval(progress);
-        PAGE('nodata')
+        console.error('Media loading failed:', error);
+        PAGE('nomedia')
     })
 }
 
@@ -220,6 +231,7 @@ PAGES['checkgeo'] = () => {
             .then(() => {
                 console.log('GEO ENABLED');
                 clearTimeout(recheck);
+                recheck = null;
                 PAGE('confirmgeo')
             }) 
             .catch(() => {
@@ -255,6 +267,7 @@ PAGES['checkgeo'] = () => {
         });
     }
 
+    if (CHECKGEO) clearInterval(CHECKGEO);
     CHECKGEO = setInterval(() => {
         const gpsImg = document.getElementById('gps-status');
         gpsImg.src = gpsImg.src.replace(/gps-(on|off)\.png/, GEO.alive() ? 'gps-on.png' : 'gps-off.png');
@@ -435,7 +448,6 @@ PAGES['checkaudio'] = () => {
     $('#checkaudio-accept').off().on('click', () => {
         testplayer.stop();
         testplayer.unload()
-        delete testplayer
         testplayer = null;
         PAGE('checkbattery')
     })
@@ -586,11 +598,13 @@ PAGES['sas'] = () => {
         $('#sas-code').attr('disabled', true)
         setTimeout(() => {
             if (code == '4321') {
+                $('#sas-code').off().blur()
                 PAGE('parcours')
-                $('#sas-code').off()
             }
-            else $('#sas-help').click()
-            $('#sas-code').attr('disabled', false).val('').focus() 
+            else {
+                $('#sas-help').click()
+                $('#sas-code').attr('disabled', false).val('').focus() 
+            }
             $('#sas-accept').attr('disabled', false)
         }, 1000)
     }
@@ -615,7 +629,7 @@ PAGES['parcours'] = () => {
     // Dummy player
     if (testplayer) {
         testplayer.stop();
-        delete testplayer;
+        testplayer = null;
     }
     testplayer = new Howl({
         src: BASEURL+'/images/flanerie.mp3',
@@ -684,6 +698,7 @@ PAGES['parcours'] = () => {
     // ON step fire: show next
     PARCOURS.on('fire', (s) => {
         if (s._type != 'steps') return
+        TELEMETRY.log('step_fire', {step: s._index, name: s._spot.name});
         updateStepsMarkers()
 
         // First step
@@ -723,11 +738,13 @@ PAGES['parcours'] = () => {
     // ON step done: hide
     PARCOURS.on('done', (s) => {
         if (s._type != 'steps') return
+        TELEMETRY.log('step_done', {step: s._index, name: s._spot.name});
         s.showMarker(COLOR_DONE, 0.5)
 
         // Last step
         if (s._index + 1 == PARCOURS.spots.steps.length) {
             console.log('END OF PARCOURS')
+            TELEMETRY.end();
             if (!DEVMODE) PAGE('end')
         }
     })
@@ -749,6 +766,7 @@ PAGES['parcours'] = () => {
 
     // Activate Parcours
     PARCOURS.startTracking()
+    TELEMETRY.start(PARCOURS.info.file, PARCOURS.info.name);
 
     // First RUN
     if (PARCOURS.currentStep() < 0) {
@@ -938,19 +956,12 @@ function scheduleWakeupNotification() {
     if (currentPage === 'parcours')
         cordova.plugins.notification.local.schedule({
             id: NOTIF_COUNTER,
-            text: 'Flanerie en cours..', // Empty text for minimal visibility
-            at: new Date(Date.now() + NOTIF_REPEAT),
+            text: 'Flanerie en cours..',
+            trigger: { at: new Date(Date.now() + NOTIF_REPEAT) },
             sound: null,
-            silent: false, // Must be false on Android to appear
+            silent: false,
             launch: false,
-            // priority: -2, // PRIORITY_MIN (Android)
-            visibility: 0, // Secret visibility (Android)
-            channel: 'silent', 
-            // smallIcon: 'res://icon', // Use app icon
-            androidAutoCancel: true, // Auto-remove after trigger
-            // wakeup: false, // Don't wake screen
-            iOSForeground: false,
-            foreground: false // Don't show when app is foreground
+            foreground: false
         });
 
     setTimeout(() => {

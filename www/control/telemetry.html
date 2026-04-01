@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="fr" data-bs-theme="dark">
+<head>
+    <title>Flanerie — Telemetry</title>
+    <meta charset="utf-8">
+    <link rel="stylesheet" href="/control/bootstrap-5.3.3/css/bootstrap.min.css">
+    <link rel="stylesheet" href="/app/libs/leaflet-1.9.4.css">
+    <link rel="stylesheet" href="/control/client.css">
+    <script src="/app/libs/jquery-3.7.1.min.js"></script>
+    <script src="/control/bootstrap-5.3.3/js/bootstrap.bundle.min.js"></script>
+    <script src="/app/libs/leaflet-1.9.4.js"></script>
+    <link rel="icon" type="image/png" href="/app/images/flanerie-96.png" sizes="96x96">
+    <style>
+        #detail { display: none; }
+        #telemetry-map { height: 400px; margin-bottom: 1em; border-radius: 8px; }
+        .event-row td { font-size: 0.85em; }
+        .event-gps { color: #6c757d; }
+        .event-step_fire { color: #0dcaf0; font-weight: bold; }
+        .event-step_done { color: #198754; }
+        .event-session_start, .event-session_resume { color: #ffc107; }
+        .event-session_end { color: #dc3545; }
+        .event-gps_state { color: #fd7e14; }
+        .badge-filter { cursor: pointer; margin-right: 4px; }
+        .badge-filter.active { opacity: 1; }
+        .badge-filter:not(.active) { opacity: 0.4; }
+    </style>
+</head>
+<body>
+    <div id="title">
+        <h1>Telemetry</h1>
+    </div>
+
+    <div id="main">
+        <a href="/control" class="btn btn-outline-secondary btn-sm mb-3">&larr; Parcours list</a>
+
+        <!-- Session list -->
+        <div id="sessions">
+            <h4>Sessions</h4>
+            <div id="filter-parcours" class="mb-2"></div>
+            <table class="table table-sm">
+                <thead>
+                    <tr>
+                        <th>Session</th>
+                        <th>Parcours</th>
+                        <th>Start</th>
+                        <th>Events</th>
+                        <th>Duration</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody id="session-list"></tbody>
+            </table>
+        </div>
+
+        <!-- Session detail -->
+        <div id="detail">
+            <button id="back-btn" class="btn btn-outline-secondary btn-sm mb-3">&larr; Back to list</button>
+            <button id="delete-btn" class="btn btn-danger btn-sm mb-3 ms-2">Delete session</button>
+            <h4 id="detail-title"></h4>
+            <div id="telemetry-map"></div>
+
+            <div class="mb-2">
+                <strong>Filter: </strong>
+                <span id="event-filters"></span>
+            </div>
+
+            <table class="table table-sm">
+                <thead>
+                    <tr>
+                        <th>Time</th>
+                        <th>+sec</th>
+                        <th>Type</th>
+                        <th>Data</th>
+                    </tr>
+                </thead>
+                <tbody id="event-list"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+    var allSessions = [];
+    var currentFilter = null;
+
+    function formatDuration(ms) {
+        if (!ms || ms <= 0) return '-';
+        var s = Math.floor(ms / 1000);
+        var m = Math.floor(s / 60); s = s % 60;
+        var h = Math.floor(m / 60); m = m % 60;
+        if (h > 0) return h + 'h' + String(m).padStart(2,'0') + 'm';
+        return m + 'm' + String(s).padStart(2,'0') + 's';
+    }
+
+    function loadSessions() {
+        fetch('/telemetry/sessions')
+            .then(r => r.json())
+            .then(data => {
+                allSessions = data;
+                renderSessions(data);
+            });
+    }
+
+    function renderSessions(data) {
+        var list = document.getElementById('session-list');
+        list.innerHTML = '';
+
+        // Parcours filter buttons
+        var parcoursList = [...new Set(data.map(s => s.parcoursName || s.parcoursId))];
+        var filterDiv = document.getElementById('filter-parcours');
+        filterDiv.innerHTML = '<strong>Filter: </strong>';
+        parcoursList.forEach(p => {
+            var btn = document.createElement('span');
+            btn.className = 'badge bg-primary badge-filter active';
+            btn.textContent = p;
+            btn.addEventListener('click', function() {
+                if (currentFilter === p) { currentFilter = null; btn.classList.add('active'); }
+                else { currentFilter = p; }
+                document.querySelectorAll('#filter-parcours .badge-filter').forEach(b => {
+                    b.classList.toggle('active', currentFilter === null || b.textContent === currentFilter);
+                });
+                renderSessions(allSessions);
+            });
+            filterDiv.appendChild(btn);
+        });
+
+        var filtered = currentFilter ? data.filter(s => (s.parcoursName || s.parcoursId) === currentFilter) : data;
+
+        filtered.forEach(s => {
+            var tr = document.createElement('tr');
+            var duration = (s.lastEvent && s.startTime) ?
+                s.lastEvent - new Date(s.startTime).getTime() : 0;
+
+            tr.innerHTML =
+                '<td><code>' + s.sessionId + '</code></td>' +
+                '<td>' + (s.parcoursName || s.parcoursId || '-') + '</td>' +
+                '<td>' + new Date(s.startTime).toLocaleString('fr-FR') + '</td>' +
+                '<td>' + s.eventCount + '</td>' +
+                '<td>' + formatDuration(duration) + '</td>' +
+                '<td><button class="btn btn-sm btn-outline-info">Detail</button></td>';
+
+            tr.querySelector('button').addEventListener('click', function() {
+                showDetail(s.sessionId);
+            });
+            list.appendChild(tr);
+        });
+    }
+
+    function showDetail(sessionId) {
+        fetch('/telemetry/session/' + encodeURIComponent(sessionId))
+            .then(r => r.json())
+            .then(data => renderDetail(data));
+    }
+
+    function renderDetail(data) {
+        document.getElementById('sessions').style.display = 'none';
+        document.getElementById('detail').style.display = 'block';
+        document.getElementById('detail-title').textContent =
+            (data.parcoursName || data.parcoursId) + ' — ' + new Date(data.startTime).toLocaleString('fr-FR');
+
+        // Map
+        var mapEl = document.getElementById('telemetry-map');
+        mapEl.innerHTML = '';
+        mapEl._leaflet_id = null;
+        var map = L.map('telemetry-map').setView([45.75, 4.85], 15);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '&copy; OpenStreetMap'
+        }).addTo(map);
+
+        // GPS track
+        var gpsEvents = data.events.filter(e => e.type === 'gps');
+        if (gpsEvents.length > 0) {
+            var latlngs = gpsEvents.map(e => [e.data.lat, e.data.lng]);
+            var polyline = L.polyline(latlngs, {color: '#0dcaf0', weight: 3}).addTo(map);
+            map.fitBounds(polyline.getBounds().pad(0.1));
+
+            // Start/end markers
+            L.circleMarker(latlngs[0], {radius: 8, color: '#198754', fillOpacity: 0.8})
+                .bindTooltip('Start').addTo(map);
+            L.circleMarker(latlngs[latlngs.length-1], {radius: 8, color: '#dc3545', fillOpacity: 0.8})
+                .bindTooltip('End').addTo(map);
+        }
+
+        // Step fire markers
+        var stepEvents = data.events.filter(e => e.type === 'step_fire');
+        stepEvents.forEach(e => {
+            var gpsAtTime = gpsEvents.filter(g => g.t <= e.t);
+            if (gpsAtTime.length > 0) {
+                var g = gpsAtTime[gpsAtTime.length - 1];
+                L.circleMarker([g.data.lat, g.data.lng], {radius: 6, color: '#ffc107', fillOpacity: 0.9})
+                    .bindTooltip(e.data.name || ('Step ' + e.data.step)).addTo(map);
+            }
+        });
+
+        // Event type filters
+        var types = [...new Set(data.events.map(e => e.type))];
+        var hiddenTypes = new Set(['gps']); // hide GPS by default
+        var filtersEl = document.getElementById('event-filters');
+        filtersEl.innerHTML = '';
+        types.forEach(type => {
+            var badge = document.createElement('span');
+            badge.className = 'badge bg-secondary badge-filter' + (hiddenTypes.has(type) ? '' : ' active');
+            badge.textContent = type;
+            badge.addEventListener('click', function() {
+                if (hiddenTypes.has(type)) hiddenTypes.delete(type);
+                else hiddenTypes.add(type);
+                badge.classList.toggle('active');
+                renderEvents(data.events, hiddenTypes);
+            });
+            filtersEl.appendChild(badge);
+        });
+
+        renderEvents(data.events, hiddenTypes);
+
+        // Delete button
+        document.getElementById('delete-btn').onclick = function() {
+            if (confirm('Delete session ' + data.sessionId + '?')) {
+                fetch('/telemetry/session/' + encodeURIComponent(data.sessionId), {method: 'DELETE'})
+                    .then(() => { goBack(); loadSessions(); });
+            }
+        };
+
+        setTimeout(() => map.invalidateSize(), 200);
+    }
+
+    function renderEvents(events, hiddenTypes) {
+        var list = document.getElementById('event-list');
+        list.innerHTML = '';
+        var startT = events.length > 0 ? events[0].t : 0;
+
+        events.forEach(e => {
+            if (hiddenTypes.has(e.type)) return;
+            var tr = document.createElement('tr');
+            tr.className = 'event-row event-' + e.type;
+            var elapsed = ((e.t - startT) / 1000).toFixed(1);
+            var dataStr = '';
+            if (e.type === 'gps') {
+                dataStr = e.data.lat.toFixed(5) + ', ' + e.data.lng.toFixed(5) +
+                    ' (acc:' + e.data.acc + 'm)';
+            } else {
+                dataStr = Object.entries(e.data || {}).map(function(kv) {
+                    return kv[0] + ':' + kv[1];
+                }).join(', ');
+            }
+            tr.innerHTML =
+                '<td>' + new Date(e.t).toLocaleTimeString('fr-FR') + '</td>' +
+                '<td>' + elapsed + '</td>' +
+                '<td><code>' + e.type + '</code></td>' +
+                '<td>' + dataStr + '</td>';
+            list.appendChild(tr);
+        });
+    }
+
+    function goBack() {
+        document.getElementById('sessions').style.display = 'block';
+        document.getElementById('detail').style.display = 'none';
+    }
+
+    document.getElementById('back-btn').addEventListener('click', goBack);
+
+    loadSessions();
+    </script>
+</body>
+</html>

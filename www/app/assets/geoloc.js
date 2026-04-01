@@ -118,6 +118,7 @@ class GeoLoc extends EventEmitter {
             if (this.stateUpdate != nextStep) {
                 this.stateUpdate = nextStep;
                 this.emit('stateUpdate', nextStep);
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_state', {state: nextStep});
             }
         }, 1000);
     }
@@ -153,13 +154,19 @@ class GeoLoc extends EventEmitter {
                 }
             }
 
-            // console.log('Position:', position.coords.latitude, position.coords.longitude, 'Accuracy:', position.coords.accuracy, 'm');
-            this.emit('position', position);
+            // Accuracy gate: reject inaccurate fixes for step triggering
+            if (!position.simulate && position.coords.accuracy > 30) {
+                console.warn('GPS accuracy too low (' + Math.round(position.coords.accuracy) + 'm), position ignored for triggers');
+                // Still update lastPosition/lastTimeUpdate so GPS-lost detection doesn't fire
+            } else {
+                this.emit('position', position);
+            }
         }
 
         // next measure
         this.lastPosition = position;
         this.lastTimeUpdate = Date.now();
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.gps(position);
     }
 
     _callbackError(error) {
@@ -585,7 +592,7 @@ function checkBGPosition() {
     return new Promise((resolve, reject) => {
         if (typeof BackgroundGeolocation === 'undefined' || !BackgroundGeolocation) {
             console.warn('BackgroundGeolocation is not defined');
-            resolve(this.lastPosition);
+            resolve(GEO.lastPosition);
             return;
         }
         BackgroundGeolocation.getCurrentLocation(
