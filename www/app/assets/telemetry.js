@@ -104,15 +104,17 @@ var TELEMETRY = (function() {
                 parcoursName: parcoursName,
                 events: events
             };
-            fetchRemote(url, {
+            var _fetch = (typeof fetchRemote !== 'undefined') ? fetchRemote : fetch;
+            _fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
+                body: JSON.stringify(payload),
+                redirect: 'follow'
             }).then(function(response) {
-                console.log('[TELEMETRY] response status:', response.status);
+                console.log('[TELEMETRY] response:', response.status, response.url);
                 if (response.status !== 200) {
                     return response.text().then(function(body) {
-                        throw new Error('HTTP ' + response.status + ': ' + body);
+                        throw new Error('HTTP ' + response.status + ': ' + body.substring(0, 200));
                     });
                 }
                 return response.text();
