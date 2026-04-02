@@ -115,13 +115,42 @@ var TELEMETRY = (function() {
     function end() {
         try {
             _log('session_end', {});
-            flush();
             if (flushTimer) { clearInterval(flushTimer); flushTimer = null; }
             localStorage.removeItem(STORAGE_KEY);
+            // Flush synchronously via sendBeacon if available, else async
+            _flushFinal();
             console.log('[TELEMETRY] Ended session', sessionId);
             sessionId = null;
         } catch(e) { console.warn('[TELEMETRY] end error', e); }
     }
+
+    // Best-effort flush for page unload / session end
+    function _flushFinal() {
+        if (!sessionId || buffer.length === 0) return;
+        var payload = JSON.stringify({
+            sessionId: sessionId,
+            parcoursId: parcoursId,
+            parcoursName: parcoursName,
+            events: buffer.splice(0, buffer.length)
+        });
+        // sendBeacon survives page unload; fall back to async post
+        var url = (typeof prep === 'function') ? prep('/telemetry') : '/telemetry';
+        if (navigator.sendBeacon) {
+            navigator.sendBeacon(url, new Blob([payload], {type: 'application/json'}));
+        } else {
+            post('/telemetry', JSON.parse(payload)).catch(function() {});
+        }
+    }
+
+    // Flush on page hide / unload (mobile: visibilitychange is more reliable)
+    try {
+        document.addEventListener('visibilitychange', function() {
+            if (document.visibilityState === 'hidden' && sessionId) flush();
+        });
+        window.addEventListener('beforeunload', function() {
+            if (sessionId) _flushFinal();
+        });
+    } catch(e) { /* non-browser environment */ }
 
     return {
         start: start,

@@ -246,6 +246,25 @@ app.post('/telemetry', (req, res, next) => {
     return res.status(400).send('Invalid data');
   }
 
+  // Cap events per request to prevent abuse
+  if (events.length > 1000) {
+    console.warn('[Telemetry] Too many events:', events.length);
+    return res.status(400).send('Too many events');
+  }
+
+  // Validate and sanitize individual events
+  const validEvents = events.filter(e =>
+    e && typeof e.t === 'number' && typeof e.type === 'string' && e.type.length <= 50
+  ).map(e => ({
+    t: e.t,
+    type: e.type.replace(/[<>]/g, ''),
+    data: (typeof e.data === 'object' && e.data !== null) ? e.data : {}
+  }));
+
+  if (validEvents.length === 0) {
+    return res.status(400).send('No valid events');
+  }
+
   // Sanitize sessionId to prevent path traversal
   const safeId = sessionId.replace(/[^a-zA-Z0-9_\-]/g, '');
   if (!safeId || safeId.length > 60) {
@@ -262,18 +281,20 @@ app.post('/telemetry', (req, res, next) => {
   if (fs.existsSync(filePath)) {
     session = JSON.parse(fs.readFileSync(filePath, 'utf8'));
   } else {
+    // Use first event's client timestamp for accurate startTime
+    const firstEventTime = validEvents[0].t;
     session = {
       sessionId: safeId,
       parcoursId: parcoursId || '',
       parcoursName: parcoursName || '',
-      startTime: new Date().toISOString(),
+      startTime: new Date(firstEventTime).toISOString(),
       events: []
     };
   }
 
-  session.events = session.events.concat(events);
+  session.events = session.events.concat(validEvents);
   fs.writeFileSync(filePath, JSON.stringify(session));
-  console.log('[Telemetry] Saved', events.length, 'events for session', safeId, '(total:', session.events.length + ')');
+  console.log('[Telemetry] Saved', validEvents.length, 'events for session', safeId, '(total:', session.events.length + ')');
   res.status(200).send('OK');
 });
 
