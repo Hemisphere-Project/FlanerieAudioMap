@@ -96,7 +96,7 @@ var TELEMETRY = (function() {
                 return;
             }
             var events = buffer.splice(0, buffer.length);
-            var url = (typeof prep === 'function') ? prep('/telemetry') : '/telemetry';
+            var url = (typeof prep === 'function') ? prep('/telemetry/') : '/telemetry/';
             console.log('[TELEMETRY] flushing', events.length, 'events to', url);
             var payload = {
                 sessionId: sessionId,
@@ -150,7 +150,7 @@ var TELEMETRY = (function() {
             events: buffer.splice(0, buffer.length)
         });
         // sendBeacon survives page unload; fall back to async post
-        var url = (typeof prep === 'function') ? prep('/telemetry') : '/telemetry';
+        var url = (typeof prep === 'function') ? prep('/telemetry/') : '/telemetry/';
         if (navigator.sendBeacon) {
             navigator.sendBeacon(url, new Blob([payload], {type: 'application/json'}));
         } else {
