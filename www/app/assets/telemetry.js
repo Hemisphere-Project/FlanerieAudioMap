@@ -96,18 +96,32 @@ var TELEMETRY = (function() {
                 return;
             }
             var events = buffer.splice(0, buffer.length);
-            console.log('[TELEMETRY] flushing', events.length, 'events via post()');
-            post('/telemetry', {
+            var url = (typeof prep === 'function') ? prep('/telemetry') : '/telemetry';
+            console.log('[TELEMETRY] flushing', events.length, 'events to', url);
+            var payload = {
                 sessionId: sessionId,
                 parcoursId: parcoursId,
                 parcoursName: parcoursName,
                 events: events
+            };
+            fetchRemote(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            }).then(function(response) {
+                console.log('[TELEMETRY] response status:', response.status);
+                if (response.status !== 200) {
+                    return response.text().then(function(body) {
+                        throw new Error('HTTP ' + response.status + ': ' + body);
+                    });
+                }
+                return response.text();
             }).then(function(r) {
                 console.log('[TELEMETRY] flush OK:', r);
             }).catch(function(e) {
                 buffer = events.concat(buffer);
                 if (buffer.length > BUFFER_CAP) buffer = buffer.slice(-BUFFER_CAP);
-                console.warn('[TELEMETRY] flush FAILED', e);
+                console.warn('[TELEMETRY] flush FAILED:', (e && e.message) ? e.message : String(e));
             });
         } catch(e) { console.warn('[TELEMETRY] flush error', e); }
     }
