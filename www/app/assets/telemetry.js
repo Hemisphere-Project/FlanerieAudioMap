@@ -16,6 +16,17 @@ var TELEMETRY = (function() {
     var BUFFER_CAP = 500;
     var STORAGE_KEY = 'telemetry_session';
 
+    function _postTelemetry(url, payload) {
+        var transport = (typeof fetch === 'function') ? fetch : fetchRemote;
+        console.log('[TELEMETRY] transport:', transport === fetch ? 'fetch' : 'fetchRemote');
+        return transport(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+            redirect: 'follow'
+        });
+    }
+
     function _generateId() {
         var now = new Date();
         var d = now.toISOString().slice(0,10).replace(/-/g, '');
@@ -104,13 +115,7 @@ var TELEMETRY = (function() {
                 parcoursName: parcoursName,
                 events: events
             };
-            var _fetch = (typeof fetchRemote !== 'undefined') ? fetchRemote : fetch;
-            _fetch(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload),
-                redirect: 'follow'
-            }).then(function(response) {
+            _postTelemetry(url, payload).then(function(response) {
                 console.log('[TELEMETRY] response:', response.status, response.url);
                 if (response.status !== 200) {
                     return response.text().then(function(body) {
@@ -154,12 +159,7 @@ var TELEMETRY = (function() {
         if (navigator.sendBeacon) {
             navigator.sendBeacon(url, new Blob([payload], {type: 'application/json'}));
         } else {
-            var _fetch = (typeof fetchRemote !== 'undefined') ? fetchRemote : fetch;
-            _fetch(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: payload
-            }).catch(function() {});
+            _postTelemetry(url, JSON.parse(payload)).catch(function() {});
         }
     }
 
