@@ -96,7 +96,7 @@ var TELEMETRY = (function() {
                 return;
             }
             var events = buffer.splice(0, buffer.length);
-            var url = (typeof prep === 'function') ? prep('/telemetry/') : '/telemetry/';
+            var url = (typeof prep === 'function') ? prep('/telemetry-push') : '/telemetry-push';
             console.log('[TELEMETRY] flushing', events.length, 'events to', url);
             var payload = {
                 sessionId: sessionId,
@@ -150,11 +150,16 @@ var TELEMETRY = (function() {
             events: buffer.splice(0, buffer.length)
         });
         // sendBeacon survives page unload; fall back to async post
-        var url = (typeof prep === 'function') ? prep('/telemetry/') : '/telemetry/';
+        var url = (typeof prep === 'function') ? prep('/telemetry-push') : '/telemetry-push';
         if (navigator.sendBeacon) {
             navigator.sendBeacon(url, new Blob([payload], {type: 'application/json'}));
         } else {
-            post('/telemetry', JSON.parse(payload)).catch(function() {});
+            var _fetch = (typeof fetchRemote !== 'undefined') ? fetchRemote : fetch;
+            _fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: payload
+            }).catch(function() {});
         }
     }
 
