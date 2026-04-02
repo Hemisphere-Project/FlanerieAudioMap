@@ -231,16 +231,19 @@ app.options('/telemetry', (req, res) => {
   res.sendStatus(204);
 });
 app.post('/telemetry', (req, res, next) => {
+  // Parse JSON manually to handle errors with CORS headers
   res.set('Access-Control-Allow-Origin', '*');
-  console.log('[Telemetry] POST /telemetry hit, content-type:', req.headers['content-type'], 'content-length:', req.headers['content-length']);
-  next();
-}, express.json({limit: '1mb'}), (err, req, res, next) => {
-  // JSON parse error
-  console.error('[Telemetry] JSON parse error:', err.message);
-  res.status(400).json({ error: 'Invalid JSON: ' + err.message });
+  express.json({limit: '1mb'})(req, res, (err) => {
+    if (err) {
+      console.error('[Telemetry] JSON parse error:', err.message);
+      return res.status(400).json({ error: 'Invalid JSON' });
+    }
+    next();
+  });
 }, (req, res) => {
-  console.log('[Telemetry] POST /telemetry received, body keys:', Object.keys(req.body || {}));
-  const { sessionId, parcoursId, parcoursName, events } = req.body;
+  console.log('[Telemetry] POST /telemetry body keys:', Object.keys(req.body || {}));
+
+  const { sessionId, parcoursId, parcoursName, events } = req.body || {};
   if (!sessionId || !events || !Array.isArray(events)) {
     console.warn('[Telemetry] Invalid data: sessionId=' + sessionId + ' events=' + typeof events);
     return res.status(400).send('Invalid data');
