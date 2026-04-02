@@ -224,13 +224,13 @@ app.post('/errorhandler', express.urlencoded({ extended: true }), (req, res) => 
 
 
 // Telemetry: receive events from app (CORS for Cordova app on file://)
-app.options(['/telemetry', '/telemetry/'], (req, res) => {
+app.options('/telemetry-push', (req, res) => {
   res.set('Access-Control-Allow-Origin', '*');
   res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.set('Access-Control-Allow-Headers', 'Content-Type');
   res.sendStatus(204);
 });
-app.post(['/telemetry', '/telemetry/'], (req, res, next) => {
+app.post('/telemetry-push', (req, res, next) => {
   // Parse JSON manually to handle errors with CORS headers
   res.set('Access-Control-Allow-Origin', '*');
   express.json({limit: '1mb'})(req, res, (err) => {
