@@ -219,8 +219,12 @@ class Parcours extends EventEmitter {
 
                 downloadSequence
                     .then(() => {
-                        if (failedFiles.length > 0)
+                        if (failedFiles.length > 0) {
                             console.warn('Media download: ' + failedFiles.length + ' file(s) failed:', failedFiles);
+                            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('media_download_partial', {failed: failedFiles.length, total: this.state.mediaPack.length, files: failedFiles});
+                            reject('media_partial: ' + failedFiles.length + ' file(s) failed');
+                            return;
+                        }
                         if (!dryrun) this.state.medialoaded = true;
                         this.store();
                         resolve();
@@ -364,8 +368,15 @@ class Parcours extends EventEmitter {
     restore() {
         let stored = localStorage.getItem('currentparcours');
         try { 
-            console.log('Restoring parcours from localStorage:', JSON.parse(stored));
-            this.build(JSON.parse(stored)); 
+            let data = JSON.parse(stored);
+            if (!data || !data.info || !data.pID || !data.spots || typeof data.spots !== 'object') {
+                console.warn('Stored parcours data is structurally invalid, clearing');
+                this.clear();
+                this.clearStore();
+                return;
+            }
+            console.log('Restoring parcours from localStorage:', data);
+            this.build(data); 
             console.log('Parcours restored from localStorage !'); 
         } 
         catch (error) { 
@@ -426,27 +437,25 @@ class Parcours extends EventEmitter {
     pauseAudio(types) {
         // if not array convert to array
         if (!types) {
-            for (let type in this.spots) this.spots[type].map(s => s.player.pause());
+            for (let type in this.spots) this.spots[type].map(s => { if (s.player) s.player.pause() });
         }
         else {
             if (!Array.isArray(types)) types = [types];
             for (let type of types)
-                this.spots[type].map(s => s.player.pause());
+                if (this.spots[type]) this.spots[type].map(s => { if (s.player) s.player.pause() });
         }
     }
 
 
     stopAudio(type) {
         if (type) {
-            if (this.spots[type]) this.spots[type].map(s => s.player.stop());
+            if (this.spots[type]) this.spots[type].map(s => { if (s.player) s.player.stop() });
         }
         else {
             for (let type in this.spots) {
                 console.log('Stopping audio for type', type);
                 this.spots[type].map(s => {
-                    s.player.stop(0)
-                    // if (s.player.isPlaying()) 
-                    //     console.warn('IS PLAYING:', s.name(), s.player._media);
+                    if (s.player) s.player.stop(0)
                 });
             }
         }

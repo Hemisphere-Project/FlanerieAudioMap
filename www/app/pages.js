@@ -654,32 +654,19 @@ PAGES['sas'] = () => {
 // PARCOURS
 //
 var SILENT_PLAYER = new PlayerSimple(true, 0);
-SILENT_PLAYER.load(BASEURL+'/images/', 'flanerie.mp3', false);
+SILENT_PLAYER.load(BASEURL+'/images/', {src: 'flanerie.mp3', master: 1}, false);
 
 PAGES['parcours'] = () => {
 
-    SILENT_PLAYER.play(); // Play silent track
+    SILENT_PLAYER.play(); // Play silent track to keep audio session alive
     scheduleWakeupNotification();
     
-    // Dummy player
+    // Clean up any previous test player
     if (testplayer) {
         testplayer.stop();
+        testplayer.unload();
         testplayer = null;
     }
-    testplayer = new Howl({
-        src: BASEURL+'/images/flanerie.mp3',
-        loop: true,
-        autoplay: false,
-        volume: 1,
-        html5: (PLATFORM == 'ios')
-    })
-    testplayer.play()
-    testplayer.on('play', () => {
-        console.log('[AUDIO] Playing silent track');
-    })
-    testplayer.on('pause', () => {
-        console.log('[AUDIO] Paused silent track');
-    })
 
 
     console.log('PARCOURS', PARCOURS);
@@ -780,8 +767,33 @@ PAGES['parcours'] = () => {
         if (s._index + 1 == PARCOURS.spots.steps.length) {
             console.log('END OF PARCOURS')
             TELEMETRY.end();
+            if (walkEndTimeout) clearTimeout(walkEndTimeout);
             if (!DEVMODE) PAGE('end')
         }
+    })
+
+    // Safety: if last step fires but done never comes (audio load failure), end after 5 minutes
+    var walkEndTimeout = null;
+    PARCOURS.on('fire', function onLastStepFire(s) {
+        if (s._type != 'steps') return
+        if (s._index + 1 == PARCOURS.spots.steps.length) {
+            walkEndTimeout = setTimeout(() => {
+                if (currentPage === 'parcours' && PARCOURS.currentStep() + 1 == PARCOURS.spots.steps.length) {
+                    console.warn('Walk end timeout: last step done event never received, ending parcours');
+                    TELEMETRY.log('walk_end_timeout', {step: s._index, name: s._spot.name});
+                    TELEMETRY.end();
+                    if (!DEVMODE) PAGE('end');
+                }
+            }, 5 * 60 * 1000); // 5 minutes
+        }
+    })
+
+    // Offlimit telemetry
+    PARCOURS.on('enter', (s) => {
+        if (s._type === 'offlimits') TELEMETRY.log('offlimit_enter', {name: s._spot.name, step: PARCOURS.currentStep()});
+    })
+    PARCOURS.on('leave', (s) => {
+        if (s._type === 'offlimits') TELEMETRY.log('offlimit_leave', {name: s._spot.name, step: PARCOURS.currentStep()});
     })
 
     // INIT PARCOURS
@@ -844,6 +856,12 @@ PAGES['parcours'] = () => {
 // END
 //
 PAGES['end'] = () => {
+
+    // Cleanup: stop all background audio
+    PARCOURS.stopAudio();
+    GPSLOST_PLAYER.stop();
+    SILENT_PLAYER.stop();
+    if (testplayer) { testplayer.stop(); testplayer.unload(); testplayer = null; }
 
     var ending = true
     function end() {
@@ -953,6 +971,7 @@ GEO.on('stateUpdate', (state) => {
         if (PARCOURS.currentStep() == PARCOURS.spots.steps.length - 1) return;  // not if last step
         if (AUDIOFOCUS == 0) return
         console.warn('GEO lost position');
+        TELEMETRY.log('gps_lost', {step: PARCOURS.currentStep()});
         pauseAllPlayers()
         GPSLOST_PLAYER.play();
     }
@@ -960,6 +979,7 @@ GEO.on('stateUpdate', (state) => {
         if (currentPage != 'parcours') return; // only if on parcours page
         if (AUDIOFOCUS == 0) return
         console.log('GEO position ok');
+        TELEMETRY.log('gps_recovered', {step: PARCOURS.currentStep()});
         GPSLOST_PLAYER.stop();
         resumeAllPlayers();
     }

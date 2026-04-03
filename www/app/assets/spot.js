@@ -353,7 +353,7 @@ class Zone extends Spot
     updatePosition(position) 
     {
         let inside = super.updatePosition(position)
-        if (!this.player.isLoaded()) return inside
+        if (!this.player || !this.player.isLoaded()) return inside
 
         // Inside
         if (inside) {
@@ -418,7 +418,7 @@ class Offlimit extends Spot
     {
         let inside = super.updatePosition(position)
         
-        if (this.player.isLoaded()) {
+        if (this.player && this.player.isLoaded()) {
             
             if (inside) this.player.resume()
             else this.player.stop()
@@ -488,7 +488,7 @@ class Step extends Spot
         if (this._index < PARCOURS.currentStep()) return inside
 
         // If inside:
-        if ( (!this.player.isPlaying() || this.player.isPaused()) && this.near(position) && inside) 
+        if ( this.player && (!this.player.isPlaying() || this.player.isPaused()) && this.near(position) && inside) 
         {
             // Check if previous unrealised steps where optional
             if (this._index > PARCOURS.currentStep() + 1 && PARCOURS.currentStep() + 1 >= 0) {
@@ -502,6 +502,7 @@ class Step extends Spot
 
             // Stop all other steps
             allSteps.filter(s => s._index !== this._index).map( s => {
+                if (!s.player) return
                 let wasPlaying = s.player.isPlaying() || s.player.isPaused()
                 s.player.stop() 
                 if (wasPlaying) {
@@ -525,7 +526,7 @@ class Step extends Spot
         }
 
         // Handle Offlimit (if media exists)
-        if (PARCOURS.currentStep() == this._index && this._spot.media.offlimit.src !== '-') 
+        if (this.player && PARCOURS.currentStep() == this._index && this._spot.media.offlimit.src !== '-') 
         {
             // If too far
             if (this.player.isPlaying() && this.distanceToBorder(position) > 3) 

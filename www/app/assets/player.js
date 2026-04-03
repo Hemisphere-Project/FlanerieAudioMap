@@ -13,6 +13,7 @@ document.addEventListener('deviceready', function() {
     }
     cordova.plugins.audiofocus.onFocusChange( function(focusState) {
             console.log('[AudioFocus] change:', focusState);
+            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audiofocus_change', {state: focusState});
             if (focusState === "AUDIOFOCUS_LOSS" || focusState === "AUDIOFOCUS_LOSS_TRANSIENT") {
                 // Pause your audio playback here
                 pauseAllPlayers();
@@ -103,6 +104,7 @@ class PlayerSimple extends EventEmitter
         this._playRequested = false
         this._volume = 0
         this._media = null
+        this._loadError = false
     }
 
     load(basepath, media, usemediapath = true) {
@@ -178,9 +180,22 @@ class PlayerSimple extends EventEmitter
         })
         this._player.on('load', () => {
             if (this._player) {
+                this._loadError = false
                 this.emit('load', this._player._src)
                 // console.log('PlayerSimple ready:', this._player._src)
             }
+        })
+        this._player.on('loaderror', (id, error) => {
+            console.error('PlayerSimple loaderror:', this._player ? this._player._src : '?', error)
+            this._loadError = true
+            this.emit('loaderror', this._player ? this._player._src : null, error)
+            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_loaderror', {src: this._player ? this._player._src : null, error: String(error)});
+        })
+        this._player.on('playerror', (id, error) => {
+            console.error('PlayerSimple playerror:', this._player ? this._player._src : '?', error)
+            this._loadError = true
+            this.emit('playerror', this._player ? this._player._src : null, error)
+            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_playerror', {src: this._player ? this._player._src : null, error: String(error)});
         })
 
         this.master(media.master)
@@ -196,6 +211,7 @@ class PlayerSimple extends EventEmitter
             this._player.unload()
             this._player = null
             this._playRequested = false
+            this._loadError = false
         }
     }
 
@@ -292,9 +308,8 @@ class PlayerSimple extends EventEmitter
     volume(value) {
         if (value !== undefined) {
             this._volume = value
-            if (this._player)
+            if (this._player && this._media)
                 this._player.volume(this._volume * this._media.master)
-            // this._player.fade(this._volume * this._media.master, this._volume * this._media.master, 0)  // cancel other fade
         }
         return this._volume
     }
@@ -330,7 +345,7 @@ class PlayerSimple extends EventEmitter
     }
 
     isLoaded() {
-        return this._player !== null || (this._media && this._media.src == '-')
+        return (this._player !== null && !this._loadError) || (this._media && this._media.src == '-')
     }
 
     rewindOnPause(value = -1) {
