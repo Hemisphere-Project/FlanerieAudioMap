@@ -642,7 +642,15 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
     document.addEventListener('resume', function() {
         console.log('[INFO] App is resumed');
         APP_VISIBILITY = 'foreground';
-        // BackgroundGeolocation.switchMode(BackgroundGeolocation.FOREGROUND_MODE);
+        // Resume AudioContext that may have been suspended by the OS in background
+        if (typeof Howler !== 'undefined' && Howler.ctx && Howler.ctx.state !== 'running') {
+            console.log('[AUDIO] Resuming AudioContext on foreground return, state:', Howler.ctx.state);
+            Howler.ctx.resume();
+        }
+        // Re-request audio focus on Android (another app may have taken it)
+        if (typeof requestAudioFocus === 'function') {
+            requestAudioFocus().catch(function(e) { console.warn('[AudioFocus] re-request on resume failed:', e); });
+        }
     }, false);
 
     backgroundGeolocSetup = true;

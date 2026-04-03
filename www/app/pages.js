@@ -942,17 +942,8 @@ $('#logs-title').on('click', (e) => {
 
 
 // GPS LOST
-// var GPSLOST_PLAYER = new PlayerSimple(true, 0);
-// GPSLOST_PLAYER.load(BASEURL+'/images/', 'gpslost.mp3', false);
-
-
-var GPSLOST_PLAYER = new Howl({
-        src: BASEURL+'/images/gpslost.mp3',
-        loop: true,
-        autoplay: false,
-        volume: 1,
-        html5: (PLATFORM == 'ios')
-    })
+var GPSLOST_PLAYER = new PlayerSimple(true, 0);
+GPSLOST_PLAYER.load(BASEURL+'/images/', {src: 'gpslost.mp3', master: 1}, false);
 
 GEO.stateUpdateTimeout = (PLATFORM == 'android') ? 10 * 1000 : 30 * 1000; // 10s on Android, 30s on iOS
 GEO.on('stateUpdate', (state) => {
@@ -988,25 +979,18 @@ function scheduleWakeupNotification() {
         return
     }
 
-    // cordova.plugins.notification.local.clear(999, () => {
-    //     console.log('NOTIF: cleared wakeup notification');
-    // });
-
     if (currentPage === 'parcours')
         cordova.plugins.notification.local.schedule({
             id: NOTIF_COUNTER,
             text: 'Flanerie en cours..',
             trigger: { at: new Date(Date.now() + NOTIF_REPEAT) },
             sound: null,
-            silent: false,
+            silent: true,
             launch: false,
             foreground: false
         });
 
-    setTimeout(() => {
-        scheduleWakeupNotification()
-    }, NOTIF_REPEAT); // Clear after 59 seconds
-    console.log('NOTIF: Prepare next wakeup notification');
+    console.log('NOTIF: Scheduled next wakeup notification');
 }
 
 document.addEventListener('deviceready', () => {
@@ -1028,8 +1012,14 @@ document.addEventListener('deviceready', () => {
                     console.log('NOTIF: cleared wakeup notification', notification.id);
                 });
                 
-                // Refresh coordination logic if on parcours page
-                // if (currentPage === 'parcours') scheduleWakeupNotification()
+                // Ensure AudioContext is alive after background wake
+                if (typeof Howler !== 'undefined' && Howler.ctx && Howler.ctx.state !== 'running') {
+                    console.log('[AUDIO] Resuming AudioContext from notification wakeup, state:', Howler.ctx.state);
+                    Howler.ctx.resume();
+                }
+
+                // Schedule next notification directly (setTimeout is unreliable in background)
+                if (currentPage === 'parcours') scheduleWakeupNotification();
             }
         });
     }
