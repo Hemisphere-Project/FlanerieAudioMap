@@ -120,7 +120,52 @@ class GeoLoc extends EventEmitter {
                 this.emit('stateUpdate', nextStep);
                 if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_state', {state: nextStep});
             }
+
+            // GPS heartbeat: when lost + background, try to actively get a position
+            if (this.stateUpdate === 'lost' && this.runMode === 'gps' && typeof BackgroundGeolocation !== 'undefined') {
+                this._heartbeat();
+            }
         }, 1000);
+
+        this._heartbeatInProgress = false;
+        this._lastHeartbeatTime = 0;
+    }
+
+    // Active GPS recovery: when updates have stopped, try getCurrentLocation
+    // to nudge the OS into resuming GPS and feed a position back into the pipeline
+    _heartbeat() {
+        if (this._heartbeatInProgress) return;
+        // Throttle: max one heartbeat every 5 seconds
+        if (Date.now() - this._lastHeartbeatTime < 5000) return;
+        this._heartbeatInProgress = true;
+        this._lastHeartbeatTime = Date.now();
+
+        console.log('[HEARTBEAT] GPS lost — requesting current location');
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_heartbeat', {visibility: APP_VISIBILITY});
+
+        BackgroundGeolocation.getCurrentLocation(
+            (location) => {
+                console.log('[HEARTBEAT] Got location:', location.latitude, location.longitude, 'acc:', location.accuracy);
+                var position = {
+                    simulate: false,
+                    timestamp: location.time,
+                    coords: {
+                        latitude: location.latitude,
+                        longitude: location.longitude,
+                        accuracy: location.accuracy,
+                        speed: location.speed,
+                    }
+                };
+                this._callbackPosition(position);
+                this._heartbeatInProgress = false;
+            },
+            (error) => {
+                console.warn('[HEARTBEAT] getCurrentLocation failed:', error);
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_heartbeat_fail', {code: error.code, message: error.message});
+                this._heartbeatInProgress = false;
+            },
+            { enableHighAccuracy: true, timeout: 5000 }
+        );
     }
 
     _callbackPosition(position) 
@@ -408,13 +453,15 @@ class GeoLoc extends EventEmitter {
 var backgroundGeolocSetup = false;
 var backgroundGeolocResolve = null;
 var backgroundGeolocReject = null;
+var backgroundGeolocIntentionalStop = false;
 
 if (typeof BackgroundGeolocation !== 'undefined') {
     console.log('[INFO] BackgroundGeolocation is available');
     BackgroundGeolocation.removeAllListeners();
     BackgroundGeolocation.checkStatus(function(status) {
         if (status.isRunning) {
-            console.log('[INFO] BackgroundGeolocation service is running, stop it', );
+            console.log('[INFO] BackgroundGeolocation service is running, stop it');
+            backgroundGeolocIntentionalStop = true;
             BackgroundGeolocation.stop();
         }
     });
@@ -435,12 +482,14 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
         console.log('[INFO] Setting up BackgroundGeolocation');
     
         BackgroundGeolocation.configure({
-            locationProvider: BackgroundGeolocation.RAW_PROVIDER, //BackgroundGeolocation.DISTANCE_FILTER_PROVIDER,
+            locationProvider: BackgroundGeolocation.RAW_PROVIDER,
             desiredAccuracy: BackgroundGeolocation.HIGH_ACCURACY,
             stationaryRadius: 0.01,
             distanceFilter: 0,
             pauseLocationUpdates: false,
             saveBatteryOnBackground: false,
+            stopOnTerminate: false,
+            startForeground: true,
             notificationTitle: 'Flanerie',
             notificationText: 'localisation en cours',
             debug: false,
@@ -448,7 +497,6 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
             fastestInterval: 1000,
             activitiesInterval: 1000,
             activityType: 'Fitness',
-            stopDetection: false,
         });
     }
 
@@ -480,35 +528,37 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
     });
 
     BackgroundGeolocation.on('stationary', function(location) {
-        // handle stationary locations here
+        // Stationary is informational — the plugin keeps running with RAW_PROVIDER + stopDetection:false.
+        // We emit the position so GPS-lost detection stays satisfied, without stop/start churn.
         console.log('[INFO] BackgroundGeolocation stationary location: ', JSON.stringify(location));
-        // BackgroundGeolocation.switchMode(BackgroundGeolocation.FOREGROUND_MODE);
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('bg_geo_stationary', {lat: location.latitude, lng: location.longitude, acc: location.accuracy});
 
-        // Restart 
-        BackgroundGeolocation.stop()
-        
-        // BackgroundGeolocation.startTask(function(taskKey) {
-        //     var position = {
-        //         simulate: false,
-        //         timestamp: location.time,
-        //         coords: {
-        //             latitude: location.latitude,
-        //             longitude: location.longitude,
-        //             accuracy: location.accuracy,
-        //             speed: location.speed,
-        //         }
-        //     }
-        //     positionCallback(position);
-        //     // execute long running task
-        //     // eg. ajax post location
-        //     // IMPORTANT: task has to be ended by endTask
-        //     BackgroundGeolocation.endTask(taskKey);
-        // });
+        BackgroundGeolocation.startTask(function(taskKey) {
+            var position = {
+                simulate: false,
+                timestamp: location.time,
+                coords: {
+                    latitude: location.latitude,
+                    longitude: location.longitude,
+                    accuracy: location.accuracy,
+                    speed: location.speed,
+                }
+            }
+            positionCallback(position);
+            BackgroundGeolocation.endTask(taskKey);
+        });
     });
 
     BackgroundGeolocation.on('stop', function() {
         console.log('[INFO] BackgroundGeolocation service has been stopped');
-        BackgroundGeolocation.start();
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('bg_geo_stop', {intentional: backgroundGeolocIntentionalStop});
+
+        // Only restart if the stop was not intentional (e.g. OS killed the service)
+        if (!backgroundGeolocIntentionalStop) {
+            console.log('[INFO] Unexpected stop — restarting BackgroundGeolocation');
+            BackgroundGeolocation.start();
+        }
+        backgroundGeolocIntentionalStop = false;
     });
 
 
@@ -526,6 +576,7 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
 
     BackgroundGeolocation.on('start', function() {
         console.log('[INFO] BackgroundGeolocation service has been started');
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('bg_geo_start', {});
 
         BackgroundGeolocation.checkStatus(function(status) {
             if (status.authorization !== BackgroundGeolocation.AUTHORIZED) {
@@ -548,16 +599,26 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
 
     BackgroundGeolocation.on('authorization', function(status) {
         console.log('[INFO] BackgroundGeolocation authorization status: ' + status);
-        // if (status !== BackgroundGeolocation.AUTHORIZED) {
-        //     authError()
-        // }            
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('bg_geo_authorization', {status: status});
+
+        if (status !== BackgroundGeolocation.AUTHORIZED) {
+            console.warn('[WARN] BackgroundGeolocation not fully authorized, status:', status);
+            // Prompt user to fix permissions — non-blocking
+            setTimeout(function() {
+                var msg = (status === BackgroundGeolocation.AUTHORIZED_FOREGROUND)
+                    ? 'La localisation en arrière-plan est désactivée. Pour que l\'application fonctionne correctement en poche, veuillez activer "Toujours" dans les réglages.'
+                    : 'La localisation est désactivée. Veuillez l\'activer dans les réglages pour continuer la promenade.';
+                if (confirm(msg + '\n\nOuvrir les réglages ?')) {
+                    BackgroundGeolocation.showAppSettings();
+                }
+            }, 500);
+        }
     });
 
     BackgroundGeolocation.on('background', function() {
         console.log('[INFO] App is in background');
         APP_VISIBILITY = 'background';
-        // you can also reconfigure service (changes will be applied immediately)
-        // BackgroundGeolocation.configure({ debug: true });
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('app_visibility', {state: 'background'});
 
         // triggers document pause event
         document.dispatchEvent(new Event('pause'));
@@ -566,7 +627,7 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
     BackgroundGeolocation.on('foreground', function() {
         console.log('[INFO] App is in foreground');
         APP_VISIBILITY = 'foreground';
-        // BackgroundGeolocation.configure({ debug: false });
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('app_visibility', {state: 'foreground'});
 
         // triggers document resume event
         document.dispatchEvent(new Event('resume'));
@@ -649,13 +710,12 @@ function backgroundGeoloc(positionCallback, errorCallback) {
                 BackgroundGeolocation.start();
             }
             else {
-                console.log('[INFO] BackgroundGeolocation already running.. restarting');
-                // if (backgroundGeolocResolve) {
-                //     backgroundGeolocResolve();
-                //     backgroundGeolocResolve = null;
-                //     backgroundGeolocReject = null;
-                // }
-                BackgroundGeolocation.stop();
+                console.log('[INFO] BackgroundGeolocation already running — listeners updated, resolving');
+                if (backgroundGeolocResolve) {
+                    backgroundGeolocResolve();
+                    backgroundGeolocResolve = null;
+                    backgroundGeolocReject = null;
+                }
             }
         });
     

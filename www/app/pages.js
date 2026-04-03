@@ -346,23 +346,58 @@ PAGES['checknotifications'] = () => {
     if (PLATFORM != 'android' || cordova.plugins.permissions == undefined) 
         return PAGE('rdv');
 
-    // Check Android version >= 13
-    var apiLevel = parseInt(device.version.split('.')[0], 10); // "13" for Android 13
+    // Check Android version >= 13 (POST_NOTIFICATIONS required since API 33)
+    var apiLevel = parseInt(device.version.split('.')[0], 10);
     if (apiLevel < 13) return PAGE('rdv');
 
     $('#checknotifications-settings').show().off().on('click', () => GEO.showAppSettings());
 
+    var permissions = cordova.plugins.permissions;
+    var NOTIF_TIMEOUT = 20000; // 20 seconds max wait
+    var notifStartTime = Date.now();
+    var permissionRequested = false;
+
+    function onGranted() {
+        console.log('Notification permission GRANTED');
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('notif_permission', {granted: true, elapsed: Date.now() - notifStartTime});
+        PAGE('rdv');
+    }
+
+    function onTimeout() {
+        console.warn('Notification permission timeout — proceeding without permission');
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('notif_permission', {granted: false, reason: 'timeout', elapsed: Date.now() - notifStartTime});
+        PAGE('rdv');
+    }
+
     function checkNotif() {
-        var permissions = cordova.plugins.permissions;
+        if (Date.now() - notifStartTime > NOTIF_TIMEOUT) return onTimeout();
+
         permissions.checkPermission(permissions.POST_NOTIFICATIONS, function(status) {
             console.log('Notification permission status:', status.hasPermission);
-            if (status.hasPermission && APP_VISIBILITY == 'foreground') PAGE('rdv')
-            else setTimeout(() => { checkNotif() }, 1000);
-            }, function(e) {
-                // Error handling
-                console.error('Error checking notification permission', e);
-                return PAGE('rdv');
-            });
+            if (status.hasPermission && APP_VISIBILITY == 'foreground') return onGranted();
+
+            // First check failed: actively request the permission (triggers system dialog)
+            if (!permissionRequested) {
+                permissionRequested = true;
+                permissions.requestPermission(permissions.POST_NOTIFICATIONS, function(result) {
+                    if (result.hasPermission) return onGranted();
+                    // User denied — keep polling in case they change it in settings
+                    console.warn('Notification permission DENIED by user, waiting...');
+                    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('notif_permission', {granted: false, reason: 'denied', elapsed: Date.now() - notifStartTime});
+                    setTimeout(checkNotif, 1500);
+                }, function(e) {
+                    console.error('Error requesting notification permission', e);
+                    setTimeout(checkNotif, 1500);
+                });
+            } else {
+                // Already requested — keep polling until timeout
+                setTimeout(checkNotif, 1500);
+            }
+        }, function(e) {
+            console.error('Error checking notification permission', e);
+            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('notif_permission', {granted: false, reason: 'error', error: String(e)});
+            return PAGE('rdv');
+        });
     }
     checkNotif();
 }
@@ -919,7 +954,7 @@ var GPSLOST_PLAYER = new Howl({
         html5: (PLATFORM == 'ios')
     })
 
-GEO.stateUpdateTimeout = (PLATFORM == 'android') ? 10 * 1000 : 5 * 60 * 1000; // 10s on Android, 5 min on iOS
+GEO.stateUpdateTimeout = (PLATFORM == 'android') ? 10 * 1000 : 30 * 1000; // 10s on Android, 30s on iOS
 GEO.on('stateUpdate', (state) => {
     if (state == 'lost') {
         if (currentPage != 'parcours') return;                                  // only if on parcours paged
@@ -949,6 +984,7 @@ function scheduleWakeupNotification() {
     if (PLATFORM != 'android' && PLATFORM != 'ios') return
     if (!cordova || !cordova.plugins || !cordova.plugins.notification || !cordova.plugins.notification.local) {
         console.warn('NOTIF: cordova.plugins.notification.local not available, notifications will not work');
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('notif_schedule', {ok: false, reason: 'plugin_missing'});
         return
     }
 

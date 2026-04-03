@@ -1,7 +1,26 @@
 # Mobile Audit Remediation Plan
 
 Date: 2026-03-14 (updated with code audit merge)
+Last reviewed against code: 2026-04-03
 Scope: Cordova launcher + downloaded local webapp, GPS-triggered audio walk, locked-screen pocket usage, published parcours FLANERIE_ELYSEE
+Plugin: [`cordova-background-geolocation-plugin`](https://github.com/HaylLtd/cordova-background-geolocation-plugin) v2.3.2 (HaylLtd fork of mauron85)
+
+## Status Snapshot (2026-04-03)
+
+Verified in code:
+
+- P0.1 ✅ IMPLEMENTED (pending field test): restart churn removed, explicit lifecycle policy applied, plugin config audited against HaylLtd docs.
+- P0.2 remains intentionally bypassed (`return PAGE('sas')` in `PAGES['checkbackground']`).
+- P0.3 ✅ IMPLEMENTED (pending field test): notification permission uses `requestPermission()` with 20s timeout + telemetry.
+- P1.5 (listener/timer stacking) remains fixed.
+- P1.5b (accuracy > 30m gate) remains fixed.
+- P1.6 (media failure split: `nodata` vs `nomedia` + retry) remains fixed.
+- P1.9a/b/c trivial fixes remain applied.
+- P2.10 telemetry backend + client pipeline is implemented and active. Coverage expanded (lifecycle events, notification events) but still partial versus the full target list.
+
+Immediate implication:
+
+- P0.1 and P0.3 are implemented but **must be field-tested** with real locked-screen pocket walks before deployment. The highest remaining risk is untested behavior on real devices.
 
 ## Field Safety Legend
 
@@ -98,26 +117,28 @@ Acceptance:
 - No false confidence from a flaky background test.
 - Team instructions remain simple for visitors.
 
-#### P0.3 Notification strategy for locked-screen survival [TEST-FIRST]
+#### P0.3 Notification strategy for locked-screen survival [TEST-FIRST] ✅ IMPLEMENTED
 
-Current understanding:
-- Notifications are not merely UX; they are part of the strategy to keep GPS/audio alive while locked.
-- The current implementation is likely messy, but the feature itself is important.
+Implemented 2026-04-03.
 
-Why this remains P0:
-- If notifications are required to keep the app alive on some devices, permission handling and scheduling must be deterministic.
+What was done:
+- **`requestPermission()` now called:** `PAGES['checknotifications']` uses `cordova.plugins.permissions.requestPermission(POST_NOTIFICATIONS)` to trigger the actual Android 13+ system dialog. Previously only checked status in a loop (never showed the dialog).
+- **Deterministic timeout:** 20-second total timeout on the permission flow. If denied or timed out, the app proceeds anyway (notifications are supplementary, not blocking).
+- **Three outcome paths:** granted → proceed, denied → proceed with warning telemetry, timeout → proceed with timeout telemetry, error → proceed with error telemetry.
+- **All outcomes emit `notif_permission` telemetry** with the result status.
+- **`scheduleWakeupNotification()` telemetry:** logs `notif_schedule` event when the notification plugin is missing.
 
-Plan:
-- Clarify the exact role of local notifications on Android and iOS.
-- Fix permission handling so users do not get stuck in polling loops.
-- Review recurring notification scheduling to ensure it supports wakefulness without creating user-visible noise.
-- Add logging around notification availability, permission state, and trigger timing.
+Permission flow (Android 13+):
+1. Check `POST_NOTIFICATIONS` status
+2. If not granted → call `requestPermission()` (system dialog)
+3. If denied after request → poll every 1.5s (user may grant via settings)
+4. Total timeout: 20s → proceed regardless
+5. On older Android / iOS: check passes immediately (POST_NOTIFICATIONS not required)
 
-Regression risk: **MEDIUM-HIGH**. Notification permission flow changes can block startup on some Android versions. Changes to scheduling cadence may affect keepalive on specific devices. Test on Android 13+ and at least one older Android.
+Regression risk: **MEDIUM**. The permission flow now always terminates. Test on Android 13+ (fresh install, grant, deny) and at least one older Android.
 
 Files:
 - `www/app/pages.js`
-- `www/app/assets/geoloc.js`
 
 Acceptance:
 - Android 13+ users cannot get stuck in the permission flow.
@@ -283,7 +304,7 @@ Priority note:
 
 Regression risk: **NONE** if deferred.
 
-#### P2.10 Telemetry and operational diagnostics [TEST-FIRST] ✅ DONE
+#### P2.10 Telemetry and operational diagnostics [TEST-FIRST] 🟨 PARTIAL
 
 Priority note:
 - High value.
@@ -291,6 +312,11 @@ Priority note:
 
 Goal:
 - Capture real usage and minor issues, not only fatal errors.
+
+Current implementation status:
+- ✅ Implemented: telemetry client (`telemetry.js`), local buffering/flush/retry, session resume, server ingestion (`/telemetry-push`), session storage, admin listing endpoints.
+- ✅ Implemented events: session start/resume/end, GPS stream, GPS state (`ok/lost/off`), step fire, step done.
+- ⚠️ Missing/partial: permission-state snapshots, notification scheduling/permission diagnostics, background/foreground transition logs, explicit media preload success/failure telemetry, audio failure/focus lifecycle telemetry, offlimit enter/exit telemetry.
 
 Recommended telemetry scope:
 - app start
@@ -338,26 +364,19 @@ Regression risk: **NONE** if left as-is.
 
 ## Recommended Execution Sequence
 
-Phase 0 — Safe fixes (can deploy before a show)
-- P0.4 plugin guards (opportunistic, low-risk)
-- P1.9 trivial code fixes (see below)
-- P1.6 media failure reporting improvements (UX text changes only)
-
-Phase 1 — Core lifecycle (needs dedicated field testing)
+Phase 0 — Core lifecycle first (needs dedicated field testing)
 - P0.1 geolocation lifecycle and anti-sleep strategy
 - P0.3 notification strategy and permission flow
 - P1.5c GPS lost timeout tuning (research, coupled with P0.1)
 
-Phase 2 — Stability cleanup (test with repeated staff starts)
-- P1.5 listener/timer cleanup
-- P1.5b GPS accuracy filtering
-- opportunistic P0.4 plugin guards in touched files
+Phase 1 — Safe hardening in touched files
+- P0.4 plugin guards (opportunistic, low-risk)
 
-Phase 3 — UX and logic (test with full walk-through)
+Phase 2 — UX and logic (test with full walk-through)
 - P0.2 replace or simplify legacy background validation
 - P1.8 step progression audit on FLANERIE_ELYSEE
 
-Phase 4 — Observability
+Phase 3 — Observability completion
 - P2.10 telemetry and usage diagnostics
 
 Later
@@ -459,21 +478,36 @@ All applied 2026-03-14. Zero behavioral risk — each fixes already-broken or ne
 3. A telemetry plan for real usage, minor incidents, GPS loss, and odd audio behavior
 4. A separate FLANERIE_ELYSEE sequencing audit before any route-logic change
 
-## Suggested First Implementation Ticket
+## Suggested First Implementation Ticket — ✅ COMPLETED (code)
 
-Title: Stabilize locked-screen GPS/audio survival for Cordova audio walks
+Title: Replace restart-churn geolocation lifecycle with deterministic locked-screen strategy
+
+All code changes implemented 2026-04-03:
+- ✅ removed `stationary -> stop()` and `stop -> start()` loop from BackgroundGeolocation flow
+- ✅ defined explicit lifecycle policy for foreground/background/stationary/recovery
+- ✅ made Android notification permission path deterministic (requestPermission + 20s timeout)
+- ✅ added telemetry events for lifecycle transitions and notification permission/scheduling outcomes
+- ✅ audited plugin config against HaylLtd v2.3.2 API docs / source code
+- ✅ removed dead `stopDetection` config option
+- ⬜ **REMAINING: execute one full locked-screen pocket walk per platform and attach logs**
+
+## Suggested Next Implementation Ticket
+
+Title: Field validation of locked-screen lifecycle changes
 
 Includes:
-- geolocation lifecycle cleanup with anti-sleep intent preserved
-- notification permission and keepalive strategy cleanup
-- listener cleanup in touched lifecycle code
-- media failure reporting improvements where directly related
-- trivial code fixes (P1.9a/b/c) as no-risk opportunistic cleanup
+- one full locked-screen pocket walk on Android 13+ (fresh install, grant all permissions)
+- one full locked-screen pocket walk on Android with notification denied
+- one full locked-screen pocket walk on iOS
+- verify telemetry events arrive: `bg_geo_start`, `bg_geo_stop`, `app_visibility`, `notif_permission`
+- verify no restart churn in logs (no repeated start/stop cycles)
+- verify GPS continues after 5+ minute stationary listening sessions
+- verify step triggers work correctly after stationary periods
+- attach session telemetry logs to this ticket
 
 Excludes:
 - sequencing logic changes
 - SAS redesign
 - full security/passive exposure review
 - full resume/version-safety redesign
-- GPS timeout tuning (needs research first)
-- accuracy filtering (needs field testing)
+- major UI flow redesign
