@@ -766,7 +766,10 @@ PAGES['parcours'] = () => {
 
     // Activate Parcours
     PARCOURS.startTracking()
-    TELEMETRY.start(PARCOURS.info.file, PARCOURS.info.name);
+    TELEMETRY.start(
+        PARCOURS.info.file || PARCOURS.info.id || PARCOURS.info.name || '',
+        PARCOURS.info.name || PARCOURS.info.file || PARCOURS.info.id || ''
+    );
 
     // First RUN
     if (PARCOURS.currentStep() < 0) {
