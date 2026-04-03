@@ -124,6 +124,7 @@
             <div class="content">
                 <p>Choisissez un parcours:</p>
                 <ul id="select-parcours"></ul>
+                <button id="select-diagnostic" class="dev btn btn-primary btn-page" style="margin-top:30px;">🔧 Diagnostic appareil</button>
             </div>
         </div>
 
@@ -210,6 +211,24 @@
             </div>
         </div>
 
+        <div id="diagnostic" class="page">
+            <h2 id="diag-title">🔧 Diagnostic</h2>
+            <div id="diag-progress"></div>
+            <div id="diag-instructions"></div>
+            <div id="diag-metrics"></div>
+            <div id="diag-question" style="display:none;">
+                <p id="diag-question-text"></p>
+                <button id="diag-yes" class="btn btn-primary">Oui</button>
+                <button id="diag-no" class="btn btn-primary">Non</button>
+            </div>
+            <div id="diag-result" style="display:none;">
+                <span id="diag-result-badge"></span>
+            </div>
+            <div id="diag-report" style="display:none;"></div>
+            <button id="diag-next" class="btn btn-primary btn-page">Suivant</button>
+            <button id="diag-skip" class="btn btn-primary" style="margin-left:10px;">Passer</button>
+        </div>
+
         <div id="sidepanel" class="dev">
             <h4 id="logs-title">LOGS</h4>
             <div id="logs"></div>
@@ -228,6 +247,7 @@
     <script src="$BASEPATH$/assets/geoloc.js"></script>
     <script src="$BASEPATH$/assets/player.js"></script>
     <script src="$BASEPATH$/assets/spot.js"></script>
+    <script src="$BASEPATH$/assets/diagnostic.js"></script>
     <script src="$BASEPATH$/pages.js"></script>
 </body>
 </html>

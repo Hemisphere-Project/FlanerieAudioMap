@@ -163,6 +163,188 @@ PAGES['select'] = (list) => {
 
     // Only one parcours => click it
     if (list.length == 1) select.querySelector('li').click();
+
+    // DEV: diagnostic button
+    $('#select-diagnostic').off().on('click', () => PAGE('diagnostic'));
+}
+
+//
+// DIAGNOSTIC
+//
+PAGES['diagnostic'] = () => {
+    var runner = DIAGNOSTIC
+    var $title = $('#diag-title')
+    var $progress = $('#diag-progress')
+    var $instructions = $('#diag-instructions')
+    var $metrics = $('#diag-metrics')
+    var $question = $('#diag-question')
+    var $qtext = $('#diag-question-text')
+    var $result = $('#diag-result')
+    var $badge = $('#diag-result-badge')
+    var $report = $('#diag-report')
+    var $next = $('#diag-next')
+    var $skip = $('#diag-skip')
+
+    // Start a telemetry session for diagnostics
+    TELEMETRY.start('__diagnostic__', 'Diagnostic')
+
+    function showTest(test, index) {
+        var total = runner.tests.length - 1 // exclude report test from count
+        var isReport = test.id === 'T11'
+        $title.text('🔧 ' + test.name)
+        $progress.text(isReport ? 'Terminé' : 'Phase ' + test.phase + ' — Test ' + (index + 1) + '/' + total)
+        $instructions.text(test.instructions)
+        $metrics.text('')
+        $question.hide()
+        $result.hide()
+        $report.hide()
+        $next.show()
+        $skip.show()
+
+        if (isReport) {
+            showReport()
+            $skip.hide()
+        } else if (test.auto) {
+            $next.hide()
+            $skip.show()
+        } else {
+            $next.text('Suivant')
+        }
+    }
+
+    function showMetrics(m) {
+        var parts = []
+        if (m.accuracy_min !== undefined && m.accuracy_min < 999) parts.push('Précision: ' + Math.round(m.accuracy_min) + 'm')
+        if (m.positions !== undefined) parts.push('Positions: ' + m.positions)
+        if (m.first_fix_ms !== undefined && m.first_fix_ms !== null) parts.push('1er fix: ' + (m.first_fix_ms / 1000).toFixed(1) + 's')
+        if (m.play_ok) parts.push('Audio: OK ✓')
+        if (m.had_error) parts.push('Audio: ERREUR ✗')
+        if (m.total_distance !== undefined) parts.push('Distance: ' + Math.round(m.total_distance) + 'm')
+        if (m.max_gap_ms !== undefined && m.max_gap_ms > 0) parts.push('Gap max: ' + (m.max_gap_ms / 1000).toFixed(1) + 's')
+        if (m.distance_to_zone !== undefined) parts.push('Zone: ' + m.distance_to_zone + 'm')
+        if (m.triggered) parts.push('Déclenché ✓')
+        if (m.bg_positions !== undefined) parts.push('Pos. arrière-plan: ' + m.bg_positions)
+        if (m.heartbeat_count !== undefined) parts.push('Heartbeats: ' + m.heartbeat_count)
+        if (m.gps_lost_events !== undefined && m.gps_lost_events > 0) parts.push('GPS perdus: ' + m.gps_lost_events)
+        $metrics.text(parts.join(' | '))
+    }
+
+    function showResult(result) {
+        var test = runner.tests[runner.currentIndex]
+        $result.show()
+        if (result.result === 'pass') $badge.attr('class', 'badge-pass').text('✓ PASS')
+        else if (result.result === 'fail') $badge.attr('class', 'badge-fail').text('✗ FAIL')
+        else $badge.attr('class', 'badge-skip').text('— SKIP')
+
+        TELEMETRY.log('diag_result', { test_id: result.test_id, result: result.result, metrics: result.metrics, user_answer: result.user_answer })
+
+        // If there's a user question, show it
+        if (test.userQuestion && result.result !== 'skip') {
+            askQuestion(test.userQuestion)
+        } else {
+            $next.text('Test suivant →').show()
+            $skip.hide()
+        }
+    }
+
+    function askQuestion(text) {
+        $qtext.text(text)
+        $question.show()
+        $next.hide()
+        $skip.hide()
+    }
+
+    function showReport() {
+        var report = runner.getReport()
+        $instructions.text('Résultats du diagnostic :')
+        $metrics.text('')
+        $skip.hide()
+
+        var lines = []
+        report.tests.forEach(r => {
+            var icon = r.result === 'pass' ? '✓' : r.result === 'fail' ? '✗' : '—'
+            var userNote = ''
+            if (r.user_answer === true) userNote = ' [utilisateur: oui]'
+            if (r.user_answer === false) userNote = ' [utilisateur: non]'
+            lines.push(icon + ' ' + r.test_id + ' ' + r.test_name + ': ' + r.result.toUpperCase() + userNote)
+        })
+        lines.push('')
+        lines.push('Plateforme: ' + report.platform)
+        lines.push('Appareil: ' + report.device)
+        lines.push('Batterie: ' + (report.battery || '?') + '%')
+        $report.text(lines.join('\n')).show()
+
+        // Upload report via telemetry
+        TELEMETRY.log('diag_report', report)
+        TELEMETRY.flush()
+
+        $next.text('Fermer').show()
+    }
+
+    // Wire events
+    runner.clearAllListeners()  // clear previous listeners
+
+    runner.on('test', (test, index) => showTest(test, index))
+    runner.on('metrics', (m) => showMetrics(m))
+    runner.on('autoFinish', () => {
+        runner.finishCurrent()
+    })
+    runner.on('result', (result) => {
+        showResult(result)
+    })
+    runner.on('complete', () => {
+        PAGE('select')
+    })
+
+    // Button handlers
+    $next.off().on('click', () => {
+        var test = runner.current()
+        if (!test) { PAGE('select'); return }
+        var result = runner.currentResult()
+
+        // On report page, close
+        if (test.id === 'T11') {
+            PAGE('select')
+            return
+        }
+
+        // If result already shown, advance
+        if (result && result.ended_at) {
+            runner.next()
+        } else {
+            // Manual test: finish it
+            runner.finishCurrent()
+        }
+    })
+
+    $skip.off().on('click', () => {
+        runner.skip()
+    })
+
+    // User question buttons
+    $('#diag-yes').off().on('click', () => {
+        var result = runner.currentResult()
+        if (result) result.user_answer = true
+        TELEMETRY.log('diag_user_answer', { test_id: result.test_id, answer: true })
+        $question.hide()
+        $next.text('Test suivant →').show()
+    })
+
+    $('#diag-no').off().on('click', () => {
+        var result = runner.currentResult()
+        if (result) {
+            result.user_answer = false
+            // Override result to fail if user says no
+            result.result = 'fail'
+            $badge.attr('class', 'badge-fail').text('✗ FAIL')
+        }
+        TELEMETRY.log('diag_user_answer', { test_id: result.test_id, answer: false })
+        $question.hide()
+        $next.text('Test suivant →').show()
+    })
+
+    // Start the runner
+    runner.start()
 }
 
 //

@@ -293,3 +293,16 @@ input[type=number].input-page::-webkit-outer-spin-button {
     border-radius: 5px;
     cursor: pointer;
 }
+
+/* Diagnostic page */
+#diag-progress { font-size: 0.85em; color: #aaa; margin-bottom: 10px; }
+#diag-instructions { white-space: pre-line; margin-bottom: 15px; line-height: 1.5; }
+#diag-metrics { font-size: 0.85em; color: #8f8; margin-bottom: 10px; min-height: 40px; }
+#diag-question { margin: 15px 0; }
+#diag-question-text { font-weight: bold; margin-bottom: 10px; }
+#diag-result-badge { display: inline-block; padding: 4px 12px; border-radius: 4px; font-weight: bold; }
+.badge-pass { background: #2a6; color: #fff; }
+.badge-fail { background: #c33; color: #fff; }
+.badge-skip { background: #555; color: #fff; }
+#diag-report { font-size: 0.8em; color: #ccc; white-space: pre-wrap; max-height: 300px; overflow-y: auto; margin-top: 15px; border: 1px solid #444; padding: 10px; }
+#diag-skip { font-size: 0.9em; color: #999; border-color: #666; }
