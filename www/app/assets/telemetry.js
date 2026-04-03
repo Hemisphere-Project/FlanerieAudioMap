@@ -10,15 +10,85 @@ var TELEMETRY = (function() {
     var buffer = [];
     var flushTimer = null;
     var lastGpsTime = 0;
+    var sessionStartedAt = null;
+    var sessionHasFlushed = false;
+    var sessionMeta = null;
 
     var GPS_INTERVAL = 5000;    // min 5s between GPS logs
     var FLUSH_INTERVAL = 30000; // flush every 30s
     var BUFFER_CAP = 500;
     var STORAGE_KEY = 'telemetry_session';
+    var RESUME_MAX_AGE = 4 * 60 * 60 * 1000;
+    var SCHEMA_VERSION = 1;
+
+    function _readStored() {
+        try {
+            var stored = localStorage.getItem(STORAGE_KEY);
+            if (!stored) return null;
+            return JSON.parse(stored);
+        } catch (e) {
+            console.warn('[TELEMETRY] invalid stored session, resetting', e);
+            localStorage.removeItem(STORAGE_KEY);
+            return null;
+        }
+    }
+
+    function _parseSessionTime(id) {
+        if (!id || typeof id !== 'string') return null;
+        var m = id.match(/^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})_/);
+        if (!m) return null;
+        return new Date(
+            Number(m[1]),
+            Number(m[2]) - 1,
+            Number(m[3]),
+            Number(m[4]),
+            Number(m[5]),
+            Number(m[6])
+        ).getTime();
+    }
+
+    function _writeStored() {
+        if (!sessionId) return;
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({
+            sessionId: sessionId,
+            parcoursId: parcoursId,
+            parcoursName: parcoursName,
+            startedAt: sessionStartedAt,
+            updatedAt: Date.now(),
+            hasFlushed: sessionHasFlushed,
+            schemaVersion: SCHEMA_VERSION
+        }));
+    }
+
+    function _buildSessionMeta() {
+        var meta = {
+            platform: (typeof PLATFORM !== 'undefined' && PLATFORM) ? PLATFORM : ((navigator && navigator.platform) || 'unknown'),
+            language: (navigator && navigator.language) ? navigator.language : null,
+            userAgent: (navigator && navigator.userAgent) ? navigator.userAgent : null,
+            isCordova: typeof cordova !== 'undefined'
+        };
+
+        if (typeof cordova !== 'undefined' && cordova.version) meta.cordovaVersion = cordova.version;
+        if (typeof window !== 'undefined' && window.APP_VERSION) meta.appVersion = window.APP_VERSION;
+        if (typeof device !== 'undefined') {
+            if (device.model) meta.deviceModel = device.model;
+            if (device.version) meta.osVersion = device.version;
+            if (device.platform) meta.devicePlatform = device.platform;
+            if (device.manufacturer) meta.deviceManufacturer = device.manufacturer;
+            if (typeof device.isVirtual !== 'undefined') meta.isVirtualDevice = device.isVirtual;
+        }
+
+        Object.keys(meta).forEach(function(key) {
+            if (meta[key] == null) delete meta[key];
+        });
+
+        return meta;
+    }
 
     function _postTelemetry(url, payload) {
-        var transport = (typeof fetch === 'function') ? fetch : fetchRemote;
-        console.log('[TELEMETRY] transport:', transport === fetch ? 'fetch' : 'fetchRemote');
+        var hasNativeFetch = typeof fetch === 'function';
+        var transport = hasNativeFetch ? fetch : fetchRemote;
+        console.log('[TELEMETRY] transport:', hasNativeFetch ? 'fetch' : 'fetchRemote');
         return transport(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -37,31 +107,46 @@ var TELEMETRY = (function() {
 
     function start(pId, pName) {
         try {
-            // Try to resume previous session for same parcours
-            var stored = localStorage.getItem(STORAGE_KEY);
-            if (stored) {
-                stored = JSON.parse(stored);
-                if (stored.parcoursId === pId) {
-                    sessionId = stored.sessionId;
-                    parcoursId = pId;
-                    parcoursName = pName;
-                    buffer = [];
-                    _log('session_resume', {});
-                    _startFlushTimer();
-                    console.log('[TELEMETRY] Resumed session', sessionId);
-                    return;
-                }
+            var now = Date.now();
+            var stableParcoursId = pId || pName || '';
+            var stableParcoursName = pName || pId || '';
+            var stored = _readStored();
+            var storedStartedAt = stored && (stored.startedAt || _parseSessionTime(stored.sessionId));
+            var canResume = !!(
+                stored &&
+                stored.sessionId &&
+                stored.parcoursId === stableParcoursId &&
+                storedStartedAt &&
+                (now - storedStartedAt) <= RESUME_MAX_AGE
+            );
+
+            if (canResume) {
+                sessionId = stored.sessionId;
+                parcoursId = stableParcoursId;
+                parcoursName = stableParcoursName;
+                sessionStartedAt = storedStartedAt;
+                sessionHasFlushed = !!stored.hasFlushed;
+                sessionMeta = _buildSessionMeta();
+                buffer = [];
+                _writeStored();
+                _log(sessionHasFlushed ? 'session_resume' : 'session_start', {
+                    parcoursId: parcoursId,
+                    parcoursName: parcoursName
+                });
+                _startFlushTimer();
+                console.log('[TELEMETRY] Resumed session', sessionId);
+                return;
             }
-            // New session
+
             sessionId = _generateId();
-            parcoursId = pId;
-            parcoursName = pName;
+            parcoursId = stableParcoursId;
+            parcoursName = stableParcoursName;
+            sessionStartedAt = now;
+            sessionHasFlushed = false;
+            sessionMeta = _buildSessionMeta();
             buffer = [];
-            localStorage.setItem(STORAGE_KEY, JSON.stringify({
-                sessionId: sessionId,
-                parcoursId: parcoursId
-            }));
-            _log('session_start', {parcoursId: pId, parcoursName: pName});
+            _writeStored();
+            _log('session_start', {parcoursId: parcoursId, parcoursName: parcoursName});
             _startFlushTimer();
             console.log('[TELEMETRY] Started session', sessionId);
         } catch(e) { console.warn('[TELEMETRY] start error', e); }
@@ -78,6 +163,7 @@ var TELEMETRY = (function() {
             buffer = buffer.slice(Math.floor(BUFFER_CAP * 0.1));
         }
         buffer.push({ t: Date.now(), type: type, data: data || {} });
+        _writeStored();
         console.log('[TELEMETRY] buffered event:', type, 'buffer size:', buffer.length);
     }
 
@@ -113,6 +199,8 @@ var TELEMETRY = (function() {
                 sessionId: sessionId,
                 parcoursId: parcoursId,
                 parcoursName: parcoursName,
+                schemaVersion: SCHEMA_VERSION,
+                client: sessionMeta,
                 events: events
             };
             _postTelemetry(url, payload).then(function(response) {
@@ -124,6 +212,8 @@ var TELEMETRY = (function() {
                 }
                 return response.text();
             }).then(function(r) {
+                sessionHasFlushed = true;
+                _writeStored();
                 console.log('[TELEMETRY] flush OK:', r);
             }).catch(function(e) {
                 buffer = events.concat(buffer);
@@ -152,6 +242,8 @@ var TELEMETRY = (function() {
             sessionId: sessionId,
             parcoursId: parcoursId,
             parcoursName: parcoursName,
+            schemaVersion: SCHEMA_VERSION,
+            client: sessionMeta,
             events: buffer.splice(0, buffer.length)
         });
         // sendBeacon survives page unload; fall back to async post

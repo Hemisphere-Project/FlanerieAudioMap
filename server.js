@@ -243,7 +243,7 @@ app.post('/telemetry-push', (req, res, next) => {
 }, (req, res) => {
   console.log('[Telemetry] POST /telemetry body keys:', Object.keys(req.body || {}));
 
-  const { sessionId, parcoursId, parcoursName, events } = req.body || {};
+  const { sessionId, parcoursId, parcoursName, schemaVersion, client, events } = req.body || {};
   if (!sessionId || !events || !Array.isArray(events)) {
     console.warn('[Telemetry] Invalid data: sessionId=' + sessionId + ' events=' + typeof events);
     return res.status(400).send('Invalid data');
@@ -290,9 +290,18 @@ app.post('/telemetry-push', (req, res, next) => {
       sessionId: safeId,
       parcoursId: parcoursId || '',
       parcoursName: parcoursName || '',
+      schemaVersion: Number.isInteger(schemaVersion) ? schemaVersion : 1,
+      client: (typeof client === 'object' && client !== null) ? client : {},
       startTime: new Date(firstEventTime).toISOString(),
       events: []
     };
+  }
+
+  if (!session.parcoursId && parcoursId) session.parcoursId = parcoursId;
+  if (!session.parcoursName && parcoursName) session.parcoursName = parcoursName;
+  if (!session.schemaVersion) session.schemaVersion = Number.isInteger(schemaVersion) ? schemaVersion : 1;
+  if ((!session.client || typeof session.client !== 'object') && typeof client === 'object' && client !== null) {
+    session.client = client;
   }
 
   session.events = session.events.concat(validEvents);
