@@ -33,11 +33,29 @@ PARCOURS.restore(); // Restore parcours from localStorage
 //
 var PAGES = {}
 var currentPage = '';
+var NOTIF_TIMER = null;
+
+function clearWakeupNotification(clearPending = true)
+{
+    if (NOTIF_TIMER) {
+        clearTimeout(NOTIF_TIMER);
+        NOTIF_TIMER = null;
+    }
+
+    if (!clearPending) return;
+    if (PLATFORM != 'android' && PLATFORM != 'ios') return;
+    if (typeof cordova === 'undefined' || !cordova.plugins || !cordova.plugins.notification || !cordova.plugins.notification.local) return;
+
+    cordova.plugins.notification.local.clear(NOTIF_COUNTER, () => {
+        console.log('NOTIF: cleared wakeup notification', NOTIF_COUNTER);
+    });
+}
 
 function PAGE(name, ...args) 
 {
     if (currentPage === name) return;
     console.log('PAGE', name, args);
+    if (currentPage === 'parcours' && name !== 'parcours') clearWakeupNotification();
     document.querySelectorAll('.page').forEach(page => page.style.display = 'none');
     try { document.getElementById(name).style.display = 'block'; } catch (e) {}
     currentPage = name;
@@ -353,6 +371,7 @@ PAGES['checknotifications'] = () => {
     $('#checknotifications-settings').show().off().on('click', () => GEO.showAppSettings());
 
     function checkNotif() {
+        if (currentPage !== 'checknotifications') return;
         var permissions = cordova.plugins.permissions;
         permissions.checkPermission(permissions.POST_NOTIFICATIONS, function(status) {
             console.log('Notification permission status:', status.hasPermission);
@@ -946,8 +965,13 @@ GEO.on('stateUpdate', (state) => {
 const NOTIF_REPEAT = 1 * 59 * 1000; // 59 seconds
 var NOTIF_COUNTER = 37;
 function scheduleWakeupNotification() {
+    clearWakeupNotification(false)
+    if (currentPage !== 'parcours') {
+        clearWakeupNotification()
+        return
+    }
     if (PLATFORM != 'android' && PLATFORM != 'ios') return
-    if (!cordova || !cordova.plugins || !cordova.plugins.notification || !cordova.plugins.notification.local) {
+    if (typeof cordova === 'undefined' || !cordova.plugins || !cordova.plugins.notification || !cordova.plugins.notification.local) {
         console.warn('NOTIF: cordova.plugins.notification.local not available, notifications will not work');
         return
     }
@@ -956,18 +980,18 @@ function scheduleWakeupNotification() {
     //     console.log('NOTIF: cleared wakeup notification');
     // });
 
-    if (currentPage === 'parcours')
-        cordova.plugins.notification.local.schedule({
-            id: NOTIF_COUNTER,
-            text: 'Flanerie en cours..',
-            trigger: { at: new Date(Date.now() + NOTIF_REPEAT) },
-            sound: null,
-            silent: false,
-            launch: false,
-            foreground: false
-        });
+    cordova.plugins.notification.local.schedule({
+        id: NOTIF_COUNTER,
+        text: 'Flanerie en cours..',
+        trigger: { at: new Date(Date.now() + NOTIF_REPEAT) },
+        sound: null,
+        silent: false,
+        launch: false,
+        foreground: false
+    });
 
-    setTimeout(() => {
+    NOTIF_TIMER = setTimeout(() => {
+        NOTIF_TIMER = null;
         scheduleWakeupNotification()
     }, NOTIF_REPEAT); // Clear after 59 seconds
     console.log('NOTIF: Prepare next wakeup notification');

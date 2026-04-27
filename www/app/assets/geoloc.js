@@ -1,6 +1,24 @@
 var CALIBRATION_TIME = 2
 var APP_VISIBILITY = 'foreground' // foreground, background
 
+function resumeAudioContext(reason = 'unknown') {
+    if (typeof Howler === 'undefined' || !Howler.ctx) return
+    if (Howler.ctx.state === 'running') return
+
+    console.log('[AUDIO] Resuming AudioContext:', reason, Howler.ctx.state)
+    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_context_resume', {reason: reason, state: Howler.ctx.state})
+
+    try {
+        let result = Howler.ctx.resume()
+        if (result && typeof result.catch === 'function') {
+            result.catch(error => console.warn('[AUDIO] Failed to resume AudioContext:', reason, error))
+        }
+    }
+    catch (error) {
+        console.warn('[AUDIO] Failed to resume AudioContext:', reason, error)
+    }
+}
+
 function geo_coords(c) {
     if (c.coords) return geo_coords(c.coords)
 
@@ -125,6 +143,8 @@ class GeoLoc extends EventEmitter {
 
     _callbackPosition(position) 
     {
+        resumeAudioContext('position')
+
         // first measure
         if (!this.firstMeasure) {
             this.firstMeasure = position;
@@ -581,6 +601,7 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
     document.addEventListener('resume', function() {
         console.log('[INFO] App is resumed');
         APP_VISIBILITY = 'foreground';
+        resumeAudioContext('resume');
         // BackgroundGeolocation.switchMode(BackgroundGeolocation.FOREGROUND_MODE);
     }, false);
 

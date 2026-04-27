@@ -453,7 +453,11 @@ class Step extends Spot
 
         // player
         this.player = new PlayerStep()
-        this.player.on('done', () => { this.emit('done', this) })
+        this._done = false
+        this.player.on('done', () => {
+            this._done = true
+            this.emit('done', this)
+        })
 
         // Leaflet Tooltip
         this._marker.bindTooltip(this._spot.name)
@@ -481,11 +485,16 @@ class Step extends Spot
     {
         let inside = super.updatePosition(position)
 
+        if (PARCOURS.currentStep() < this._index) this._done = false
+
         // Check if we are able to play (Sequential logic)
         //
 
         // Already played higher steps
         if (this._index < PARCOURS.currentStep()) return inside
+
+        // Already completed in this run
+        if (this._done) return inside
 
         // If inside:
         if ( (!this.player.isPlaying() || this.player.isPaused()) && this.near(position) && inside) 

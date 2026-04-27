@@ -384,28 +384,30 @@ class PlayerStep extends EventEmitter
         this.afterplay = new PlayerSimple(true)
         this.state = 'off'       // play, afterplay, pause, stop, offlimit  
         this.playstate = 'play'  // play, afterplay
+        this._doneFired = false
 
         this.voice.rewindOnPause(3000)
         this.voice.on('end', () => { 
-            if (this.state == 'play') {
-                this.playstate = 'afterplay'
-                this.state = 'afterplay'
-                this.afterplay.play() 
-                this.emit('done')
-            }
+            this.startAfterplay()
         })
 
         this.music.rewindOnPause(3000)
         this.music.on('end', () => { 
-            if (this.state == 'play') {
-                this.playstate = 'afterplay'
-                this.state = 'afterplay' 
-                this.afterplay.play()
-                this.emit('done')
-            }    
+            this.startAfterplay()
         })
         
         this.afterplay.rewindOnPause(3000)
+    }
+
+    startAfterplay() {
+        if (this.state != 'play') return
+        this.playstate = 'afterplay'
+        this.state = 'afterplay'
+        this.afterplay.play()
+        if (!this._doneFired) {
+            this._doneFired = true
+            this.emit('done')
+        }
     }
 
     load(basepath, media) {
@@ -414,6 +416,8 @@ class PlayerStep extends EventEmitter
         this.ambiant.load(basepath, media.ambiant)
         this.offlimit.load(basepath, media.offlimit)
         this.afterplay.load(basepath, media.afterplay)
+        this.playstate = 'play'
+        this._doneFired = false
         this.state = 'stop'
     }
 
@@ -424,6 +428,8 @@ class PlayerStep extends EventEmitter
         this.offlimit.clear()
         this.afterplay.clear()
         let wasNotStop = this.state !== 'stop'
+        this.playstate = 'play'
+        this._doneFired = false
         this.state = 'stop'
         if (wasNotStop) this.emit('stop')
     }
@@ -454,6 +460,7 @@ class PlayerStep extends EventEmitter
 
 
         let wasNotStop = this.state !== 'stop'
+        this._doneFired = false
         this.state = 'stop'
         if (wasNotStop) this.emit('stop')
     }
