@@ -122,27 +122,24 @@ Acceptance:
 - Locking the phone must not cause restart churn.
 - The app should recover cleanly from transient GPS pauses without forcing a full route failure.
 
-#### P0.1b AudioContext resume on foreground 🆕 [TEST-FIRST]
+#### P0.1b AudioContext resume on foreground 🆕 [TEST-FIRST] ✅ DONE
 
-Current state:
-- `Howler.ctx.resume()` is called once at parcours init (`pages.js` line ~637).
-- It is NOT called on foreground/resume events.
-- `Howler.autoSuspend = false` is set in `player.js` line 6, but this only prevents Howler from *voluntarily* suspending — it does not prevent the OS from suspending the AudioContext when the app is backgrounded.
+Implemented 2026-04-27.
 
-Problem:
-- On iOS, the AudioContext can be suspended by the OS during background execution. Without a `resume()` call on foreground, Howl instances continue to "play" from Howler's perspective, but produce no sound. All audio silently dies.
-- This is especially insidious because `isPlaying()` still returns `true` — no error, no event, just silence.
+What was done:
+- Added a shared `resumeAudioContext()` helper in `geoloc.js` that exits early when the context is already running and safely resumes otherwise.
+- Added direct `resumeAudioContext('foreground')` handling in the `BackgroundGeolocation.on('foreground')` lifecycle callback, before dispatching the generic `resume` event.
+- Kept `resumeAudioContext('resume')` in the document `resume` handler so both plugin-driven and document-driven foreground paths recover audio.
+- Added `resumeAudioContext('position')` in `_callbackPosition()` as defense-in-depth, so the next GPS tick also repairs a suspended AudioContext.
+- Added `audio_context_state` telemetry logging and bound `Howler.ctx.onstatechange` so AudioContext suspensions and recoveries are observable instead of inferred.
 
-Plan:
-- Add `if (Howler.ctx && Howler.ctx.state !== 'running') Howler.ctx.resume()` in the `resume`/`foreground` event handler in `geoloc.js` lines ~560-570.
-- Also add a periodic ctx state check (e.g., on each GPS position callback in `_callbackPosition()`) as defense-in-depth.
-- Log AudioContext state transitions for diagnostics via TELEMETRY.
+Why this matters:
+- On iOS, Howler can report players as still "playing" while the underlying AudioContext is suspended by the OS. This fix adds explicit recovery on both foreground and next-position paths.
 
-Regression risk: **LOW**. Calling `resume()` on an already-running context is a no-op. Adding it in the foreground handler cannot break anything.
+Regression risk: **LOW**. Calling `resume()` on an already-running context remains a no-op.
 
-Files:
-- `www/app/assets/geoloc.js` — foreground handler
-- `www/app/assets/player.js` — optional periodic check
+Files changed:
+- `www/app/assets/geoloc.js`
 
 #### P0.2 Background validation UX [TEST-FIRST]
 
@@ -173,32 +170,31 @@ Acceptance:
 - No false confidence from a flaky background test.
 - Team instructions remain simple for visitors.
 
-#### P0.3 Notification strategy for locked-screen survival [TEST-FIRST] 📎
+#### P0.3 Notification strategy for locked-screen survival [TEST-FIRST] 📎 — Partial ✅
 
-Current understanding:
-- Notifications are not merely UX; they are part of the strategy to keep GPS/audio alive while locked.
-- The current implementation is likely messy, but the feature itself is important.
+Partially implemented 2026-04-27.
 
-Why this remains P0:
-- If notifications are required to keep the app alive on some devices, permission handling and scheduling must be deterministic.
-
-Plan:
-- Clarify the exact role of local notifications on Android and iOS.
-- Fix permission handling so users do not get stuck in polling loops.
-- Review recurring notification scheduling to ensure it supports wakefulness without creating user-visible noise.
-- Add logging around notification availability, permission state, and trigger timing.
+What was done:
+- `scheduleWakeupNotification()` now uses a single module-level timer (`NOTIF_TIMER`) and clears it before scheduling the next wakeup, preventing duplicate recursive chains.
+- Leaving the `parcours` page now clears both the JS timer and the pending wakeup notification ID, so keepalive scheduling no longer survives page exit.
+- The Android 13+ notification permission page now uses a bounded retry loop (`NOTIF_PERMISSION_MAX_ATTEMPTS`) instead of unbounded recursion.
+- The permission step is now intentionally non-bypassable: after the retry budget is exhausted, the user must go to settings and explicitly re-check permission with the "J'ai autorisé" action. This preserves the operational assumption that background mode depends on notification permission.
 
 Code-level detail (from 2026-04-27 code review):
-- **Scheduling leak:** `scheduleWakeupNotification()` (`pages.js` lines ~944-970) uses recursive `setTimeout` with no cancellation. If called multiple times (e.g., page transitions or app resume), each call spawns an independent chain. Chains continue even after leaving the parcours page.
-- **Fix:** Track the timeout ID in a module-level variable. Clear it when leaving parcours. Add `if (currentPage !== 'parcours') return` guard at function start. Clear pending notifications on page exit.
+- **Scheduling leak:** fixed by `NOTIF_TIMER`, `clearWakeupNotification()`, and a `currentPage !== 'parcours'` guard before re-scheduling.
 - **Mitigating factor:** `NOTIF_COUNTER` (37) is a fixed ID, so only one notification is pending at a time in the OS queue. The leak wastes CPU scheduling but doesn't flood the notification tray.
-- **Permission polling loop:** `checkNotifications` page (`pages.js` line ~380) uses `setTimeout` recursion to poll `cordova.plugins.permissions.checkPermission`. If the user never grants permission and never returns to the app, this loop runs forever. Add a max retry count or timeout.
+- **Permission polling loop:** fixed by a bounded timer plus explicit re-check action after settings return. Users are no longer trapped in an invisible infinite loop, but they also cannot proceed without granting permission.
+
+What remains:
+- Clarify the exact role of local notifications on Android vs iOS keepalive behavior.
+- Add telemetry around permission state checks and wakeup trigger timing, not only console logging.
+- Validate the cadence on real Android devices to confirm the app stays alive quietly enough while locked.
 
 Telemetry evidence (Apr 2026):
 - Multiple GIVORS_V3 sessions show 8–15 `session_resume` events. The notification chain firing every ~59s is the most plausible driver: each chain instance pulls the JS context from the background, generating a resume event.
 - The scheduling leak (multiple chains after page transitions) compounds with each restart, explaining why resume counts grow over time in long sessions.
 
-Regression risk: **MEDIUM-HIGH**. Notification permission flow changes can block startup on some Android versions. Changes to scheduling cadence may affect keepalive on specific devices. Test on Android 13+ and at least one older Android.
+Regression risk: **MEDIUM-HIGH**. The notification step now blocks startup by design until permission is granted. This matches the operational requirement, but it must be tested on Android 13+ and at least one older Android to confirm there is no false negative or plugin-specific permission mismatch.
 
 Files:
 - `www/app/pages.js`
@@ -707,8 +703,8 @@ Phase 0 — Safe fixes (can deploy before a show)
 Phase 1 — Core lifecycle (needs dedicated field testing)
 - P1.16 PlayerStep double `done` emission fix 🆕 (fix before next ELYSEE show — active bug)
 - P1.17 offlimit reentry resume ✅ DONE
-- P0.1b AudioContext resume on foreground 🆕
-- P0.3 notification strategy: fix scheduling leak + permission flow
+- P0.1b AudioContext resume on foreground 🆕 ✅ DONE
+- P0.3 notification strategy: fix scheduling leak + permission flow — Partial ✅
 - P0.1 geolocation lifecycle and anti-sleep strategy (research + full field test)
 - P1.5c GPS lost timeout tuning (research, coupled with P0.1)
 

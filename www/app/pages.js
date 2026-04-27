@@ -33,6 +33,10 @@ PARCOURS.restore(); // Restore parcours from localStorage
 var PAGES = {}
 var currentPage = '';
 var NOTIF_TIMER = null;
+var NOTIF_PERMISSION_TIMER = null;
+var NOTIF_PERMISSION_ATTEMPTS = 0;
+const NOTIF_PERMISSION_POLL_MS = 1000;
+const NOTIF_PERMISSION_MAX_ATTEMPTS = 15;
 
 function clearWakeupNotification(clearPending = true)
 {
@@ -50,11 +54,21 @@ function clearWakeupNotification(clearPending = true)
     });
 }
 
+function clearNotificationPermissionCheck()
+{
+    if (NOTIF_PERMISSION_TIMER) {
+        clearTimeout(NOTIF_PERMISSION_TIMER);
+        NOTIF_PERMISSION_TIMER = null;
+    }
+    NOTIF_PERMISSION_ATTEMPTS = 0;
+}
+
 function PAGE(name, ...args) 
 {
     if (currentPage === name) return;
     console.log('PAGE', name, args);
     if (currentPage === 'parcours' && name !== 'parcours') clearWakeupNotification();
+    if (currentPage === 'checknotifications' && name !== 'checknotifications') clearNotificationPermissionCheck();
     document.querySelectorAll('.page').forEach(page => page.style.display = 'none');
     try { document.getElementById(name).style.display = 'block'; } catch (e) {}
     currentPage = name;
@@ -353,6 +367,13 @@ PAGES['confirmios'] = () => {
 }
 
 PAGES['checknotifications'] = () => {
+    const defaultMessage = 'Vous devez autoriser les notifications pour que la localisation fonctionne en arrière plan.<br /><br />Aucune notification ne vous sera envoyée.';
+    const timeoutMessage = 'Les notifications ne sont toujours pas autorisées.<br /><br />Ouvrez les paramètres, activez les notifications pour Flanerie, puis revenez dans l\'application. Sans cette autorisation, le fonctionnement en arrière plan ne sera pas fiable.';
+    const permissions = cordova.plugins.permissions;
+
+    clearNotificationPermissionCheck();
+    $('#checknotifications-desc').html(defaultMessage);
+    $('#checknotifications-retry').hide().off();
 
     // Not Android or no permissions plugin: skip
     if (PLATFORM != 'android' || cordova.plugins.permissions == undefined) 
@@ -363,14 +384,51 @@ PAGES['checknotifications'] = () => {
     if (apiLevel < 13) return PAGE('rdv');
 
     $('#checknotifications-settings').show().off().on('click', () => GEO.showAppSettings());
+    let permissionRequested = false;
+
+    function queueCheck() {
+        NOTIF_PERMISSION_TIMER = setTimeout(checkNotif, NOTIF_PERMISSION_POLL_MS);
+    }
+
+    function maybeRequestPermission() {
+        if (permissionRequested) return;
+        permissionRequested = true;
+
+        if (typeof permissions.requestPermission !== 'function') return;
+
+        permissions.requestPermission(permissions.POST_NOTIFICATIONS, function(status) {
+            console.log('Notification permission request result:', status.hasPermission);
+        }, function(error) {
+            console.warn('Notification permission request failed:', error);
+        });
+    }
 
     function checkNotif() {
+        NOTIF_PERMISSION_TIMER = null;
         if (currentPage !== 'checknotifications') return;
-        var permissions = cordova.plugins.permissions;
         permissions.checkPermission(permissions.POST_NOTIFICATIONS, function(status) {
             console.log('Notification permission status:', status.hasPermission);
-            if (status.hasPermission && APP_VISIBILITY == 'foreground') PAGE('rdv')
-            else setTimeout(() => { checkNotif() }, 1000);
+            if (status.hasPermission) {
+                if (APP_VISIBILITY == 'foreground') PAGE('rdv');
+                else queueCheck();
+                return;
+            }
+
+            NOTIF_PERMISSION_ATTEMPTS++;
+            if (NOTIF_PERMISSION_ATTEMPTS === 1) maybeRequestPermission();
+
+            if (NOTIF_PERMISSION_ATTEMPTS >= NOTIF_PERMISSION_MAX_ATTEMPTS) {
+                $('#checknotifications-desc').html(timeoutMessage);
+                $('#checknotifications-retry').show().off().on('click', () => {
+                    clearNotificationPermissionCheck();
+                    $('#checknotifications-desc').html(defaultMessage);
+                    $('#checknotifications-retry').hide();
+                    checkNotif();
+                });
+                return;
+            }
+
+            queueCheck();
             }, function(e) {
                 // Error handling
                 console.error('Error checking notification permission', e);

@@ -1,8 +1,38 @@
 var CALIBRATION_TIME = 2
 var APP_VISIBILITY = 'foreground' // foreground, background
+var LAST_AUDIO_CONTEXT_STATE = null
+var AUDIO_CONTEXT_STATE_BOUND = false
+
+function logAudioContextState(reason = 'unknown', force = false) {
+    if (typeof Howler === 'undefined' || !Howler.ctx) return
+
+    let state = Howler.ctx.state
+    if (!force && LAST_AUDIO_CONTEXT_STATE === state) return
+
+    LAST_AUDIO_CONTEXT_STATE = state
+    console.log('[AUDIO] AudioContext state:', reason, state)
+    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_context_state', {reason: reason, state: state})
+}
+
+function bindAudioContextState() {
+    if (AUDIO_CONTEXT_STATE_BOUND) return
+    if (typeof Howler === 'undefined' || !Howler.ctx) return
+
+    let previousHandler = Howler.ctx.onstatechange
+    Howler.ctx.onstatechange = function(event) {
+        if (typeof previousHandler === 'function') previousHandler.call(this, event)
+        logAudioContextState('statechange', true)
+    }
+
+    AUDIO_CONTEXT_STATE_BOUND = true
+    logAudioContextState('bind', true)
+}
 
 function resumeAudioContext(reason = 'unknown') {
     if (typeof Howler === 'undefined' || !Howler.ctx) return
+
+    bindAudioContextState()
+    logAudioContextState(reason)
     if (Howler.ctx.state === 'running') return
 
     console.log('[AUDIO] Resuming AudioContext:', reason, Howler.ctx.state)
@@ -10,8 +40,14 @@ function resumeAudioContext(reason = 'unknown') {
 
     try {
         let result = Howler.ctx.resume()
+        if (result && typeof result.then === 'function') {
+            result.then(() => logAudioContextState(reason + ':resolved', true))
+        }
         if (result && typeof result.catch === 'function') {
             result.catch(error => console.warn('[AUDIO] Failed to resume AudioContext:', reason, error))
+        }
+        else {
+            logAudioContextState(reason + ':sync', true)
         }
     }
     catch (error) {
@@ -576,6 +612,7 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
     BackgroundGeolocation.on('foreground', function() {
         console.log('[INFO] App is in foreground');
         APP_VISIBILITY = 'foreground';
+        resumeAudioContext('foreground');
         // BackgroundGeolocation.configure({ debug: false });
 
         // triggers document resume event
