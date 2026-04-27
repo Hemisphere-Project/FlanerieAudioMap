@@ -520,6 +520,10 @@ class PlayerStep extends EventEmitter
         return this.state == 'offlimit'
     }
 
+    isNarrating() {
+        return this.state == 'play'
+    }
+
     crossLimit(out=true) 
     {
         if (out && this.state == 'play') {

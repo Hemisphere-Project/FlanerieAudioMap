@@ -506,24 +506,6 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
 
         // Restart 
         BackgroundGeolocation.stop()
-        
-        // BackgroundGeolocation.startTask(function(taskKey) {
-        //     var position = {
-        //         simulate: false,
-        //         timestamp: location.time,
-        //         coords: {
-        //             latitude: location.latitude,
-        //             longitude: location.longitude,
-        //             accuracy: location.accuracy,
-        //             speed: location.speed,
-        //         }
-        //     }
-        //     positionCallback(position);
-        //     // execute long running task
-        //     // eg. ajax post location
-        //     // IMPORTANT: task has to be ended by endTask
-        //     BackgroundGeolocation.endTask(taskKey);
-        // });
     });
 
     BackgroundGeolocation.on('stop', function() {

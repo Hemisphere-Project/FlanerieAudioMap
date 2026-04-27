@@ -105,14 +105,16 @@ var TELEMETRY = (function() {
         return d + '_' + t + '_' + r;
     }
 
-    function start(pId, pName) {
+    function start(pId, pName, options) {
         try {
+            options = options || {};
             var now = Date.now();
             var stableParcoursId = pId || pName || '';
             var stableParcoursName = pName || pId || '';
             var stored = _readStored();
             var storedStartedAt = stored && (stored.startedAt || _parseSessionTime(stored.sessionId));
             var canResume = !!(
+                !options.forceNew &&
                 stored &&
                 stored.sessionId &&
                 stored.parcoursId === stableParcoursId &&
@@ -150,6 +152,17 @@ var TELEMETRY = (function() {
             _startFlushTimer();
             console.log('[TELEMETRY] Started session', sessionId);
         } catch(e) { console.warn('[TELEMETRY] start error', e); }
+    }
+
+    function restart(reason, pId, pName) {
+        try {
+            if (sessionId) {
+                _log('session_restart', {reason: reason || 'manual'});
+                end();
+            }
+            start(pId || parcoursId || '', pName || parcoursName || '', {forceNew: true});
+            _log('session_restart_target', {reason: reason || 'manual'});
+        } catch(e) { console.warn('[TELEMETRY] restart error', e); }
     }
 
     function _startFlushTimer() {
@@ -267,6 +280,7 @@ var TELEMETRY = (function() {
 
     return {
         start: start,
+        restart: restart,
         log: log,
         gps: gps,
         flush: flush,

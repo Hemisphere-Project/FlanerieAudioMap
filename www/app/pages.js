@@ -1,5 +1,4 @@
-var DISTANCE_MATCH = 20; // 20m 
-var DISTANCE_RDV = 20; // 10m (to validate RDV)
+var DISTANCE_RDV = 20; // 20m (to validate RDV)
 
 var COLOR_DONE = 'grey';
 var COLOR_NEXT = 'blue';
@@ -128,11 +127,6 @@ PAGES['checkdata'] = () =>
             console.log('PARCOURS', parcours);
 
             var availableParcours = parcours.filter(p => p.status == 'public' || (p.status == 'test' && DEVMODE));
-
-            // GPS: check distance (< 10km)
-            // if (GEO.mode() != 'simulate') {
-            //     availableParcours = availableParcours.filter(p => GEO.distance(p) < DISTANCE_MATCH);
-            // }
 
             console.log('AVAILABLE PARCOURS', availableParcours);
             // for (let k in parcours) {
@@ -494,102 +488,12 @@ PAGES['checkbattery'] = () => {
 //
 // CHECK BACKGROUND
 //
-var timersBG = null
-PAGES['checkbackground'] = () => {
-
-    // SKIP TEST
-    return PAGE('sas');
-
-    // not WebApp: skip
-    if (!document.WEBAPP_URL || GEO.mode() == 'simulate') {
-        return PAGE('sas');
-    }
-
-    // Players
-    var playerTEST = new Howl({
-        src: BASEURL+'/images/background-test.mp3', autoplay: false, volume: 1, html5: (PLATFORM == 'ios')
-    })
-    var playerOK = new Howl({
-        src: BASEURL+'/images/background-ok.mp3', autoplay: false, volume: 1, html5: (PLATFORM == 'ios')
-    })
-    var playerKO = new Howl({
-        src: BASEURL+'/images/background-ko.mp3', autoplay: false, volume: 1, html5: (PLATFORM == 'ios')
-    })
-
-    function cleanupTest() {
-        stopTest();
-        delete playerTEST;
-        delete playerOK;
-        delete playerKO;
-    }
-    function stopTest() {
-        clearTimeout(timersBG);
-        document.removeEventListener('pause', wentBG);
-        document.removeEventListener('resume', wentFG);
-        playerTEST.stop();
-        playerOK.stop();
-        playerKO.stop();
-    }
-
-    // Skip button
-    $('#checkbackground-force').toggle(DEVMODE).off().on('click', () => {
-        cleanupTest();
-        PAGE('sas');
-    })
-
-    var testResult = false;
-    var testCount = 0;
-    stopTest();
-
-    // Background test
-    function wentBG() {
-        console.log('[STATE] APP_VISIBILITY', APP_VISIBILITY);
-        stopTest();
-        document.addEventListener('resume', wentFG);        // listen for foreground
-        playerTEST.play();
-        console.log('[BACKGROUND] test started, playing wait instructions');
-        clearTimeout(timersBG);
-        testResult = false; 
-        timersBG = setTimeout(() => {
-            testResult = GEO.alive(5000);
-        }, 10000);
-        testCount++;
-    }
-
-    // Foreground test
-    function wentFG() {
-        console.log('[STATE] APP_VISIBILITY', APP_VISIBILITY);
-        stopTest();
-     
-        if (testResult) 
-        {
-            console.log('[BACKGROUND] test success');
-            $('#checkbackground-desc').html('TEST réussi ! Le GPS fonctionne bien en arrière-plan.');  
-            $('#checkbackground-force').toggle(DEVMODE)
-            playerOK.play();
-            setTimeout(() => {
-                cleanupTest();
-                PAGE('sas');
-            }, 4000);
-        } 
-        else {
-            console.log('[BACKGROUND] test failed');
-            playerKO.play();
-            $('#checkbackground-desc').html('ECHEC DU TEST: Veuillez vérifier les paramètres de localisation, désactivez le mode économie d\'énergie et réessayer de mettre en veille<br /><br />\
-                Demandez de l\'aide à un membre de l\'équipe si besoin.');
-            document.addEventListener('pause', wentBG);
-            if (testCount > 1) $('#checkbackground-force').show()
-        }
-    }
-
-    document.addEventListener('pause', wentBG);
-}
+PAGES['checkbackground'] = () => PAGE('sas')
 
 //
 // SAS
 //
 PAGES['sas'] = () => {
-    if (timersBG) clearTimeout(timersBG);
     $('#sas-code').hide()
 
     TYPEWRITE('sas-desc')
@@ -645,26 +549,12 @@ PAGES['parcours'] = () => {
     SILENT_PLAYER.play(); // Play silent track
     scheduleWakeupNotification();
     
-    // Dummy player
+    // Reuse the check-audio player slot, but keep only one silent keepalive player.
     if (testplayer) {
         testplayer.stop();
+        testplayer.unload()
         testplayer = null;
     }
-    testplayer = new Howl({
-        src: BASEURL+'/images/flanerie.mp3',
-        loop: true,
-        autoplay: false,
-        volume: 1,
-        html5: (PLATFORM == 'ios')
-    })
-    testplayer.play()
-    testplayer.on('play', () => {
-        console.log('[AUDIO] Playing silent track');
-    })
-    testplayer.on('pause', () => {
-        console.log('[AUDIO] Paused silent track');
-    })
-
 
     console.log('PARCOURS', PARCOURS);
     // if (!PARCOURS.valid()) return PAGE('select')
@@ -892,6 +782,11 @@ devmode(DEVMODE);
 // DEV TOOLS
 $('#parcours-rearm').click(() => {
     console.log('REARM');
+    TELEMETRY.restart(
+        'rearm_button',
+        PARCOURS.info.file || PARCOURS.info.id || PARCOURS.info.name || '',
+        PARCOURS.info.name || PARCOURS.info.file || PARCOURS.info.id || ''
+    );
     PARCOURS.currentStep(-2) // Reset current step
     PARCOURS.startTracking()
     PARCOURS.stopAudio()
@@ -906,6 +801,8 @@ $('#parcours-rearm').click(() => {
 
 $('#parcours-restart').click(() => {
     console.log('RESTART');
+    TELEMETRY.log('session_restart_click', {reason: 'restart_button'});
+    TELEMETRY.end();
     PARCOURS.clearStore()
     location.reload();
 });
@@ -924,12 +821,7 @@ $('#logs-title').on('click', (e) => {
     }
 });
 
-
 // GPS LOST
-// var GPSLOST_PLAYER = new PlayerSimple(true, 0);
-// GPSLOST_PLAYER.load(BASEURL+'/images/', 'gpslost.mp3', false);
-
-
 var GPSLOST_PLAYER = new Howl({
         src: BASEURL+'/images/gpslost.mp3',
         loop: true,

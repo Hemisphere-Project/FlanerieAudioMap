@@ -1,5 +1,9 @@
 const LOAD_EXTRARADIUS = 10
 
+function telemetryLog(type, data) {
+    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log(type, data)
+}
+
 // Generic class Spot, implementing Events
 class Spot extends EventEmitter
 {
@@ -286,6 +290,14 @@ class Spot extends EventEmitter
 
         // Far: unload if loaded
         if (this.player && this.player.isLoaded() && !this.near(pos)) {
+            if (this._type === 'steps' && PARCOURS.currentStep() == this._index) {
+                telemetryLog('step_active_unload', {
+                    step: this._index,
+                    name: this._spot.name,
+                    distanceToCenter: this.distanceToCenter(pos),
+                    distanceToBorder: this.distanceToBorder(pos)
+                })
+            }
             this.player.clear()
             // console.log('Spot unload:', this._spot.name, this.player.isLoaded())
         }
@@ -484,8 +496,29 @@ class Step extends Spot
     updatePosition(position) 
     {
         let inside = super.updatePosition(position)
+        let borderDistance = this.distanceToBorder(position)
 
         if (PARCOURS.currentStep() < this._index) this._done = false
+
+        // Handle Offlimit (if media exists) before generic fire logic, so reentry resumes
+        // from the paused position instead of being treated as a fresh trigger.
+        if (PARCOURS.currentStep() == this._index && this._spot.media.offlimit.src !== '-') 
+        {
+            // If already in offlimit mode, only resume once safely back inside.
+            if (this.player.isOfflimit()) {
+                if (inside && borderDistance < -3) {
+                    this.player.crossLimit(false)
+                }
+                return inside
+            }
+
+            // Only enter offlimit while active narration is running and the walker just
+            // crossed outside the step boundary, not later during afterplay far away.
+            if (this.player.isNarrating() && !inside && this.near(position) && borderDistance > 3) {
+                this.player.crossLimit(true)
+                return inside
+            }
+        }
 
         // Check if we are able to play (Sequential logic)
         //
@@ -494,11 +527,30 @@ class Step extends Spot
         if (this._index < PARCOURS.currentStep()) return inside
 
         // Already completed in this run
-        if (this._done) return inside
+        if (this._done) {
+            telemetryLog('step_skip_done', {step: this._index, name: this._spot.name})
+            return inside
+        }
+
+        // If this step is already current and only paused, resume it without emitting
+        // a new fire event or resetting the current-step lifecycle.
+        if (this._index == PARCOURS.currentStep() && this.player.isPaused() && this.near(position) && inside)
+        {
+            telemetryLog('step_resume_current', {
+                step: this._index,
+                name: this._spot.name,
+                distanceToCenter: this.distanceToCenter(position),
+                distanceToBorder: borderDistance
+            })
+            this.player.resume()
+            return inside
+        }
 
         // If inside:
         if ( (!this.player.isPlaying() || this.player.isPaused()) && this.near(position) && inside) 
         {
+            let wasCurrentStep = PARCOURS.currentStep() == this._index
+
             // Check if previous unrealised steps where optional
             if (this._index > PARCOURS.currentStep() + 1 && PARCOURS.currentStep() + 1 >= 0) {
                 let mandatory = allSteps.filter(s => s._index > PARCOURS.currentStep() && s._index < this._index && !(s._spot.optional === false)).map(s => s._index)
@@ -524,6 +576,16 @@ class Step extends Spot
             if (this.player.isPaused()) this.player.resume()
             else this.player.play()
 
+            if (wasCurrentStep) {
+                telemetryLog('step_refire_current', {
+                    step: this._index,
+                    name: this._spot.name,
+                    distanceToCenter: this.distanceToCenter(position),
+                    distanceToBorder: borderDistance,
+                    paused: this.player.isPaused()
+                })
+            }
+
             // Update index
             PARCOURS.currentStep(this._index)
 
@@ -531,22 +593,6 @@ class Step extends Spot
 
             // fire event
             this.emit('fire', this)
-        }
-
-        // Handle Offlimit (if media exists)
-        if (PARCOURS.currentStep() == this._index && this._spot.media.offlimit.src !== '-') 
-        {
-            // If too far
-            if (this.player.isPlaying() && this.distanceToBorder(position) > 3) 
-            {
-                this.player.crossLimit(true)
-            }
-    
-            // If back inside
-            if (this.player.isOfflimit() && this.distanceToBorder(position) < 3)
-            {
-                this.player.crossLimit(false)
-            }
         }
 
         return inside

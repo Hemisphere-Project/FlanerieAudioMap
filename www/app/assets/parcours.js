@@ -42,6 +42,7 @@ class Parcours extends EventEmitter {
     clearState() {
         this.state = {
             stepIndex: -2,
+            globalOfflimit: false,
             geoMode: null,
             medialoaded: false,
             mediaPack: [],
@@ -393,6 +394,15 @@ class Parcours extends EventEmitter {
                 let inside = s.updatePosition(position);
                 if (inside) offlimit = true;
             });
+        }
+
+        if (this.state.globalOfflimit !== offlimit) {
+            this.state.globalOfflimit = offlimit;
+            if (typeof TELEMETRY !== 'undefined') {
+                TELEMETRY.log(offlimit ? 'global_offlimit_enter' : 'global_offlimit_leave', {
+                    step: this.state.stepIndex
+                });
+            }
         }
 
         // process others, if not offlimit
