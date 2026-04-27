@@ -177,6 +177,14 @@ class GeoLoc extends EventEmitter {
             // Accuracy gate: reject inaccurate fixes for step triggering
             if (!position.simulate && position.coords.accuracy > 30) {
                 console.warn('GPS accuracy too low (' + Math.round(position.coords.accuracy) + 'm), position ignored for triggers');
+                if (typeof TELEMETRY !== 'undefined') {
+                    TELEMETRY.log('gps_trigger_rejected', {
+                        reason: 'accuracy',
+                        acc: Math.round(position.coords.accuracy),
+                        lat: position.coords.latitude,
+                        lng: position.coords.longitude
+                    });
+                }
                 // Still update lastPosition/lastTimeUpdate so GPS-lost detection doesn't fire
             } else {
                 this.emit('position', position);
