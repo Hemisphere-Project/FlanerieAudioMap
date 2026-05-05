@@ -7,11 +7,13 @@ Howler.autoSuspend = false; // Prevent automatic context suspension
 
 // Watch for audio focus changes
 document.addEventListener('deviceready', function() {
-    // iOS: no audiofocus plugin — use Cordova lifecycle events as proxy for call interruptions
+    // iOS: also watch document pause/resume so non-call backgrounding (home button, etc.)
+    // is handled — AVAudioSessionInterruptionNotification only fires for actual audio
+    // interruptions (calls, Siri), not for plain app background events.
+    // Both paths may fire for a phone call; pauseAllPlayers() is idempotent.
     if (PLATFORM === 'ios') {
         document.addEventListener('pause',  () => { pauseAllPlayers(); });
         document.addEventListener('resume', () => { resumeAllPlayers(); });
-        console.log('[AudioFocus] iOS: using pause/resume proxy for audio interruptions.');
     }
 
     if (typeof cordova.plugins.audiofocus === 'undefined') {
@@ -50,10 +52,11 @@ document.addEventListener('deviceready', function() {
 // }, 5000);
 
 function pauseAllPlayers() {
-    // Pause your audio playback here
-    PAUSED_PLAYERS = [];
+    // Additive: do not reset PAUSED_PLAYERS — a second call (e.g. document.pause
+    // then AUDIOFOCUS_LOSS for the same phone call) must not wipe the list that
+    // the first call already built, or resumeAllPlayers() will have nothing to restore.
     ALL_PLAYERS.forEach(player => {
-        if (player.isPlaying()) {
+        if (player.isPlaying() && !PAUSED_PLAYERS.includes(player)) {
             player.pause();
             PAUSED_PLAYERS.push(player);
             console.log('Paused player:', player._src);

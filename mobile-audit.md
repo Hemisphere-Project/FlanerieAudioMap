@@ -1,6 +1,7 @@
 # Mobile Audit Remediation Plan
 
 Date: 2026-04-27 (merged with full code review of www/app/)
+Cordova cross-reference: 2026-05-05 (FlanerieCordova workspace added)
 Telemetry analysis: 2026-04-27 (78 sessions across 5 parcours, Apr 2026)
 Previous: 2026-03-14 (initial code audit merge)
 Scope: Cordova launcher + downloaded local webapp, GPS-triggered audio walk, locked-screen pocket usage, published parcours FLANERIE_ELYSEE
@@ -415,8 +416,9 @@ Regression risk: **LOW**. Additive. Existing Android auto-resume behavior unchan
 Files changed:
 - `www/app/assets/player.js`
 
-Remaining (needs Cordova project):
-- Verify `cordova-plugin-audiofocus` iOS interruption handling — if `AVAudioSession` interruption notifications are not forwarded, mid-session calls on iPhone may not pause audio cleanly. Plugin fork can be extended with `AVAudioSessionInterruptionNotification` → same `AUDIOFOCUS_LOSS`/`GAIN` event strings.
+Remaining: ✅ COMPLETE (2026-05-05 — C1 plugin upgrade)
+- iOS `AVAudioSessionInterruptionNotification` is now implemented in `src/ios/AudioFocus.m`. The plugin now fires `AUDIOFOCUS_LOSS`/`GAIN` on iOS for mid-session calls that do not background the app. The `document.pause`/`resume` proxy in `player.js` stays in place as a harmless second layer.
+- Requires plugin reinstall to take effect in the build: `cordova plugin remove com.maigre.cordova.plugins.audiofocus && cordova plugin add /path/to/fork`.
 
 #### P1.12 Android battery optimization guidance 🆕 [TEST-FIRST] ✅ DONE
 
@@ -438,7 +440,7 @@ What was done:
 - DEVMODE bypasses the check.
 
 Plugin dependency:
-- **Requires `snt1017/cordova-plugin-power-optimization`** in the Cordova project. If the plugin is absent, `checkbatteryopt` skips to `rdv` (fail open).
+- **`snt1017/cordova-plugin-power-optimization` is confirmed present** in the Cordova project (`plugins/cordova-plugin-power-optimization/`, version 0.0.3). The Promise API (`IsIgnoringBatteryOptimizations`, `RequestOptimizations`, `HaveProtectedAppsCheck`, `ProtectedAppCheck`) and the required permissions (`REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`, Huawei `USE_COMPONENT`) are all declared in `plugin.xml`. The feature is live on Android builds.
 
 Regression risk: **MEDIUM** (new blocking page in the startup flow). Must be validated on Android 13+ and at least one older Android. Plugin absence is safe (check is skipped).
 
@@ -656,22 +658,30 @@ Regression risk: **NONE** if left as-is.
 
 ### P3: Platform-specific hardening 🆕
 
-#### P3.1 iOS background audio entitlement 🆕 [RESEARCH-FIRST]
+#### P3.1 iOS background audio entitlement 🆕 [RESEARCH-FIRST] ✅ VERIFIED DONE
 
-Current state:
-- The silent player keepalive depends on the iOS audio session being active.
-- If the `UIBackgroundModes: audio` entitlement is missing from the Cordova project's `config.xml` / generated `Info.plist`, iOS will suspend audio after ~30 seconds of background execution.
-- Howler.js `html5: true` mode on iOS should set `AVAudioSession` category to `playback`, but this is not explicitly configured or verified.
+Verified 2026-05-05 (Cordova project cross-reference).
 
-Plan:
-- Verify `UIBackgroundModes` includes `audio` in `config.xml`.
-- Verify AVAudioSession category is `playback` at runtime (log it via TELEMETRY on app start).
-- iOS 17+ may handle background audio differently — needs device testing.
+`FlanerieCordova/config.xml` already declares `UIBackgroundModes` with all three required strings:
+```xml
+<config-file target="*-Info.plist" parent="UIBackgroundModes">
+    <array>
+        <string>location</string>
+        <string>audio</string>
+        <string>processing</string>
+    </array>
+</config-file>
+```
 
-Regression risk: **NONE** if checking only. **LOW** if adding a missing entitlement.
+The entitlement is present. iOS background audio will not be killed by the OS at the container level.
+
+Remaining open question:
+- Howler.js `html5: true` on iOS should use `AVAudioSession` category `playback` automatically. Whether this is the actual runtime category has not been logged. Adding a telemetry event on app start to confirm the AudioContext state and mode would close this.
+
+Regression risk: **NONE** — entitlement already present.
 
 Files:
-- Cordova `config.xml`, platform build files
+- `FlanerieCordova/config.xml` (verified)
 
 #### P3.2 iOS location permission progression 🆕 [TEST-FIRST]
 
@@ -695,22 +705,99 @@ Files:
 - `www/app/pages.js`
 - `www/app/assets/geoloc.js`
 
-#### P3.3 Android 14+ foreground service type 🆕 [RESEARCH-FIRST]
+#### P3.3 Android 14+ foreground service type 🆕 [RESEARCH-FIRST] ✅ VERIFIED DONE
 
-Context:
-- Android 14 requires explicit `foregroundServiceType` declarations for foreground services.
-- BackgroundGeolocation plugin needs `location` type declared.
-- If the plugin version is outdated, the app may crash or fail to start GPS on Android 14+.
+Verified 2026-05-05 (Cordova project cross-reference).
 
-Plan:
-- Verify the BackgroundGeolocation plugin version handles Android 14's requirements.
-- If not, add explicit `<service android:foregroundServiceType="location">` declaration in `config.xml`.
-- Test on Android 14+ device.
+Two independent declarations already cover this:
 
-Regression risk: **LOW** if only adding metadata. **MEDIUM** if plugin update is needed.
+1. `FlanerieCordova/config.xml` line 47 declares the permission:
+   ```xml
+   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+   ```
 
-Files:
-- Cordova `config.xml`, plugin configuration
+2. The background geolocation plugin's own `plugin.xml` already declares the service type:
+   ```xml
+   <service android:name="com.marianhello.bgloc.service.LocationServiceImpl"
+            android:foregroundServiceType="location" />
+   ```
+
+Both the manifest permission and the service declaration are already in place at v2.3.2. Android 14+ requirements are met.
+
+Regression risk: **NONE** — already handled.
+
+### C: Cordova container findings (cross-reference, 2026-05-05)
+
+These items emerged from comparing FlanerieCordova against FlanerieAudioMap after the Cordova project was added to the workspace.
+
+#### C1 Audiofocus plugin — deprecated API + wrong focus type ✅ DONE (2026-05-05)
+
+Plugin upgraded to v1.2.0 in the `cordova-plugin-audiofocus` fork workspace. All four issues fixed.
+
+**What was done:**
+
+1. **`AUDIOFOCUS_GAIN_TRANSIENT` → `AUDIOFOCUS_GAIN`** (Android): one-line fix. The plugin now requests permanent focus, which is correct for a 45-minute walk. Transient focus signalled to the OS that we expected to give focus back "shortly".
+
+2. **Modern `AudioFocusRequest` API** (Android 8+ / API 26+): `requestAudioFocus` now uses the `AudioFocusRequest` builder on API 26+, with the deprecated 3-argument call kept as fallback for API 23-25. `cancelFocus` uses `abandonAudioFocusRequest` on API 26+ and `abandonAudioFocus` below. The `AudioFocusRequest` object is stored as an instance variable so request and release are paired correctly.
+
+3. **iOS `AVAudioSessionInterruptionNotification`** (new `src/ios/AudioFocus.m`): Objective-C implementation added.
+   - `requestFocus`: sets `AVAudioSessionCategoryPlayback`, activates the session, registers for `AVAudioSessionInterruptionNotification`.
+   - `cancelFocus`: removes observer, deactivates session with `NotifyOthersOnDeactivation`.
+   - `onFocusChange`: stores the persistent callback (same keepCallback pattern as Android).
+   - `handleInterruption:`: emits `AUDIOFOCUS_LOSS` on interruption begin, reactivates the session and emits `AUDIOFOCUS_GAIN` on interruption end. Handles the `ShouldResume` option.
+   - This covers mid-session phone calls that do NOT background the app, which the old `document.pause`/`resume` proxy could not catch.
+
+4. **Duplicate plugin identity removed**: `com.maigre.cordova.plugins.audiofocus` entry removed from `FlanerieCordova/package.json` cordova.plugins section. The single `cordova-plugin-audiofocus` key matches the devDependency name.
+
+**Interaction with existing iOS proxy in `player.js`:**
+The `document.pause`/`resume` proxy added in P1.11 remains in place as a fallback layer. Both will now fire on iOS call interruptions — `pauseAllPlayers`/`resumeAllPlayers` are idempotent so double calls are harmless. The overlay and vibration from the `AUDIOFOCUS_LOSS`/`GAIN` handler will now also appear on iOS (matching Android behavior).
+
+**To apply to the Cordova build** (reinstall required for iOS platform to pick up the new source file):
+```sh
+cordova plugin remove com.maigre.cordova.plugins.audiofocus
+cordova plugin add /path/to/cordova-plugin-audiofocus
+```
+
+Files changed:
+- `cordova-plugin-audiofocus/src/android/AudioFocus.java`
+- `cordova-plugin-audiofocus/src/ios/AudioFocus.m` (new)
+- `cordova-plugin-audiofocus/plugin.xml`
+- `cordova-plugin-audiofocus/package.json`
+- `FlanerieCordova/plugins/com.maigre.cordova.plugins.audiofocus/` (synced)
+- `FlanerieCordova/package.json` (duplicate plugin entry removed)
+
+#### C2 Upgrade candidates (confirmed from Cordova project) [TEST-FIRST]
+
+Confirmed installed versions after workspace cross-reference:
+
+| Dependency | Installed | Recommended | Priority | Relevant app impact |
+|---|---|---|---|---|
+| `cordova-background-geolocation-plugin` | `2.3.2` | `2.3.3` | **HIGH** | Android 14 startup/onCreate fixes, Android 13 notification flow, activity recognition improvements, iOS 18 settings |
+| `cordova-plugin-local-notification` | `1.2.0` | `1.2.3` | medium | Notification permission and restore/reboot behavior; affects keepalive |
+| `cordova-android` | `14.0.1` | `15.0.0` | medium | Longer store-policy runway; do after plugin compatibility check |
+| `cordova-ios` | `7.1.1` | `8.0.1` | medium | Xcode/iOS SDK compatibility; do after Xcode check |
+
+The geolocation plugin upgrade is the highest-value item: v2.3.3 changelog entries directly address this app's locked-screen pocket use case on Android 13/14+.
+
+Upgrade sequence: geolocation plugin first (standalone, testable in isolation) → local-notification → cordova-android (after plugin compat check) → cordova-ios.
+
+Regression risk: **LOW** for plugin upgrades (minor version), **MEDIUM** for platform upgrades (potential Gradle/Xcode churn). Always build and smoke-test after each step.
+
+#### C3 Launcher cache-buster regex [accepted, low priority]
+
+`FlanerieCordova/www/apputils.js` line 307:
+```js
+text = text.replace(/\.js/g, '.js?' + hash);
+text = text.replace(/\.css/g, '.css?' + hash);
+```
+
+This replaces every `.js` occurrence in app.html, including `.json` references if any `<script src="*.json">` ever appears. Currently safe — app.html has no JSON script tags. Would silently break JSON loads if the app.html structure changes.
+
+Decision: accepted for now per the existing Cordova audit (F6). Track: if app.html ever gains a JSON import, this regex must become more targeted (`src="*.js"` attribute match only).
+
+#### C4 Container validation path [open]
+
+The Cordova project has no reproducible build checklist or smoke-test script (F5 in Cordova audit). Adding a minimal one — Android debug build succeeds, iOS prepare opens cleanly in Xcode — would reduce the risk of discovering a broken build the day before a show. Low urgency, high value before any platform upgrade (C2).
 
 ## Recommended Execution Sequence
 
@@ -719,9 +806,10 @@ Phase 0 — Safe fixes (can deploy before a show)
 - P1.9a/b/c trivial code fixes ✅ DONE
 - P1.9d dead code removal ✅ DONE
 - P1.6 media failure reporting improvements ✅ DONE
-- P1.12 Android battery optimization guidance ✅ DONE (requires `cordova-plugin-request-battery-optimizations`)
+- P1.12 Android battery optimization guidance ✅ DONE (plugin confirmed present in Cordova project)
 - P1.14 completed-step refire guard ✅ DONE
-- P1.15 GIVORS_V3 last-step investigation 🆕 (read-only, likely JSON config fix)
+- P1.15 GIVORS_V3 last-step investigation 🆕 (read-only, requires server-side JSON access — still deferred)
+- C1 audiofocus plugin upgrade ✅ DONE (v1.2.0: AUDIOFOCUS_GAIN, AudioFocusRequest API, iOS AVAudioSession, identity cleanup)
 
 Phase 1 — Core lifecycle (needs dedicated field testing)
 - P1.16 PlayerStep double `done` emission fix ✅ DONE
@@ -746,8 +834,12 @@ Phase 2 — UX and logic (test with full walk-through)
 
 Phase 4 — Observability + platform
 - P2.10 telemetry and usage diagnostics ✅ DONE (extended with offlimit/restart markers)
-- P3.1 iOS background audio entitlement 🆕
-- P3.3 Android 14+ foreground service type 🆕
+- P3.1 iOS background audio entitlement ✅ VERIFIED DONE (UIBackgroundModes already present in config.xml)
+- P3.3 Android 14+ foreground service type ✅ VERIFIED DONE (FOREGROUND_SERVICE_LOCATION + foregroundServiceType already declared)
+- P3.2 iOS AUTHORIZED_FOREGROUND non-blocking start (still open — geoloc.js rejects it as error)
+- C2 plugin/platform upgrades: geolocation 2.3.3 → local-notification 1.2.3 → cordova-android 15 → cordova-ios 8
+- C1 audiofocus plugin upgrade ✅ DONE
+- C4 add container build checklist before platform upgrades
 
 Later
 - P1.7 resume/version safety
@@ -910,22 +1002,28 @@ All code changes implemented 2026-04-03:
 
 ## Suggested Next Implementation Ticket
 
-Title: Phase 2 — UX recovery + stability
+Title: Phase 3 — Cordova container hardening + audiofocus plugin fix
 
-Includes:
-- P1.10 GPS lost recovery UX — add vibration on GPS loss/recovery, overlay on foreground-during-lost, manual "Reprendre" fallback [TEST-FIRST]
-- P1.11 Audio focus auto-resume — verify AUDIOFOCUS_GAIN reliability on both platforms, add vibration on focus loss/gain [TEST-FIRST]
-- P1.15 GIVORS_V3 last-step investigation — read-only parcours JSON audit, likely config-only fix [RESEARCH-FIRST]
-- P0.3 remaining: telemetry around permission state + real-device validation of notification keepalive cadence
-- P0.1 geolocation lifecycle — field test with locked-screen pocket walks; code already implemented, pending validation
+All app-only P1/P2 items are code-complete. The remaining open work falls into two areas:
 
-Plugin prerequisite (not code work):
-- Add `cordova-plugin-request-battery-optimizations` to the Cordova project to activate P1.12 battery opt check.
+**Area 1 — Audiofocus plugin fork:** ✅ COMPLETE (v1.2.0)
+- Plugin reinstall required before building: `cordova plugin remove com.maigre.cordova.plugins.audiofocus && cordova plugin add /path/to/fork`
+
+**Area 2 — Plugin/platform upgrades (do in order, build-test between each):**
+- C2a: `cordova-background-geolocation-plugin` 2.3.2 → 2.3.3 (highest value, test locked-screen GPS on Android 13/14)
+- C2b: `cordova-plugin-local-notification` 1.2.0 → 1.2.3 (notification keepalive reliability)
+- C2c: `cordova-android` 14.0.1 → 15.0.0 (after plugin compat check)
+- C2d: `cordova-ios` 7.1.1 → 8.0.1 (after Xcode check)
+
+**Area 3 — Still pending field validation:**
+- P0.1 geolocation lifecycle: code implemented 2026-04-03, no full locked-screen pocket walk test yet
+- P0.3 notification: real-device validation of keepalive cadence on Android
 
 Excludes:
 - P0.2 background validation (stays bypassed)
 - P1.5c GPS timeout tuning (needs P0.1 field data first)
 - P1.8 step progression audit (separate, pre-walk)
-- P3.x platform hardening (separate ticket, Phase 4)
+- P3.2 iOS AUTHORIZED_FOREGROUND (separate iOS-only ticket)
+- P1.15 GIVORS_V3 (needs server-side JSON access)
 - sequencing logic changes
 - SAS redesign
