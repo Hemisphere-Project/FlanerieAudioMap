@@ -31,12 +31,17 @@ PARCOURS.restore(); // Restore parcours from localStorage
 // PAGE SELECT
 //
 var PAGES = {}
+var PAGES_CLEANUP = {}
 var currentPage = '';
 var NOTIF_TIMER = null;
 var NOTIF_PERMISSION_TIMER = null;
 var NOTIF_PERMISSION_ATTEMPTS = 0;
 const NOTIF_PERMISSION_POLL_MS = 1000;
 const NOTIF_PERMISSION_MAX_ATTEMPTS = 15;
+var BATTOPT_TIMER = null;
+var BATTOPT_ATTEMPTS = 0;
+const BATTOPT_POLL_MS = 1500;
+const BATTOPT_MAX_ATTEMPTS = 10;
 
 function clearWakeupNotification(clearPending = true)
 {
@@ -63,12 +68,24 @@ function clearNotificationPermissionCheck()
     NOTIF_PERMISSION_ATTEMPTS = 0;
 }
 
-function PAGE(name, ...args) 
+function clearBatteryOptCheck()
+{
+    if (BATTOPT_TIMER) {
+        clearTimeout(BATTOPT_TIMER);
+        BATTOPT_TIMER = null;
+    }
+    BATTOPT_ATTEMPTS = 0;
+}
+
+PAGES_CLEANUP['parcours']           = () => clearWakeupNotification();
+PAGES_CLEANUP['checknotifications'] = () => clearNotificationPermissionCheck();
+PAGES_CLEANUP['checkbatteryopt']    = () => clearBatteryOptCheck();
+
+function PAGE(name, ...args)
 {
     if (currentPage === name) return;
     console.log('PAGE', name, args);
-    if (currentPage === 'parcours' && name !== 'parcours') clearWakeupNotification();
-    if (currentPage === 'checknotifications' && name !== 'checknotifications') clearNotificationPermissionCheck();
+    if (PAGES_CLEANUP[currentPage]) PAGES_CLEANUP[currentPage]();
     document.querySelectorAll('.page').forEach(page => page.style.display = 'none');
     try { document.getElementById(name).style.display = 'block'; } catch (e) {}
     currentPage = name;
@@ -557,13 +574,13 @@ PAGES['checknotifications'] = () => {
     $('#checknotifications-desc').html(defaultMessage);
     $('#checknotifications-retry').hide().off();
 
-    // Not Android or no permissions plugin: skip
+    // Not Android or no permissions plugin: skip notifications, still check battery opt
     if (PLATFORM != 'android' || cordova.plugins.permissions == undefined)
-        return PAGE('rdv');
+        return PAGE('checkbatteryopt');
 
     // Check Android version >= 13 (POST_NOTIFICATIONS required since API 33)
     var apiLevel = parseInt(device.version.split('.')[0], 10);
-    if (apiLevel < 13) return PAGE('rdv');
+    if (apiLevel < 13) return PAGE('checkbatteryopt');
 
     $('#checknotifications-settings').show().off().on('click', () => GEO.showAppSettings());
     let permissionRequested = false;
@@ -594,7 +611,7 @@ PAGES['checknotifications'] = () => {
             if (status.hasPermission) {
                 if (APP_VISIBILITY == 'foreground') {
                     if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('notif_permission', {granted: true, elapsed: Date.now() - notifStartTime});
-                    PAGE('rdv');
+                    PAGE('checkbatteryopt');
                 } else {
                     queueCheck();
                 }
@@ -623,6 +640,77 @@ PAGES['checknotifications'] = () => {
         });
     }
     checkNotif();
+}
+
+//
+// CHECK BATTERY OPTIMIZATION (Android 6+ / API 23+)
+// Requires: cordova-plugin-request-battery-optimizations
+// Blocks startup if the app is not whitelisted from Android battery optimization.
+// OEM-specific restrictions (Samsung, Xiaomi, etc.) are NOT detectable via this API
+// and are flagged with a non-blocking advisory note.
+//
+PAGES['checkbatteryopt'] = () => {
+    if (DEVMODE) return PAGE('rdv');
+
+    const pluginAvailable = PLATFORM === 'android'
+        && typeof window.RequestBatteryOptimizations !== 'undefined'
+        && typeof device !== 'undefined';
+
+    if (!pluginAvailable) return PAGE('rdv');
+
+    var apiLevel = parseInt(device.version.split('.')[0], 10);
+    if (apiLevel < 23) return PAGE('rdv');
+
+    clearBatteryOptCheck();
+
+    // OEM advisory (non-blocking: OEM restrictions are not detectable via isIgnoringBatteryOptimizations)
+    const manufacturer = (device.manufacturer || '').toLowerCase();
+    const oemWithExtraLayers = ['samsung', 'xiaomi', 'huawei', 'oppo', 'vivo', 'oneplus', 'realme'];
+    if (oemWithExtraLayers.includes(manufacturer)) {
+        $('#checkbatteryopt-oem').show().html(
+            `Sur votre appareil ${device.manufacturer}, vérifiez également les réglages de batterie spécifiques&nbsp;: applications autorisées en arrière-plan, mode veille désactivé pour Flanerie.`
+        );
+    } else {
+        $('#checkbatteryopt-oem').hide();
+    }
+
+    $('#checkbatteryopt-settings').off().on('click', () => {
+        window.RequestBatteryOptimizations.requestOptimizationsSettings();
+    });
+
+    $('#checkbatteryopt-retry').hide().off().on('click', () => {
+        clearBatteryOptCheck();
+        check();
+    });
+
+    function check() {
+        BATTOPT_TIMER = null;
+        if (currentPage !== 'checkbatteryopt') return;
+
+        window.RequestBatteryOptimizations.isIgnoringBatteryOptimizations(
+            function(isIgnoring) {
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('battery_opt', { ignoring: isIgnoring, manufacturer: device.manufacturer, apiLevel });
+                if (isIgnoring) {
+                    PAGE('rdv');
+                    return;
+                }
+                BATTOPT_ATTEMPTS++;
+                if (BATTOPT_ATTEMPTS >= BATTOPT_MAX_ATTEMPTS) {
+                    $('#checkbatteryopt-retry').show();
+                    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('battery_opt', { blocked: true, manufacturer: device.manufacturer });
+                    return;
+                }
+                BATTOPT_TIMER = setTimeout(check, BATTOPT_POLL_MS);
+            },
+            function(error) {
+                console.error('[BATTOPT] check error:', error);
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('battery_opt', { error: String(error) });
+                PAGE('rdv');
+            }
+        );
+    }
+
+    check();
 }
 
 //

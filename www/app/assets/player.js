@@ -102,6 +102,7 @@ class PlayerSimple extends EventEmitter
         this._player = null
         this.isGoingOut = null
         this._playRequested = false
+        this._playRequestedTimeout = null
         this._volume = 0
         this._media = null
         this._loadError = false
@@ -188,12 +189,16 @@ class PlayerSimple extends EventEmitter
         this._player.on('loaderror', (id, error) => {
             console.error('PlayerSimple loaderror:', this._player ? this._player._src : '?', error)
             this._loadError = true
+            this._playRequested = false
+            clearTimeout(this._playRequestedTimeout)
             this.emit('loaderror', this._player ? this._player._src : null, error)
             if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_loaderror', {src: this._player ? this._player._src : null, error: String(error)});
         })
         this._player.on('playerror', (id, error) => {
             console.error('PlayerSimple playerror:', this._player ? this._player._src : '?', error)
             this._loadError = true
+            this._playRequested = false
+            clearTimeout(this._playRequestedTimeout)
             this.emit('playerror', this._player ? this._player._src : null, error)
             if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_playerror', {src: this._player ? this._player._src : null, error: String(error)});
         })
@@ -202,7 +207,7 @@ class PlayerSimple extends EventEmitter
         // console.log('PlayerSimple load:', media.src)
     }
 
-    clear() {  
+    clear() {
         if (this._player !== null) {
             // remove from global ALL_PLAYERS array
             ALL_PLAYERS = ALL_PLAYERS.filter(player => player !== this)
@@ -211,6 +216,7 @@ class PlayerSimple extends EventEmitter
             this._player.unload()
             this._player = null
             this._playRequested = false
+            clearTimeout(this._playRequestedTimeout)
             this._loadError = false
         }
     }
@@ -245,6 +251,14 @@ class PlayerSimple extends EventEmitter
 
         if (seek >= 0) this._player.seek(seek)
         this._playRequested = true
+        clearTimeout(this._playRequestedTimeout)
+        this._playRequestedTimeout = setTimeout(() => {
+            if (this._playRequested) {
+                console.warn('PlayerSimple play timeout: resetting stuck _playRequested', this._player ? this._player._src : '?')
+                this._playRequested = false
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_play_timeout', {src: this._player ? this._player._src : null})
+            }
+        }, 5000)
         console.log('PlayerSimple play requested:', this._player._src, 'seek:', seek, 'volume:', volume)
 
         if (PLATFORM == 'ios' || AUDIOFOCUS < 1) {

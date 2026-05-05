@@ -427,48 +427,67 @@ Regression risk: **LOW**. Additive.
 Files:
 - `www/app/assets/player.js`
 
-#### P1.12 Android battery optimization guidance 🆕 [SAFE-TODAY]
+#### P1.12 Android battery optimization guidance 🆕 [TEST-FIRST] ✅ DONE
 
-Problem:
-- Android aggressively kills background services on many OEM skins (Samsung, Xiaomi, Huawei, OPPO). This is the #1 cause of background GPS/audio death on Android.
-- The existing `checknotifications` page handles POST_NOTIFICATIONS but does not check battery optimization.
+Implemented 2026-05-05.
 
-Plan:
-- Add a startup check for battery optimization status (Cordova plugin or Android intent check).
-- If enabled, show warning with instructions: "Désactivez l'optimisation de batterie pour Flanerie dans Paramètres > Batterie".
-- Consider linking to `dontkillmyapp.com` for device-specific instructions.
-- Place in the pre-parcours flow, near the notification permission check.
+Design decision — blocking, not advisory:
+- Battery optimization is the #1 cause of background GPS/audio death on Android. Letting a visitor proceed with it enabled is worse than blocking them at startup where the support team can intervene.
+- The support team is present at walk start and can help or issue a backup phone. Blocking here is the right tradeoff.
+- No false positives: `PowerManager.isIgnoringBatteryOptimizations()` is binary and reliable. If it says not whitelisted, that is true.
 
-Regression risk: **LOW**. Additive startup check. No change to existing behavior.
+What was done:
+- Added `checkbatteryopt` page inserted in the flow between `checknotifications` and `rdv` on Android.
+- `checknotifications` now routes to `checkbatteryopt` on all Android paths (including API < 13 early-exit) instead of directly to `rdv`. Non-Android paths (iOS, browser) are unaffected.
+- `checkbatteryopt` skips to `rdv` if: not Android, plugin absent, or API < 23 (Android 6).
+- If battery optimization is enabled for the app, the page is a hard block: user must open settings, whitelist the app, then return. Auto-polling detects the change every 1.5s (up to 10 polls / 15s). After timeout, a "J'ai désactivé" retry button appears for manual re-check.
+- Settings button opens the system battery optimization dialog directly to the app entry via `requestOptimizationsSettings()`.
+- For known OEM devices (Samsung, Xiaomi, Huawei, OPPO, Vivo, OnePlus, Realme): a non-blocking advisory note is shown about OEM-specific restrictions that are NOT detectable via the standard API (e.g. Samsung "Sleeping apps", Xiaomi "MIUI Optimization"). This is informational only — no false block.
+- Telemetry: `battery_opt` event logged with `ignoring`, `manufacturer`, `apiLevel` on each check result, and a separate `blocked: true` log when max attempts are exhausted.
+- DEVMODE bypasses the check.
 
-Files:
-- `www/app/pages.js`
+Plugin dependency:
+- **Requires `cordova-plugin-request-battery-optimizations`** in the Cordova project. If the plugin is absent, `checkbatteryopt` skips to `rdv` (fail open). The plugin must be added before this check is effective.
 
-#### P1.13 Page exit cleanup system 🆕 [TEST-FIRST]
+Known limitation — OEM-specific restrictions:
+- The standard `isIgnoringBatteryOptimizations()` check covers vanilla Android battery optimization only. Samsung, Xiaomi, Huawei, OPPO, OnePlus etc. have additional app-kill layers not exposed by this API. The advisory note addresses this for known OEMs, but cannot block on state we cannot detect. A support-team override (backup phone) is the backstop for these cases.
 
-Current state:
-- `PAGE()` function (`pages.js` line ~37) hides all `.page` divs and shows the target, then calls the page handler. There is no concept of page exit or teardown. Timers, event listeners, and intervals from previous pages persist.
+Regression risk: **MEDIUM** (new blocking page in the startup flow). Must be validated on Android 13+ and at least one older Android. Plugin absence is safe (check is skipped).
 
-Known affected timers:
-- `CHECKGEO` interval (GPS icon status — runs forever after checkgeo page)
-- `checkpos` interval in RDV page
-- `scheduleWakeupNotification` setTimeout chain (partially addressed in P0.3)
-- `progress` interval in load page
-- `recheck` timeout in confirmgeo page
+Files changed:
+- `www/app/app.html` — added `checkbatteryopt` page div
+- `www/app/pages.js` — `checkbatteryopt` handler, routed `checknotifications` Android exits to `checkbatteryopt`
 
-Plan:
-- Add an optional `PAGES_CLEANUP[name]` map. Before transitioning in `PAGE()`, call cleanup for the outgoing page.
-- Migrate the worst offenders (CHECKGEO, wakeup scheduling) to use this pattern.
-- Do not attempt a full refactor — just add the hook and use it incrementally.
+Acceptance:
+- Android users with battery optimization enabled cannot reach `rdv` until they whitelist the app.
+- Android users who have already whitelisted pass through without friction.
+- iOS and browser flows are unaffected.
+- OEM devices show the advisory note without being falsely blocked.
+- Telemetry captures battery opt state at startup.
 
-Regression risk: **MEDIUM**. Cleanup functions must not accidentally stop things that should persist (like GEO tracking itself). Each cleanup function must be tested.
+#### P1.13 Page exit cleanup system 🆕 [TEST-FIRST] ✅ DONE
 
-Files:
+Implemented 2026-05-05.
+
+What was done:
+- Added `PAGES_CLEANUP` map alongside `PAGES`.
+- `PAGE()` now calls `PAGES_CLEANUP[currentPage]()` (if registered) before any page transition, replacing the two hardcoded conditional calls that were previously inline.
+- Migrated existing cleanup registrations:
+  - `PAGES_CLEANUP['parcours']` → `clearWakeupNotification()`
+  - `PAGES_CLEANUP['checknotifications']` → `clearNotificationPermissionCheck()`
+  - `PAGES_CLEANUP['checkbatteryopt']` → `clearBatteryOptCheck()` (new, added for P1.12)
+- The `CHECKGEO` interval (GPS icon status) was intentionally not added: it updates a persistent status bar element visible on all pages and stopping it mid-flow could leave the icon in a stale state during the walk. Left for a separate decision.
+
+Regression risk: **LOW**. The behavior of the migrated cleanups is identical to the previous hardcoded calls. The pattern is additive — pages without a registered cleanup function are unaffected.
+
+Files changed:
 - `www/app/pages.js`
 
 Acceptance:
-- No timer/interval leaks across page transitions.
-- Pattern is reusable for future pages.
+- No wakeup notification chain survives leaving the parcours page.
+- No notification permission poll survives leaving the checknotifications page.
+- No battery opt poll survives leaving the checkbatteryopt page.
+- Pattern is available for future pages with no boilerplate in `PAGE()`.
 
 #### P1.14 Completed-step refire guard 🆕 [SAFE-TODAY] ✅ DONE
 
@@ -502,40 +521,34 @@ Likely cause:
 - The final V3 steps may have no exit polygon (no zone to walk out of to trigger `done`), or their audio is an infinite afterplay loop with no `done` path.
 - Could also be a `cutoff` value too short to allow `step_done` to emit before GPS tracking stops.
 
-Plan:
-- Inspect the V3 parcours JSON for the last 2 steps: verify exit polygon exists, check `cutoff` value, check whether audio src ends or loops.
-- No code change expected — this is likely a parcours configuration issue.
+Status: **deferred** — parcours JSON files are not in the webapp repository. Investigation requires access to the Cordova app folder or the server-side parcours store. Will be revisited once the Cordova project is added to the workspace.
 
 Regression risk: **NONE** (read-only investigation). Fix risk depends on what is found.
 
 Files:
-- `parcours/flanerie_givors_v3.json` (or equivalent)
+- `parcours/flanerie_givors_v3.json` (server-side, not in webapp repo)
 
 Acceptance:
 - The final step of GIVORS_V3 emits `step_done` during a real walk-through.
 
-#### P1.16 PlayerStep double `done` emission 🆕 [TEST-FIRST]
+#### P1.16 PlayerStep double `done` emission 🆕 [TEST-FIRST] ✅ DONE
 
-Promoted from Known Dormant Bugs after telemetry evidence.
+Implemented 2026-05-05. Fix was already present in code at time of audit review.
 
-Current state:
-- Both `voice.on('end')` and `music.on('end')` in `player.js` lines ~397-410 independently call `state = 'afterplay'` and `emit('done')`.
-- The assumption was that `music.src = "-"` would prevent the music handler from firing. It does not: Howler attaches the `on('end')` handler regardless of source validity and fires it on load error or immediate end for unresolvable sources.
+What was done:
+- Both `voice.on('end')` and `music.on('end')` delegate to `startAfterplay()`.
+- `startAfterplay()` checks `if (!this._doneFired)` before setting state and emitting `done`. Sets `_doneFired = true` on first call; subsequent calls are no-ops.
+- `_doneFired` is reset to `false` in both `load()` and `clear()`, so each new step play-through starts clean.
 
-Telemetry evidence (Apr 2026):
-- ELYSEE sessions: `step_done` fires twice on voice-only steps 0, 3, 10, 13, 24.
-- GIVORS_V2 sessions: `step_done` fires up to 4× on individual steps.
-- The double emission potentially double-advances the step sequencer and double-starts afterplay. On steps with a long afterplay loop, this may result in two simultaneous audio streams.
+Telemetry evidence behind the fix (Apr 2026):
+- ELYSEE sessions: `step_done` fired twice on voice-only steps 0, 3, 10, 13, 24.
+- GIVORS_V2 sessions: `step_done` fired up to 4× on individual steps.
+- `music.src = "-"` does not prevent Howler from attaching and firing the `on('end')` handler.
 
-Fix:
-- Add a `_doneFired` boolean flag on `PlayerStep`. Set it to `true` the first time `emit('done')` is about to fire. Skip subsequent calls.
-- Reset the flag in the player's `reset()` or `stop()` method.
-- Alternatively, detach the `music.on('end')` handler when `music.src` is `"-"` or falsy.
+Regression risk: **NONE** (guard already in place).
 
-Regression risk: **LOW**. The fix only suppresses duplicate emissions. First emission is unaffected.
-
-Files:
-- `www/app/assets/player.js` lines ~397-410
+Files changed:
+- `www/app/assets/player.js`
 
 Acceptance:
 - Each step emits `step_done` exactly once per play-through.
@@ -718,20 +731,21 @@ Phase 0 — Safe fixes (can deploy before a show)
 - P1.9a/b/c trivial code fixes ✅ DONE
 - P1.9d dead code removal ✅ DONE
 - P1.6 media failure reporting improvements ✅ DONE
-- P1.12 Android battery optimization guidance 🆕
+- P1.12 Android battery optimization guidance ✅ DONE (requires `cordova-plugin-request-battery-optimizations`)
 - P1.14 completed-step refire guard ✅ DONE
 - P1.15 GIVORS_V3 last-step investigation 🆕 (read-only, likely JSON config fix)
 
 Phase 1 — Core lifecycle (needs dedicated field testing)
-- P1.16 PlayerStep double `done` emission fix 🆕 (fix before next ELYSEE show — active bug)
+- P1.16 PlayerStep double `done` emission fix ✅ DONE
+- P1.13 page exit cleanup system ✅ DONE
 - P1.17 offlimit reentry resume ✅ DONE
-- P0.1b AudioContext resume on foreground 🆕 ✅ DONE
+- P0.1b AudioContext resume on foreground ✅ DONE
 - P0.3 notification strategy: fix scheduling leak + permission flow — Partial ✅
 - P0.1 geolocation lifecycle and anti-sleep strategy (research + full field test)
 - P1.5c GPS lost timeout tuning (research, coupled with P0.1)
 
 Phase 2 — Stability cleanup (test with repeated staff starts)
-- P1.5 listener/timer cleanup (extend with P1.13 page exit cleanup 🆕)
+- P1.5 listener/timer cleanup (partial ✅ — P1.13 framework in place, CHECKGEO leak deferred)
 - P1.5b GPS accuracy filtering ✅ DONE
 - P1.10 GPS lost recovery UX 🆕
 - P1.11 Audio focus auto-resume 🆕
@@ -806,12 +820,9 @@ Run after P0 work and again before release:
 
 These issues exist in the code but do not manifest on FLANERIE_ELYSEE or current usage. They should be tracked and fixed before conditions change.
 
-### Double "done" emission in PlayerStep ⚠️ NOT DORMANT — see P1.16
-- Both `voice.on('end')` and `music.on('end')` independently trigger `state = 'afterplay'` and `emit('done')`.
-- Previously assumed dormant because FLANERIE_ELYSEE uses voice-only (`music.src = "-"`).
-- **Telemetry (Apr 2026) disproves this.** ELYSEE sessions show `step_done` emitted twice on voice-only steps (steps 0, 3, 10, 13, 24 in sessions `20260417_124105_f4eg` and `20260417_124348_rif9`). GIVORS_V2 sessions show it on nearly every step (step 10 done 4×, step 9 done 3×). `music.src = "-"` does not prevent the `on('end')` handler from being attached and firing (likely Howler fires `end` immediately or on load error for an unresolvable source).
-- **This is an active production bug on ELYSEE. Treat as P1.16.**
-- File: `www/app/assets/player.js` lines ~397-410
+### Double "done" emission in PlayerStep ✅ FIXED — P1.16
+- Fixed via `_doneFired` guard in `startAfterplay()`. Both `voice.on('end')` and `music.on('end')` delegate to `startAfterplay()`, which emits `done` only once per step.
+- File: `www/app/assets/player.js`
 
 ### iOS html5 audio mode seek/fade limitations
 - All Howl players use `html5: true` on iOS. Howler.js html5 mode has known issues with `seek()` and `fade()` reliability.
@@ -830,25 +841,22 @@ These issues exist in the code but do not manifest on FLANERIE_ELYSEE or current
 - `delete testplayer` replaced with `testplayer = null` in `pages.js` (two occurrences). Fixed in P1.9c.
 - File: `www/app/pages.js`
 
-### Console.log HTML injection in dev panel
-- `console.log` override appends to `$('#logs')` with `.append(message + '<br/>')` without HTML escaping.
-- Log messages containing angle brackets will be interpreted as HTML.
-- Dev-only panel, not user-facing. Low risk but worth noting.
+### Console.log HTML injection in dev panel ✅ FIXED (2026-05-05)
+- Replaced inline `.append(message + '<br/>')` pattern with a shared `_logsAppend(color, ...message)` helper that uses `$('<span>').text(text)` (jQuery text-safe insertion).
+- All three overrides (`log`, `warn`, `error`) now share the helper. No raw HTML string interpolation of log content.
 - File: `www/app/assets/common.js`
 
-### PlayerSimple `_playRequested` stuck flag 🆕
-- `_playRequested` flag in `player.js` line ~235 is set to `true` before `play()`, then set to `false` in the `'play'` event callback. If Howler never fires the `play` event (load error, AudioContext suspended, iOS background suspension), the flag stays `true` and all subsequent `play()` calls are rejected with "already requesting".
-- No timeout or recovery mechanism exists.
-- In practice, AudioContext resume and Howler's auto-unlock mitigate this. But on iOS after a long background period, this can lead to permanently stuck players that appear to be "playing" but produce no sound.
-- **Fix:** Add a 5-second timeout that resets `_playRequested` to `false` and logs an error. Also handle `loaderror` to reset the flag.
+### PlayerSimple `_playRequested` stuck flag ✅ FIXED (2026-05-05)
+- `_playRequested` now reset in `loaderror` and `playerror` handlers, which previously left it `true` on Howler load/play failures.
+- 5-second safety timeout added in `play()`: if Howler never fires the `play` event (AudioContext suspended, iOS background), the flag resets automatically and logs `audio_play_timeout` telemetry.
+- `clearTimeout` added in `clear()` so the timeout does not fire on players that are explicitly stopped.
 - File: `www/app/assets/player.js`
 
-### Zone audio boundary thrashing 🆕
-- Zone players in `spot.js` load audio when `near()` returns true and unload when `near()` returns false. Both use the same threshold (`_loadRadius`).
-- Walking along a zone boundary causes rapid load/unload/load/unload cycles (every GPS tick, ~1/second).
-- Each cycle creates and destroys Howler/Web Audio nodes. Over time this can exhaust iOS's ~16 simultaneous audio source limit or cause audible glitches.
-- **Fix:** Add hysteresis — load at `_loadRadius`, unload at `2 × _loadRadius`. This creates a buffer zone where the player stays loaded.
-- File: `www/app/assets/spot.js` — `Spot.updatePosition()`
+### Zone audio boundary thrashing ✅ FIXED (2026-05-05)
+- Added `UNLOAD_EXTRA_HYSTERESIS = 10` (metres) constant and `_unloadRadius = _loadRadius + UNLOAD_EXTRA_HYSTERESIS` computed in both constructor branches (circle and polygon).
+- `Spot.updatePosition()` now uses `distanceToCenter(pos) > _unloadRadius` for the unload condition instead of `!near(pos)`. Load still triggers at `_loadRadius`.
+- Effect: with default values, a zone with radius 30m loads at 40m approach and only unloads beyond 50m — 10m dead-band eliminates oscillation at the edge.
+- File: `www/app/assets/spot.js`
 
 ### `allSteps` global array leak on parcours rebuild 🆕
 - `allSteps` array in `spot.js` is filtered per-index on Step construction but never fully cleared on parcours rebuild. Old Step references from a previous `build()` call may linger.
@@ -914,26 +922,22 @@ All code changes implemented 2026-04-03:
 
 ## Suggested Next Implementation Ticket
 
-Title: Field validation of locked-screen lifecycle changes
+Title: Phase 2 — UX recovery + stability
 
 Includes:
-- 🆕 PlayerStep double `done` fix (P1.16) — active ELYSEE bug, low risk
-- 🆕 completed-step refire guard in spot.js (P1.14) — one-liner, SAFE
-- 🆕 AudioContext resume on foreground (P0.1b)
-- notification scheduling leak fix: timeout ID tracking + page-exit guard (P0.3)
-- geolocation lifecycle cleanup with anti-sleep intent preserved (P0.1, after research)
-- listener cleanup in touched lifecycle code
-- media failure reporting improvements where directly related
-- trivial code fixes (P1.9a/b/c) as no-risk opportunistic cleanup
-- 🆕 dead code removal (P1.9d) as no-risk opportunistic cleanup
+- P1.10 GPS lost recovery UX — add vibration on GPS loss/recovery, overlay on foreground-during-lost, manual "Reprendre" fallback [TEST-FIRST]
+- P1.11 Audio focus auto-resume — verify AUDIOFOCUS_GAIN reliability on both platforms, add vibration on focus loss/gain [TEST-FIRST]
+- P1.15 GIVORS_V3 last-step investigation — read-only parcours JSON audit, likely config-only fix [RESEARCH-FIRST]
+- P0.3 remaining: telemetry around permission state + real-device validation of notification keepalive cadence
+- P0.1 geolocation lifecycle — field test with locked-screen pocket walks; code already implemented, pending validation
+
+Plugin prerequisite (not code work):
+- Add `cordova-plugin-request-battery-optimizations` to the Cordova project to activate P1.12 battery opt check.
 
 Excludes:
+- P0.2 background validation (stays bypassed)
+- P1.5c GPS timeout tuning (needs P0.1 field data first)
+- P1.8 step progression audit (separate, pre-walk)
+- P3.x platform hardening (separate ticket, Phase 4)
 - sequencing logic changes
 - SAS redesign
-- full security/passive exposure review
-- full resume/version-safety redesign
-- GPS timeout tuning (needs research first)
-- accuracy filtering ✅ already done
-- 🆕 platform-specific hardening (separate ticket, Phase 4)
-- 🆕 GPS lost recovery UX, audio focus UX (separate ticket, Phase 2)
-- 🆕 GIVORS_V3 last-step investigation (read-only, separate task)

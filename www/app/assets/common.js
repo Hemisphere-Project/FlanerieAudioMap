@@ -10,51 +10,34 @@ console._log = console.log
 console._warn = console.warn
 console._error = console.error
 
+function _logsAppend(color, ...message) {
+    let text
+    if (typeof message === 'object') {
+        try { text = JSON.stringify(message, null, 2) }
+        catch (e) { text = String(message) }
+    } else {
+        text = String(message)
+    }
+    const $line = $('<span>').text(text)
+    if (color) $line.css('color', color)
+    $('#logs').append($line).append('<br/>')
+}
+
 if ($('#logs').length && FRONT_LOGS) {
     console.log = function(...message) {
         console._log(message)
-        if (typeof message === 'object') {
-            try {
-                message = JSON.stringify(message, null, 2)
-            }
-            catch (e) {
-                // if JSON.stringify fails, just convert to string
-                message = message.toString()
-            }
-        }
-        $('#logs').append(message + '<br/>')
-        // $('#logs').scrollTop($('#logs')[0].scrollHeight)
+        _logsAppend(null, ...message)
     }
 
     console.warn = function(...message) {
         console._warn(message)
-        if (typeof message === 'object') {
-            try {
-                message = JSON.stringify(message, null, 2)
-            }
-            catch (e) {
-                // if JSON.stringify fails, just convert to string
-                message = message.toString()
-            }
-        }
-        $('#logs').append('<span style="color:orange">' + message + '</span><br/>')
-        // $('#logs').scrollTop($('#logs')[0].scrollHeight)
+        _logsAppend('orange', ...message)
     }
-}
 
-
-
-// catch all error and push it
-
-console._error = console.error
-if ($('#logs').length && FRONT_LOGS) 
-console.error = function(...message) {
-    console._error(message) 
-    if (typeof message === 'object') {
-        message = JSON.stringify(message)
+    console.error = function(...message) {
+        console._error(message)
+        _logsAppend('red', ...message)
     }
-    $('#logs').append('<span style="color:red">' + message + '</span><br/>')
-    // $('#logs').scrollTop($('#logs')[0].scrollHeight)
 }
 
 // PATH functions

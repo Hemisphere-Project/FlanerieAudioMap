@@ -1,4 +1,5 @@
 const LOAD_EXTRARADIUS = 10
+const UNLOAD_EXTRA_HYSTERESIS = 10  // extra meters beyond _loadRadius before unloading — prevents load/unload oscillation at zone edges
 
 function telemetryLog(type, data) {
     if (typeof TELEMETRY !== 'undefined') TELEMETRY.log(type, data)
@@ -49,6 +50,7 @@ class Spot extends EventEmitter
             else console.warn('No map to add marker to:', this._spot.name)
 
             this._loadRadius = this._spot.radius + LOAD_EXTRARADIUS
+            this._unloadRadius = this._loadRadius + UNLOAD_EXTRA_HYSTERESIS
         }
 
         // Leaflet Polygon.
@@ -69,9 +71,10 @@ class Spot extends EventEmitter
             else console.warn('No map to add marker to:', this._spot.name)
 
             // Compute radius
-            this._loadRadius = Math.max(...this._spot.radius.map(c => 
+            this._loadRadius = Math.max(...this._spot.radius.map(c =>
                 this.distanceToCenter({coords: {latitude: c[0], longitude: c[1]}})
             ))+LOAD_EXTRARADIUS
+            this._unloadRadius = this._loadRadius + UNLOAD_EXTRA_HYSTERESIS
         }
 
         // Load Circle
@@ -288,8 +291,8 @@ class Spot extends EventEmitter
             console.log('Spot load:', this._spot.name, this.player.isLoaded())
         }
 
-        // Far: unload if loaded
-        if (this.player && this.player.isLoaded() && !this.near(pos)) {
+        // Far: unload if loaded — uses _unloadRadius (> _loadRadius) to avoid oscillation at zone edges
+        if (this.player && this.player.isLoaded() && this.distanceToCenter(pos) > this._unloadRadius) {
             if (this._type === 'steps' && PARCOURS.currentStep() == this._index) {
                 telemetryLog('step_active_unload', {
                     step: this._index,
