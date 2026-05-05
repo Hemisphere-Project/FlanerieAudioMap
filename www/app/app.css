@@ -271,27 +271,42 @@ input[type=number].input-page::-webkit-outer-spin-button {
     opacity: 0.8;
 }
 
-#resume-overlay {
+#resume-overlay,
+#gpslost-overlay {
     position: fixed;
     top: 0;
     left: 0;
     right: 0;
     bottom: 0;
-    background-color: rgba(0, 0, 0, 0.8);
-    display: none;
+    background-color: rgba(0, 0, 0, 0.88);
+    display: none; /* overridden to flex by JS — kept here only for initial hide */
+    flex-direction: column;
     justify-content: center;
     align-items: center;
     z-index: 1001;
+    padding: 30px;
+    box-sizing: border-box;
+    text-align: center;
 }
 
-#resume-button {
+#resume-button,
+#gpslost-resume {
     padding: 20px 40px;
-    font-size: 1.5em;
+    font-size: 1.2em;
     background-color: #2c2c2c;
     color: white;
-    border: none;
+    border: 1px solid #555;
     border-radius: 5px;
     cursor: pointer;
+    margin-top: 30px;
+    font-family: 'Courier New', 'Roboto', Arial, sans-serif;
+}
+
+#gpslost-overlay-desc {
+    color: #ddd;
+    font-size: 1.1em;
+    line-height: 1.6;
+    margin: 0;
 }
 
 /* Diagnostic page */

@@ -77,7 +77,11 @@ function clearBatteryOptCheck()
     BATTOPT_ATTEMPTS = 0;
 }
 
-PAGES_CLEANUP['parcours']           = () => clearWakeupNotification();
+PAGES_CLEANUP['parcours']           = () => {
+    clearWakeupNotification();
+    GPSLOST_PLAYER.stop();
+    $('#gpslost-overlay').hide();
+};
 PAGES_CLEANUP['checknotifications'] = () => clearNotificationPermissionCheck();
 PAGES_CLEANUP['checkbatteryopt']    = () => clearBatteryOptCheck();
 
@@ -644,70 +648,71 @@ PAGES['checknotifications'] = () => {
 
 //
 // CHECK BATTERY OPTIMIZATION (Android 6+ / API 23+)
-// Requires: cordova-plugin-request-battery-optimizations
-// Blocks startup if the app is not whitelisted from Android battery optimization.
-// OEM-specific restrictions (Samsung, Xiaomi, etc.) are NOT detectable via this API
-// and are flagged with a non-blocking advisory note.
+// Requires: snt1017/cordova-plugin-power-optimization
+// Hard-blocks startup until the app is whitelisted from Android battery optimization.
+// OEM-specific restrictions are detected via HaveProtectedAppsCheck() — no hardcoded list.
 //
 PAGES['checkbatteryopt'] = () => {
     if (DEVMODE) return PAGE('rdv');
 
-    const pluginAvailable = PLATFORM === 'android'
-        && typeof window.RequestBatteryOptimizations !== 'undefined'
-        && typeof device !== 'undefined';
+    const plugin = (typeof cordova !== 'undefined' && cordova.plugins && cordova.plugins.PowerOptimization)
+        ? cordova.plugins.PowerOptimization : null;
 
-    if (!pluginAvailable) return PAGE('rdv');
+    if (!plugin || PLATFORM !== 'android' || typeof device === 'undefined') return PAGE('rdv');
 
     var apiLevel = parseInt(device.version.split('.')[0], 10);
     if (apiLevel < 23) return PAGE('rdv');
 
     clearBatteryOptCheck();
 
-    // OEM advisory (non-blocking: OEM restrictions are not detectable via isIgnoringBatteryOptimizations)
-    const manufacturer = (device.manufacturer || '').toLowerCase();
-    const oemWithExtraLayers = ['samsung', 'xiaomi', 'huawei', 'oppo', 'vivo', 'oneplus', 'realme'];
-    if (oemWithExtraLayers.includes(manufacturer)) {
-        $('#checkbatteryopt-oem').show().html(
-            `Sur votre appareil ${device.manufacturer}, vérifiez également les réglages de batterie spécifiques&nbsp;: applications autorisées en arrière-plan, mode veille désactivé pour Flanerie.`
-        );
-    } else {
-        $('#checkbatteryopt-oem').hide();
-    }
+    $('#checkbatteryopt-settings').hide().off().on('click', () => plugin.RequestOptimizationsMenu());
+    $('#checkbatteryopt-oem-btn').hide().off().on('click', () => plugin.ProtectedAppCheck(true));
+    $('#checkbatteryopt-retry').hide().off().on('click', () => { clearBatteryOptCheck(); check(); });
+    $('#checkbatteryopt-oem').hide();
 
-    $('#checkbatteryopt-settings').off().on('click', () => {
-        window.RequestBatteryOptimizations.requestOptimizationsSettings();
-    });
+    // Detect OEM-specific battery restriction layers (Samsung, Xiaomi, Huawei, etc.)
+    plugin.HaveProtectedAppsCheck()
+        .then(hasOEM => {
+            if (hasOEM && currentPage === 'checkbatteryopt') {
+                $('#checkbatteryopt-oem').show().text(
+                    'Votre téléphone a des réglages de batterie spécifiques. Ouvrez les paramètres fabricant et autorisez Flanerie en arrière-plan.'
+                );
+                $('#checkbatteryopt-oem-btn').show();
+            }
+        })
+        .catch(() => {});
 
-    $('#checkbatteryopt-retry').hide().off().on('click', () => {
-        clearBatteryOptCheck();
-        check();
-    });
-
+    var dialogShown = false;
     function check() {
         BATTOPT_TIMER = null;
         if (currentPage !== 'checkbatteryopt') return;
 
-        window.RequestBatteryOptimizations.isIgnoringBatteryOptimizations(
-            function(isIgnoring) {
+        plugin.IsIgnoringBatteryOptimizations()
+            .then(isIgnoring => {
                 if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('battery_opt', { ignoring: isIgnoring, manufacturer: device.manufacturer, apiLevel });
-                if (isIgnoring) {
-                    PAGE('rdv');
-                    return;
+                if (isIgnoring) { PAGE('rdv'); return; }
+
+                // First failure: trigger native dialog (ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                if (!dialogShown) {
+                    dialogShown = true;
+                    plugin.RequestOptimizations()
+                        .catch(() => $('#checkbatteryopt-settings').show()); // fallback if dialog unavailable
                 }
+
                 BATTOPT_ATTEMPTS++;
                 if (BATTOPT_ATTEMPTS >= BATTOPT_MAX_ATTEMPTS) {
                     $('#checkbatteryopt-retry').show();
+                    $('#checkbatteryopt-settings').show();
                     if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('battery_opt', { blocked: true, manufacturer: device.manufacturer });
                     return;
                 }
                 BATTOPT_TIMER = setTimeout(check, BATTOPT_POLL_MS);
-            },
-            function(error) {
+            })
+            .catch(error => {
                 console.error('[BATTOPT] check error:', error);
                 if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('battery_opt', { error: String(error) });
                 PAGE('rdv');
-            }
-        );
+            });
     }
 
     check();
@@ -1191,24 +1196,35 @@ GPSLOST_PLAYER.load(BASEURL+'/images/', {src: 'gpslost.mp3', master: 1}, false);
 GEO.stateUpdateTimeout = (PLATFORM == 'android') ? 10 * 1000 : 30 * 1000; // 10s on Android, 30s on iOS
 GEO.on('stateUpdate', (state) => {
     if (state == 'lost') {
-        if (currentPage != 'parcours') return;                                  // only if on parcours paged
+        if (currentPage != 'parcours') return;                                  // only if on parcours page
         if (GEO.mode() == 'simulate') return;                                   // not in simulate mode
         if (PARCOURS.currentStep() == PARCOURS.spots.steps.length - 1) return;  // not if last step
-        if (AUDIOFOCUS == 0) return
+        if (AUDIOFOCUS == 0) return;
         console.warn('GEO lost position');
         TELEMETRY.log('gps_lost', {step: PARCOURS.currentStep()});
-        pauseAllPlayers()
+        if (navigator.vibrate) navigator.vibrate([500, 200, 500]);
+        pauseAllPlayers();
         GPSLOST_PLAYER.play();
+        $('#gpslost-overlay').css('display', 'flex');
     }
     if (state == 'ok') {
         if (currentPage != 'parcours') return; // only if on parcours page
-        if (AUDIOFOCUS == 0) return
+        if (AUDIOFOCUS == 0) return;
         console.log('GEO position ok');
         TELEMETRY.log('gps_recovered', {step: PARCOURS.currentStep()});
+        if (navigator.vibrate) navigator.vibrate([200]);
         GPSLOST_PLAYER.stop();
         resumeAllPlayers();
+        $('#gpslost-overlay').hide();
     }
     console.log('GEO stateUpdate', state, currentPage, AUDIOFOCUS);
+})
+
+$('#gpslost-resume').on('click', () => {
+    TELEMETRY.log('gps_force_resume', {step: PARCOURS.currentStep()});
+    GPSLOST_PLAYER.stop();
+    resumeAllPlayers();
+    $('#gpslost-overlay').hide();
 })
 
 

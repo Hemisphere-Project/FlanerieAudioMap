@@ -7,29 +7,36 @@ Howler.autoSuspend = false; // Prevent automatic context suspension
 
 // Watch for audio focus changes
 document.addEventListener('deviceready', function() {
+    // iOS: no audiofocus plugin — use Cordova lifecycle events as proxy for call interruptions
+    if (PLATFORM === 'ios') {
+        document.addEventListener('pause',  () => { pauseAllPlayers(); });
+        document.addEventListener('resume', () => { resumeAllPlayers(); });
+        console.log('[AudioFocus] iOS: using pause/resume proxy for audio interruptions.');
+    }
+
     if (typeof cordova.plugins.audiofocus === 'undefined') {
         console.warn('[AudioFocus] plugin not available. Audio focus will not be handled.');
         return;
     }
-    cordova.plugins.audiofocus.onFocusChange( function(focusState) {
-            console.log('[AudioFocus] change:', focusState);
-            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audiofocus_change', {state: focusState});
-            if (focusState === "AUDIOFOCUS_LOSS" || focusState === "AUDIOFOCUS_LOSS_TRANSIENT") {
-                // Pause your audio playback here
-                pauseAllPlayers();
-                AUDIOFOCUS = 0;  // No focus
-                $('#resume-overlay').show();
-            } else if (focusState === "AUDIOFOCUS_GAIN") {
-                // Resume your audio playback here
-                resumeAllPlayers();
-                AUDIOFOCUS = 1;  // Focus gained
-                $('#resume-overlay').hide();
-            } else if (focusState === "AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK") {
-                // Optionally lower your audio volume ("duck")
-            }
-        });
+    cordova.plugins.audiofocus.onFocusChange(function(focusState) {
+        console.log('[AudioFocus] change:', focusState);
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audiofocus_change', {state: focusState});
+        if (focusState === "AUDIOFOCUS_LOSS" || focusState === "AUDIOFOCUS_LOSS_TRANSIENT") {
+            if (navigator.vibrate) navigator.vibrate([300]);
+            pauseAllPlayers();
+            AUDIOFOCUS = 0;
+            $('#resume-overlay').css('display', 'flex');
+        } else if (focusState === "AUDIOFOCUS_GAIN") {
+            if (navigator.vibrate) navigator.vibrate([100]);
+            resumeAllPlayers();
+            AUDIOFOCUS = 1;
+            $('#resume-overlay').hide();
+        } else if (focusState === "AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK") {
+            // duck: intentionally not handled
+        }
+    });
     console.log('[AudioFocus] plugin available. Audio focus will be handled.');
-    requestAudioFocus()
+    requestAudioFocus();
 });
 
 // setInterval(() => {
@@ -82,7 +89,7 @@ function requestAudioFocus() {
                 console.error('[AudioFocus] failed to request:', error);
                 pauseAllPlayers();
                 AUDIOFOCUS = 0;  // No focus
-                $('#resume-overlay').show();
+                $('#resume-overlay').css('display', 'flex');
                 reject(error);
             }
         );

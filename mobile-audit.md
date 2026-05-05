@@ -377,55 +377,46 @@ Files:
 - `www/app/assets/spot.js`
 - `parcours/flanerie_elysee_v5.json`
 
-#### P1.10 GPS lost recovery UX 🆕 [TEST-FIRST]
+#### P1.10 GPS lost recovery UX 🆕 [TEST-FIRST] ✅ DONE
 
-Current state:
-- When GPS is lost, `pauseAllPlayers()` fires and `GPSLOST_PLAYER` plays a looped audio cue (`pages.js` lines ~910-940).
-- When GPS recovers, it auto-stops the alert and auto-resumes all players.
-- No haptic or visual feedback is provided.
+Implemented 2026-05-05.
 
-Problem:
-- If the phone is locked and pocketed, the user hears content stop and a new sound play, but has no guidance.
-- If headphone ambient noise is high, the audio cue may be missed.
-- No manual recovery path exists if auto-resume fails (e.g., GPS oscillates between ok/lost).
+What was done:
+- `navigator.vibrate([500, 200, 500])` on GPS loss, `navigator.vibrate([200])` on recovery. Silently skipped if vibration plugin absent (browser, test builds).
+- `#gpslost-overlay` div shown on GPS loss, hidden on recovery. Message advises moving to an open area and confirms the walk resumes automatically when signal returns.
+- "Continuer l'écoute sans GPS" force-resumes current step audio and stops the GPS-lost cue. Logs `gps_force_resume` telemetry. Step progression still requires GPS — this only unblocks audio while the visitor moves to recover signal. When GPS comes back, step detection resumes normally.
+- `PAGES_CLEANUP['parcours']` extended to stop `GPSLOST_PLAYER` and hide `#gpslost-overlay` on any page transition away from `parcours`, so overlay never bleeds into pre/post walk pages.
 
-Plan:
-- Add `navigator.vibrate([500, 200, 500])` on GPS loss (both platforms support vibration from Cordova).
-- When returning to foreground during GPS-lost state, show visible overlay with "GPS signal perdu — patientez ou vérifiez vos paramètres".
-- Add manual "Reprendre" button as fallback if auto-recovery stalls.
-- Add a brief vibration on recovery too, so user knows things are back.
+Regression risk: **LOW**. Additive. Existing audio cue and auto-resume behavior unchanged.
 
-Regression risk: **LOW**. Additive-only UX changes.
-
-Files:
-- `www/app/pages.js`
+Files changed:
+- `www/app/app.html` — added `#gpslost-overlay` div
+- `www/app/pages.js` — vibration + overlay in stateUpdate handler, `#gpslost-resume` wiring, extended parcours cleanup
 
 Acceptance:
-- User gets tactile + audible feedback on GPS loss, even with locked screen.
-- Manual recovery is always available.
+- Visitor gets tactile + audible feedback on GPS loss even with locked screen.
+- Overlay is visible when foregrounding during GPS-lost state.
+- "Reprendre quand même" unblocks the walk as an emergency exit.
+- Auto-recovery (GPS returns) hides overlay and resumes without user action.
 
-#### P1.11 Audio focus auto-resume 🆕 [TEST-FIRST]
+#### P1.11 Audio focus auto-resume 🆕 [TEST-FIRST] ✅ DONE
 
-Current state:
-- On `AUDIOFOCUS_GAIN`, `player.js` lines ~20-35 calls `resumeAllPlayers()` and hides `#resume-overlay`.
-- The `#resume-button` click handler also calls `requestAudioFocus()` + resume — two separate paths.
-- The overlay shows "Reprendre l'écoute" requiring a manual tap.
+Implemented 2026-05-05.
 
-Observation:
-- The code already auto-resumes on `AUDIOFOCUS_GAIN`, so the button is mostly redundant for the focus-gain case.
-- If the phone is locked during a phone call, the button is invisible — only the auto-resume path works.
-- The real gap: no audio/haptic cue tells the user "your walk audio has resumed" after a phone call.
+What was done:
+- `navigator.vibrate([300])` on `AUDIOFOCUS_LOSS` / `AUDIOFOCUS_LOSS_TRANSIENT` (call or other app takes focus).
+- `navigator.vibrate([100])` on `AUDIOFOCUS_GAIN` (focus returned, audio resuming).
+- **iOS proxy:** `cordova-plugin-audiofocus` is Android-only. On iOS, added `document.pause` → `pauseAllPlayers()` and `document.resume` → `resumeAllPlayers()` listeners inside `deviceready`, guarded by `PLATFORM === 'ios'`. Covers the common case where a phone call backgrounds the app. Mid-session calls that don't background the app (edge case, mostly iPad) require native `AVAudioSession` interruption handling in the plugin fork — deferred.
+- Chime before resume: intentionally skipped — visitor knows they had a call, audio return is expected.
+- `#resume-button` kept as manual fallback for edge cases where auto-resume fails.
 
-Plan:
-- Verify `AUDIOFOCUS_GAIN` reliably fires on both platforms after a call ends.
-- Add a brief vibration on focus loss and on focus regain.
-- Keep the button as manual fallback for edge cases where auto-resume fails.
-- Consider a short "attention" chime before resuming content, so the transition isn't jarring.
+Regression risk: **LOW**. Additive. Existing Android auto-resume behavior unchanged.
 
-Regression risk: **LOW**. Additive.
-
-Files:
+Files changed:
 - `www/app/assets/player.js`
+
+Remaining (needs Cordova project):
+- Verify `cordova-plugin-audiofocus` iOS interruption handling — if `AVAudioSession` interruption notifications are not forwarded, mid-session calls on iPhone may not pause audio cleanly. Plugin fork can be extended with `AVAudioSessionInterruptionNotification` → same `AUDIOFOCUS_LOSS`/`GAIN` event strings.
 
 #### P1.12 Android battery optimization guidance 🆕 [TEST-FIRST] ✅ DONE
 
@@ -440,17 +431,14 @@ What was done:
 - Added `checkbatteryopt` page inserted in the flow between `checknotifications` and `rdv` on Android.
 - `checknotifications` now routes to `checkbatteryopt` on all Android paths (including API < 13 early-exit) instead of directly to `rdv`. Non-Android paths (iOS, browser) are unaffected.
 - `checkbatteryopt` skips to `rdv` if: not Android, plugin absent, or API < 23 (Android 6).
-- If battery optimization is enabled for the app, the page is a hard block: user must open settings, whitelist the app, then return. Auto-polling detects the change every 1.5s (up to 10 polls / 15s). After timeout, a "J'ai désactivé" retry button appears for manual re-check.
-- Settings button opens the system battery optimization dialog directly to the app entry via `requestOptimizationsSettings()`.
-- For known OEM devices (Samsung, Xiaomi, Huawei, OPPO, Vivo, OnePlus, Realme): a non-blocking advisory note is shown about OEM-specific restrictions that are NOT detectable via the standard API (e.g. Samsung "Sleeping apps", Xiaomi "MIUI Optimization"). This is informational only — no false block.
+- On first failed check, `RequestOptimizations()` is called immediately — this opens a native system dialog ("Autoriser Flanerie à ignorer les optimisations de batterie ?"), matching the permission request UX pattern. No manual settings navigation required.
+- Auto-polling detects whitelist state every 1.5s (up to 10 polls / 15s). After timeout, "J'ai désactivé" retry + "Paramètres batterie" fallback buttons appear.
+- OEM-specific restrictions detected via `HaveProtectedAppsCheck()` (no hardcoded manufacturer list). If positive, an advisory note + "Paramètres fabricant" button (`ProtectedAppCheck(true)`) are shown. This is non-blocking but surfaces the OEM layer that would otherwise be invisible.
 - Telemetry: `battery_opt` event logged with `ignoring`, `manufacturer`, `apiLevel` on each check result, and a separate `blocked: true` log when max attempts are exhausted.
 - DEVMODE bypasses the check.
 
 Plugin dependency:
-- **Requires `cordova-plugin-request-battery-optimizations`** in the Cordova project. If the plugin is absent, `checkbatteryopt` skips to `rdv` (fail open). The plugin must be added before this check is effective.
-
-Known limitation — OEM-specific restrictions:
-- The standard `isIgnoringBatteryOptimizations()` check covers vanilla Android battery optimization only. Samsung, Xiaomi, Huawei, OPPO, OnePlus etc. have additional app-kill layers not exposed by this API. The advisory note addresses this for known OEMs, but cannot block on state we cannot detect. A support-team override (backup phone) is the backstop for these cases.
+- **Requires `snt1017/cordova-plugin-power-optimization`** in the Cordova project. If the plugin is absent, `checkbatteryopt` skips to `rdv` (fail open).
 
 Regression risk: **MEDIUM** (new blocking page in the startup flow). Must be validated on Android 13+ and at least one older Android. Plugin absence is safe (check is skipped).
 
@@ -747,8 +735,8 @@ Phase 1 — Core lifecycle (needs dedicated field testing)
 Phase 2 — Stability cleanup (test with repeated staff starts)
 - P1.5 listener/timer cleanup (partial ✅ — P1.13 framework in place, CHECKGEO leak deferred)
 - P1.5b GPS accuracy filtering ✅ DONE
-- P1.10 GPS lost recovery UX 🆕
-- P1.11 Audio focus auto-resume 🆕
+- P1.10 GPS lost recovery UX ✅ DONE
+- P1.11 Audio focus auto-resume ✅ DONE (iOS mid-session call handling deferred to plugin fork)
 - opportunistic P0.4 plugin guards in touched files
 
 Phase 2 — UX and logic (test with full walk-through)
