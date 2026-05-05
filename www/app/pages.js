@@ -1,5 +1,4 @@
-var DISTANCE_MATCH = 20; // 20m 
-var DISTANCE_RDV = 20; // 10m (to validate RDV)
+var DISTANCE_RDV = 20; // 20m (to validate RDV)
 
 var COLOR_DONE = 'grey';
 var COLOR_NEXT = 'blue';
@@ -33,11 +32,43 @@ PARCOURS.restore(); // Restore parcours from localStorage
 //
 var PAGES = {}
 var currentPage = '';
+var NOTIF_TIMER = null;
+var NOTIF_PERMISSION_TIMER = null;
+var NOTIF_PERMISSION_ATTEMPTS = 0;
+const NOTIF_PERMISSION_POLL_MS = 1000;
+const NOTIF_PERMISSION_MAX_ATTEMPTS = 15;
+
+function clearWakeupNotification(clearPending = true)
+{
+    if (NOTIF_TIMER) {
+        clearTimeout(NOTIF_TIMER);
+        NOTIF_TIMER = null;
+    }
+
+    if (!clearPending) return;
+    if (PLATFORM != 'android' && PLATFORM != 'ios') return;
+    if (typeof cordova === 'undefined' || !cordova.plugins || !cordova.plugins.notification || !cordova.plugins.notification.local) return;
+
+    cordova.plugins.notification.local.clear(NOTIF_COUNTER, () => {
+        console.log('NOTIF: cleared wakeup notification', NOTIF_COUNTER);
+    });
+}
+
+function clearNotificationPermissionCheck()
+{
+    if (NOTIF_PERMISSION_TIMER) {
+        clearTimeout(NOTIF_PERMISSION_TIMER);
+        NOTIF_PERMISSION_TIMER = null;
+    }
+    NOTIF_PERMISSION_ATTEMPTS = 0;
+}
 
 function PAGE(name, ...args) 
 {
     if (currentPage === name) return;
     console.log('PAGE', name, args);
+    if (currentPage === 'parcours' && name !== 'parcours') clearWakeupNotification();
+    if (currentPage === 'checknotifications' && name !== 'checknotifications') clearNotificationPermissionCheck();
     document.querySelectorAll('.page').forEach(page => page.style.display = 'none');
     try { document.getElementById(name).style.display = 'block'; } catch (e) {}
     currentPage = name;
@@ -110,11 +141,6 @@ PAGES['checkdata'] = () =>
             console.log('PARCOURS', parcours);
 
             var availableParcours = parcours.filter(p => p.status == 'public' || (p.status == 'test' && DEVMODE));
-
-            // GPS: check distance (< 10km)
-            // if (GEO.mode() != 'simulate') {
-            //     availableParcours = availableParcours.filter(p => GEO.distance(p) < DISTANCE_MATCH);
-            // }
 
             console.log('AVAILABLE PARCOURS', availableParcours);
             // for (let k in parcours) {
@@ -523,9 +549,16 @@ PAGES['confirmios'] = () => {
 }
 
 PAGES['checknotifications'] = () => {
+    const defaultMessage = 'Vous devez autoriser les notifications pour que la localisation fonctionne en arrière plan.<br /><br />Aucune notification ne vous sera envoyée.';
+    const timeoutMessage = 'Les notifications ne sont toujours pas autorisées.<br /><br />Ouvrez les paramètres, activez les notifications pour Flanerie, puis revenez dans l\'application. Sans cette autorisation, le fonctionnement en arrière plan ne sera pas fiable.';
+    const permissions = cordova.plugins.permissions;
+
+    clearNotificationPermissionCheck();
+    $('#checknotifications-desc').html(defaultMessage);
+    $('#checknotifications-retry').hide().off();
 
     // Not Android or no permissions plugin: skip
-    if (PLATFORM != 'android' || cordova.plugins.permissions == undefined) 
+    if (PLATFORM != 'android' || cordova.plugins.permissions == undefined)
         return PAGE('rdv');
 
     // Check Android version >= 13 (POST_NOTIFICATIONS required since API 33)
@@ -533,48 +566,56 @@ PAGES['checknotifications'] = () => {
     if (apiLevel < 13) return PAGE('rdv');
 
     $('#checknotifications-settings').show().off().on('click', () => GEO.showAppSettings());
-
-    var permissions = cordova.plugins.permissions;
-    var NOTIF_TIMEOUT = 20000; // 20 seconds max wait
+    let permissionRequested = false;
     var notifStartTime = Date.now();
-    var permissionRequested = false;
 
-    function onGranted() {
-        console.log('Notification permission GRANTED');
-        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('notif_permission', {granted: true, elapsed: Date.now() - notifStartTime});
-        PAGE('rdv');
+    function queueCheck() {
+        NOTIF_PERMISSION_TIMER = setTimeout(checkNotif, NOTIF_PERMISSION_POLL_MS);
     }
 
-    function onTimeout() {
-        console.warn('Notification permission timeout — proceeding without permission');
-        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('notif_permission', {granted: false, reason: 'timeout', elapsed: Date.now() - notifStartTime});
-        PAGE('rdv');
+    function maybeRequestPermission() {
+        if (permissionRequested) return;
+        permissionRequested = true;
+
+        if (typeof permissions.requestPermission !== 'function') return;
+
+        permissions.requestPermission(permissions.POST_NOTIFICATIONS, function(status) {
+            console.log('Notification permission request result:', status.hasPermission);
+        }, function(error) {
+            console.warn('Notification permission request failed:', error);
+        });
     }
 
     function checkNotif() {
-        if (Date.now() - notifStartTime > NOTIF_TIMEOUT) return onTimeout();
-
+        NOTIF_PERMISSION_TIMER = null;
+        if (currentPage !== 'checknotifications') return;
         permissions.checkPermission(permissions.POST_NOTIFICATIONS, function(status) {
             console.log('Notification permission status:', status.hasPermission);
-            if (status.hasPermission && APP_VISIBILITY == 'foreground') return onGranted();
-
-            // First check failed: actively request the permission (triggers system dialog)
-            if (!permissionRequested) {
-                permissionRequested = true;
-                permissions.requestPermission(permissions.POST_NOTIFICATIONS, function(result) {
-                    if (result.hasPermission) return onGranted();
-                    // User denied — keep polling in case they change it in settings
-                    console.warn('Notification permission DENIED by user, waiting...');
-                    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('notif_permission', {granted: false, reason: 'denied', elapsed: Date.now() - notifStartTime});
-                    setTimeout(checkNotif, 1500);
-                }, function(e) {
-                    console.error('Error requesting notification permission', e);
-                    setTimeout(checkNotif, 1500);
-                });
-            } else {
-                // Already requested — keep polling until timeout
-                setTimeout(checkNotif, 1500);
+            if (status.hasPermission) {
+                if (APP_VISIBILITY == 'foreground') {
+                    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('notif_permission', {granted: true, elapsed: Date.now() - notifStartTime});
+                    PAGE('rdv');
+                } else {
+                    queueCheck();
+                }
+                return;
             }
+
+            NOTIF_PERMISSION_ATTEMPTS++;
+            if (NOTIF_PERMISSION_ATTEMPTS === 1) maybeRequestPermission();
+
+            if (NOTIF_PERMISSION_ATTEMPTS >= NOTIF_PERMISSION_MAX_ATTEMPTS) {
+                $('#checknotifications-desc').html(timeoutMessage);
+                $('#checknotifications-retry').show().off().on('click', () => {
+                    clearNotificationPermissionCheck();
+                    $('#checknotifications-desc').html(defaultMessage);
+                    $('#checknotifications-retry').hide();
+                    checkNotif();
+                });
+                return;
+            }
+
+            queueCheck();
         }, function(e) {
             console.error('Error checking notification permission', e);
             if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('notif_permission', {granted: false, reason: 'error', error: String(e)});
@@ -692,102 +733,12 @@ PAGES['checkbattery'] = () => {
 //
 // CHECK BACKGROUND
 //
-var timersBG = null
-PAGES['checkbackground'] = () => {
-
-    // SKIP TEST
-    return PAGE('sas');
-
-    // not WebApp: skip
-    if (!document.WEBAPP_URL || GEO.mode() == 'simulate') {
-        return PAGE('sas');
-    }
-
-    // Players
-    var playerTEST = new Howl({
-        src: BASEURL+'/images/background-test.mp3', autoplay: false, volume: 1, html5: (PLATFORM == 'ios')
-    })
-    var playerOK = new Howl({
-        src: BASEURL+'/images/background-ok.mp3', autoplay: false, volume: 1, html5: (PLATFORM == 'ios')
-    })
-    var playerKO = new Howl({
-        src: BASEURL+'/images/background-ko.mp3', autoplay: false, volume: 1, html5: (PLATFORM == 'ios')
-    })
-
-    function cleanupTest() {
-        stopTest();
-        delete playerTEST;
-        delete playerOK;
-        delete playerKO;
-    }
-    function stopTest() {
-        clearTimeout(timersBG);
-        document.removeEventListener('pause', wentBG);
-        document.removeEventListener('resume', wentFG);
-        playerTEST.stop();
-        playerOK.stop();
-        playerKO.stop();
-    }
-
-    // Skip button
-    $('#checkbackground-force').toggle(DEVMODE).off().on('click', () => {
-        cleanupTest();
-        PAGE('sas');
-    })
-
-    var testResult = false;
-    var testCount = 0;
-    stopTest();
-
-    // Background test
-    function wentBG() {
-        console.log('[STATE] APP_VISIBILITY', APP_VISIBILITY);
-        stopTest();
-        document.addEventListener('resume', wentFG);        // listen for foreground
-        playerTEST.play();
-        console.log('[BACKGROUND] test started, playing wait instructions');
-        clearTimeout(timersBG);
-        testResult = false; 
-        timersBG = setTimeout(() => {
-            testResult = GEO.alive(5000);
-        }, 10000);
-        testCount++;
-    }
-
-    // Foreground test
-    function wentFG() {
-        console.log('[STATE] APP_VISIBILITY', APP_VISIBILITY);
-        stopTest();
-     
-        if (testResult) 
-        {
-            console.log('[BACKGROUND] test success');
-            $('#checkbackground-desc').html('TEST réussi ! Le GPS fonctionne bien en arrière-plan.');  
-            $('#checkbackground-force').toggle(DEVMODE)
-            playerOK.play();
-            setTimeout(() => {
-                cleanupTest();
-                PAGE('sas');
-            }, 4000);
-        } 
-        else {
-            console.log('[BACKGROUND] test failed');
-            playerKO.play();
-            $('#checkbackground-desc').html('ECHEC DU TEST: Veuillez vérifier les paramètres de localisation, désactivez le mode économie d\'énergie et réessayer de mettre en veille<br /><br />\
-                Demandez de l\'aide à un membre de l\'équipe si besoin.');
-            document.addEventListener('pause', wentBG);
-            if (testCount > 1) $('#checkbackground-force').show()
-        }
-    }
-
-    document.addEventListener('pause', wentBG);
-}
+PAGES['checkbackground'] = () => PAGE('sas')
 
 //
 // SAS
 //
 PAGES['sas'] = () => {
-    if (timersBG) clearTimeout(timersBG);
     $('#sas-code').hide()
 
     TYPEWRITE('sas-desc')
@@ -843,18 +794,16 @@ PAGES['parcours'] = () => {
     SILENT_PLAYER.play(); // Play silent track to keep audio session alive
     scheduleWakeupNotification();
     
-    // Clean up any previous test player
     if (testplayer) {
         testplayer.stop();
         testplayer.unload();
         testplayer = null;
     }
 
-
     console.log('PARCOURS', PARCOURS);
     // if (!PARCOURS.valid()) return PAGE('select')
 
-    if (Howler.ctx) Howler.ctx.resume();
+    resumeAudioContext('parcours');
 
     var isResume = PARCOURS.valid() && PARCOURS.currentStep() >= 0;
 
@@ -1108,6 +1057,11 @@ devmode(DEVMODE);
 // DEV TOOLS
 $('#parcours-rearm').click(() => {
     console.log('REARM');
+    TELEMETRY.restart(
+        'rearm_button',
+        PARCOURS.info.file || PARCOURS.info.id || PARCOURS.info.name || '',
+        PARCOURS.info.name || PARCOURS.info.file || PARCOURS.info.id || ''
+    );
     PARCOURS.currentStep(-2) // Reset current step
     PARCOURS.startTracking()
     PARCOURS.stopAudio()
@@ -1122,6 +1076,8 @@ $('#parcours-rearm').click(() => {
 
 $('#parcours-restart').click(() => {
     console.log('RESTART');
+    TELEMETRY.log('session_restart_click', {reason: 'restart_button'});
+    TELEMETRY.end();
     PARCOURS.clearStore()
     location.reload();
 });
@@ -1139,7 +1095,6 @@ $('#logs-title').on('click', (e) => {
         $('#logs').scrollTop($('#logs')[0].scrollHeight)
     }
 });
-
 
 // GPS LOST
 var GPSLOST_PLAYER = new PlayerSimple(true, 0);
@@ -1174,24 +1129,32 @@ GEO.on('stateUpdate', (state) => {
 const NOTIF_REPEAT = 1 * 59 * 1000; // 59 seconds
 var NOTIF_COUNTER = 37;
 function scheduleWakeupNotification() {
+    clearWakeupNotification(false)
+    if (currentPage !== 'parcours') {
+        clearWakeupNotification()
+        return
+    }
     if (PLATFORM != 'android' && PLATFORM != 'ios') return
-    if (!cordova || !cordova.plugins || !cordova.plugins.notification || !cordova.plugins.notification.local) {
+    if (typeof cordova === 'undefined' || !cordova.plugins || !cordova.plugins.notification || !cordova.plugins.notification.local) {
         console.warn('NOTIF: cordova.plugins.notification.local not available, notifications will not work');
         if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('notif_schedule', {ok: false, reason: 'plugin_missing'});
         return
     }
 
-    if (currentPage === 'parcours')
-        cordova.plugins.notification.local.schedule({
-            id: NOTIF_COUNTER,
-            text: 'Flanerie en cours..',
-            trigger: { at: new Date(Date.now() + NOTIF_REPEAT) },
-            sound: null,
-            silent: true,
-            launch: false,
-            foreground: false
-        });
+    cordova.plugins.notification.local.schedule({
+        id: NOTIF_COUNTER,
+        text: 'Flanerie en cours..',
+        trigger: { at: new Date(Date.now() + NOTIF_REPEAT) },
+        sound: null,
+        silent: true,
+        launch: false,
+        foreground: false
+    });
 
+    NOTIF_TIMER = setTimeout(() => {
+        NOTIF_TIMER = null;
+        scheduleWakeupNotification()
+    }, NOTIF_REPEAT);
     console.log('NOTIF: Scheduled next wakeup notification');
 }
 
@@ -1214,11 +1177,7 @@ document.addEventListener('deviceready', () => {
                     console.log('NOTIF: cleared wakeup notification', notification.id);
                 });
                 
-                // Ensure AudioContext is alive after background wake
-                if (typeof Howler !== 'undefined' && Howler.ctx && Howler.ctx.state !== 'running') {
-                    console.log('[AUDIO] Resuming AudioContext from notification wakeup, state:', Howler.ctx.state);
-                    Howler.ctx.resume();
-                }
+                resumeAudioContext('notif_wakeup');
 
                 // Schedule next notification directly (setTimeout is unreliable in background)
                 if (currentPage === 'parcours') scheduleWakeupNotification();

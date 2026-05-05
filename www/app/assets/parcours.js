@@ -42,6 +42,7 @@ class Parcours extends EventEmitter {
     clearState() {
         this.state = {
             stepIndex: -2,
+            globalOfflimit: false,
             geoMode: null,
             medialoaded: false,
             mediaPack: [],
@@ -56,6 +57,28 @@ class Parcours extends EventEmitter {
             this.store();
         }
         return this.state.stepIndex;
+    }
+
+    telemetryRouteProbe(position, triggerAccepted = true) {
+        if (typeof TELEMETRY === 'undefined') return;
+
+        let currentIndex = this.state.stepIndex;
+        let nextIndex = currentIndex < 0 ? 0 : currentIndex + 1;
+        let currentStep = currentIndex >= 0 ? this.find('steps', currentIndex) : null;
+        let nextStep = this.find('steps', nextIndex) || null;
+
+        TELEMETRY.log('route_probe', {
+            acceptedForTrigger: triggerAccepted,
+            currentStep: currentStep ? currentStep._index : currentIndex,
+            currentName: currentStep ? currentStep._spot.name : null,
+            currentDistanceToBorder: currentStep ? currentStep.distanceToBorder(position) : null,
+            currentDistanceToCenter: currentStep ? currentStep.distanceToCenter(position) : null,
+            nextStep: nextStep ? nextStep._index : null,
+            nextName: nextStep ? nextStep._spot.name : null,
+            nextDistanceToBorder: nextStep ? nextStep.distanceToBorder(position) : null,
+            nextDistanceToCenter: nextStep ? nextStep.distanceToCenter(position) : null,
+            gpsAccuracy: position && position.coords ? Math.round(position.coords.accuracy) : null
+        });
     }
 
     find(type, index) {
@@ -404,6 +427,17 @@ class Parcours extends EventEmitter {
                 let inside = s.updatePosition(position);
                 if (inside) offlimit = true;
             });
+        }
+
+        this.telemetryRouteProbe(position, !offlimit);
+
+        if (this.state.globalOfflimit !== offlimit) {
+            this.state.globalOfflimit = offlimit;
+            if (typeof TELEMETRY !== 'undefined') {
+                TELEMETRY.log(offlimit ? 'global_offlimit_enter' : 'global_offlimit_leave', {
+                    step: this.state.stepIndex
+                });
+            }
         }
 
         // process others, if not offlimit

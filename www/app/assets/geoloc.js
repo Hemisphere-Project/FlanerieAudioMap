@@ -1,5 +1,59 @@
 var CALIBRATION_TIME = 2
 var APP_VISIBILITY = 'foreground' // foreground, background
+var LAST_AUDIO_CONTEXT_STATE = null
+var AUDIO_CONTEXT_STATE_BOUND = false
+
+function logAudioContextState(reason = 'unknown', force = false) {
+    if (typeof Howler === 'undefined' || !Howler.ctx) return
+
+    let state = Howler.ctx.state
+    if (!force && LAST_AUDIO_CONTEXT_STATE === state) return
+
+    LAST_AUDIO_CONTEXT_STATE = state
+    console.log('[AUDIO] AudioContext state:', reason, state)
+    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_context_state', {reason: reason, state: state})
+}
+
+function bindAudioContextState() {
+    if (AUDIO_CONTEXT_STATE_BOUND) return
+    if (typeof Howler === 'undefined' || !Howler.ctx) return
+
+    let previousHandler = Howler.ctx.onstatechange
+    Howler.ctx.onstatechange = function(event) {
+        if (typeof previousHandler === 'function') previousHandler.call(this, event)
+        logAudioContextState('statechange', true)
+    }
+
+    AUDIO_CONTEXT_STATE_BOUND = true
+    logAudioContextState('bind', true)
+}
+
+function resumeAudioContext(reason = 'unknown') {
+    if (typeof Howler === 'undefined' || !Howler.ctx) return
+
+    bindAudioContextState()
+    logAudioContextState(reason)
+    if (Howler.ctx.state === 'running') return
+
+    console.log('[AUDIO] Resuming AudioContext:', reason, Howler.ctx.state)
+    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_context_resume', {reason: reason, state: Howler.ctx.state})
+
+    try {
+        let result = Howler.ctx.resume()
+        if (result && typeof result.then === 'function') {
+            result.then(() => logAudioContextState(reason + ':resolved', true))
+        }
+        if (result && typeof result.catch === 'function') {
+            result.catch(error => console.warn('[AUDIO] Failed to resume AudioContext:', reason, error))
+        }
+        else {
+            logAudioContextState(reason + ':sync', true)
+        }
+    }
+    catch (error) {
+        console.warn('[AUDIO] Failed to resume AudioContext:', reason, error)
+    }
+}
 
 function geo_coords(c) {
     if (c.coords) return geo_coords(c.coords)
@@ -170,6 +224,8 @@ class GeoLoc extends EventEmitter {
 
     _callbackPosition(position) 
     {
+        resumeAudioContext('position')
+
         // first measure
         if (!this.firstMeasure) {
             this.firstMeasure = position;
@@ -202,6 +258,14 @@ class GeoLoc extends EventEmitter {
             // Accuracy gate: reject inaccurate fixes for step triggering
             if (!position.simulate && position.coords.accuracy > 30) {
                 console.warn('GPS accuracy too low (' + Math.round(position.coords.accuracy) + 'm), position ignored for triggers');
+                if (typeof TELEMETRY !== 'undefined') {
+                    TELEMETRY.log('gps_trigger_rejected', {
+                        reason: 'accuracy',
+                        acc: Math.round(position.coords.accuracy),
+                        lat: position.coords.latitude,
+                        lng: position.coords.longitude
+                    });
+                }
                 // Still update lastPosition/lastTimeUpdate so GPS-lost detection doesn't fire
             } else {
                 this.emit('position', position);
@@ -627,6 +691,7 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
     BackgroundGeolocation.on('foreground', function() {
         console.log('[INFO] App is in foreground');
         APP_VISIBILITY = 'foreground';
+        resumeAudioContext('foreground');
         if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('app_visibility', {state: 'foreground'});
 
         // triggers document resume event
@@ -642,12 +707,7 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
     document.addEventListener('resume', function() {
         console.log('[INFO] App is resumed');
         APP_VISIBILITY = 'foreground';
-        // Resume AudioContext that may have been suspended by the OS in background
-        if (typeof Howler !== 'undefined' && Howler.ctx && Howler.ctx.state !== 'running') {
-            console.log('[AUDIO] Resuming AudioContext on foreground return, state:', Howler.ctx.state);
-            Howler.ctx.resume();
-        }
-        // Re-request audio focus on Android (another app may have taken it)
+        resumeAudioContext('resume');
         if (typeof requestAudioFocus === 'function') {
             requestAudioFocus().catch(function(e) { console.warn('[AudioFocus] re-request on resume failed:', e); });
         }
