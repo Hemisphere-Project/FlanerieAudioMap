@@ -137,3 +137,6 @@ x En DEV: afficher les sorties de route sur la carte
 - APP: MAP offline !
 - APP: Store progress time in media in steps => restore jumps to that point
 
+************************
+
+- Disable WEB telemetry

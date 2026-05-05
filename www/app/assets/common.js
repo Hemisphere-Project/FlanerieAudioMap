@@ -40,6 +40,11 @@ if ($('#logs').length && FRONT_LOGS) {
     }
 }
 
+// PLATFORM detection — must be defined before player.js registers its deviceready
+// handler, because after document.write() Cordova may fire deviceready synchronously.
+var PLATFORM = 'browser';
+try { if (cordova.platformId) PLATFORM = cordova.platformId; } catch (e) {}
+
 // PATH functions
 //
 function prep(path) {

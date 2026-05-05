@@ -6,11 +6,6 @@ var COLOR_CURRENT = '#43FAF2';
 
 var DEVMODE = localStorage.getItem('devmode') == 'true' || false;
 
-var PLATFORM = 'browser';
-try {
-    if (cordova.platformId) PLATFORM = cordova.platformId;
-} catch (e) {}
-
 // GLOBALS
 //
 var noSleep = null;
