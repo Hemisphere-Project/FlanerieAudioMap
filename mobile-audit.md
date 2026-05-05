@@ -2,6 +2,7 @@
 
 Date: 2026-04-27 (merged with full code review of www/app/)
 Cordova cross-reference: 2026-05-05 (FlanerieCordova workspace added)
+Container upgrades: 2026-05-05 (C2 version bumps applied, audiofocus v1.2.0, README rewritten)
 Telemetry analysis: 2026-04-27 (78 sessions across 5 parcours, Apr 2026)
 Previous: 2026-03-14 (initial code audit merge)
 Scope: Cordova launcher + downloaded local webapp, GPS-triggered audio walk, locked-screen pocket usage, published parcours FLANERIE_ELYSEE
@@ -766,22 +767,32 @@ Files changed:
 - `FlanerieCordova/plugins/com.maigre.cordova.plugins.audiofocus/` (synced)
 - `FlanerieCordova/package.json` (duplicate plugin entry removed)
 
-#### C2 Upgrade candidates (confirmed from Cordova project) [TEST-FIRST]
+#### C2 Upgrade candidates ✅ CONFIGURED (2026-05-05) [TEST-FIRST — rebuild pending]
 
-Confirmed installed versions after workspace cross-reference:
+Configuration applied 2026-05-05. `package.json` and `config.xml` updated. Rebuild must be run on Mac.
 
-| Dependency | Installed | Recommended | Priority | Relevant app impact |
+| Dependency | Was | Now | Status | Relevant app impact |
 |---|---|---|---|---|
-| `cordova-background-geolocation-plugin` | `2.3.2` | `2.3.3` | **HIGH** | Android 14 startup/onCreate fixes, Android 13 notification flow, activity recognition improvements, iOS 18 settings |
-| `cordova-plugin-local-notification` | `1.2.0` | `1.2.3` | medium | Notification permission and restore/reboot behavior; affects keepalive |
-| `cordova-android` | `14.0.1` | `15.0.0` | medium | Longer store-policy runway; do after plugin compatibility check |
-| `cordova-ios` | `7.1.1` | `8.0.1` | medium | Xcode/iOS SDK compatibility; do after Xcode check |
+| `cordova-background-geolocation-plugin` | `2.3.2` | `2.3.3` | ✅ configured | Android 14 startup/onCreate fixes, Android 13 notification flow, activity recognition improvements, iOS 18 settings |
+| `cordova-plugin-local-notification` | `1.2.0` | `1.2.3` | ✅ configured | Notification permission and restore/reboot behavior; affects keepalive. `NotificationClickActivity` renamed → `ClickActivity` (trampoline fix). `ANDROIDX_CORE_VERSION` bumped to 1.13.0 |
+| `cordova-android` | `14.0.1` | `15.0.0` | ✅ configured | SDK 36, AGP 8.10.1, Kotlin 2.1.21, Gradle 8.14.2. minSdk 23→24 (drops Android 6). App version bumped v9→v10 |
+| `cordova-ios` | `7.1.1` | `8.0.1` | ✅ configured | Requires Xcode 15+ |
 
-The geolocation plugin upgrade is the highest-value item: v2.3.3 changelog entries directly address this app's locked-screen pocket use case on Android 13/14+.
+**Rebuild sequence to run on Mac (in `FlanerieCordova/`):**
+```bash
+npm install
+cordova platform remove android ios
+cordova platform add android ios
+# local-notification renamed its activity class — reinstall required
+cordova plugin remove cordova-plugin-local-notification
+cordova plugin add cordova-plugin-local-notification@1.2.3
+cordova build android
+cordova build ios
+```
 
-Upgrade sequence: geolocation plugin first (standalone, testable in isolation) → local-notification → cordova-android (after plugin compat check) → cordova-ios.
+**Android build env prerequisite:** SDK 36 + Build Tools 36.0.0 must be installed via Android Studio SDK Manager before `cordova build android` will succeed. See `FlanerieCordova/README.md` for full step-by-step Ubuntu/Mac instructions.
 
-Regression risk: **LOW** for plugin upgrades (minor version), **MEDIUM** for platform upgrades (potential Gradle/Xcode churn). Always build and smoke-test after each step.
+Regression risk: **LOW** for plugin minor upgrades, **MEDIUM** for platform upgrades (Gradle/Xcode churn). Smoke-test after each platform add.
 
 #### C3 Launcher cache-buster regex [accepted, low priority]
 
@@ -837,7 +848,7 @@ Phase 4 — Observability + platform
 - P3.1 iOS background audio entitlement ✅ VERIFIED DONE (UIBackgroundModes already present in config.xml)
 - P3.3 Android 14+ foreground service type ✅ VERIFIED DONE (FOREGROUND_SERVICE_LOCATION + foregroundServiceType already declared)
 - P3.2 iOS AUTHORIZED_FOREGROUND non-blocking start (still open — geoloc.js rejects it as error)
-- C2 plugin/platform upgrades: geolocation 2.3.3 → local-notification 1.2.3 → cordova-android 15 → cordova-ios 8
+- C2 plugin/platform upgrades ✅ CONFIGURED — rebuild pending on Mac (see C2 section for commands)
 - C1 audiofocus plugin upgrade ✅ DONE
 - C4 add container build checklist before platform upgrades
 
@@ -1009,11 +1020,13 @@ All app-only P1/P2 items are code-complete. The remaining open work falls into t
 **Area 1 — Audiofocus plugin fork:** ✅ COMPLETE (v1.2.0)
 - Plugin reinstall required before building: `cordova plugin remove com.maigre.cordova.plugins.audiofocus && cordova plugin add /path/to/fork`
 
-**Area 2 — Plugin/platform upgrades (do in order, build-test between each):**
-- C2a: `cordova-background-geolocation-plugin` 2.3.2 → 2.3.3 (highest value, test locked-screen GPS on Android 13/14)
-- C2b: `cordova-plugin-local-notification` 1.2.0 → 1.2.3 (notification keepalive reliability)
-- C2c: `cordova-android` 14.0.1 → 15.0.0 (after plugin compat check)
-- C2d: `cordova-ios` 7.1.1 → 8.0.1 (after Xcode check)
+**Area 2 — Plugin/platform upgrades:** ✅ CONFIGURED (2026-05-05)
+- C2a: `cordova-background-geolocation-plugin` 2.3.2 → 2.3.3 ✅
+- C2b: `cordova-plugin-local-notification` 1.2.0 → 1.2.3 ✅ (ANDROIDX_CORE_VERSION 1.12→1.13)
+- C2c: `cordova-android` 14.0.1 → 15.0.0 ✅ (SDK 23→24/36, config.xml updated, app v9→v10)
+- C2d: `cordova-ios` 7.1.1 → 8.0.1 ✅
+
+**Rebuild still pending on Mac** — run the sequence in C2 section above. Validate with locked-screen GPS walk on Android 13/14 after first successful build.
 
 **Area 3 — Still pending field validation:**
 - P0.1 geolocation lifecycle: code implemented 2026-04-03, no full locked-screen pocket walk test yet

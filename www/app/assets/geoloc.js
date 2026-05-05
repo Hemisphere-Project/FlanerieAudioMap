@@ -739,6 +739,48 @@ function checkBGPosition() {
 }
 
 
+// On cordova-android 15 / targetSdk 36, BackgroundGeolocation.start() triggers its own
+// requestPermissions() call from a non-foreground context, which causes the system dialog
+// to appear frozen (visible but unresponsive to touch). Fix: pre-request ACCESS_FINE_LOCATION
+// via cordova-plugin-android-permissions (correct Cordova Activity context) before calling
+// start(), so the plugin never needs to show its own dialog.
+function _geolocRequestPermissionThenStart(status) {
+    const alreadyAuthorized = status.authorization === BackgroundGeolocation.AUTHORIZED ||
+                              status.authorization === BackgroundGeolocation.AUTHORIZED_FOREGROUND;
+
+    if (!alreadyAuthorized &&
+        typeof cordova !== 'undefined' &&
+        cordova.plugins && cordova.plugins.permissions) {
+
+        const perms = cordova.plugins.permissions;
+        perms.requestPermission(
+            perms.ACCESS_FINE_LOCATION,
+            function(permStatus) {
+                if (permStatus.hasPermission) {
+                    console.log('[INFO] ACCESS_FINE_LOCATION granted — starting BackgroundGeolocation');
+                    BackgroundGeolocation.start();
+                } else {
+                    console.error('[ERROR] Location permission denied by user');
+                    if (backgroundGeolocReject) {
+                        backgroundGeolocReject('gps-no-authorization');
+                        backgroundGeolocReject = backgroundGeolocResolve = null;
+                    }
+                }
+            },
+            function(err) {
+                console.error('[ERROR] Permission request failed:', err);
+                if (backgroundGeolocReject) {
+                    backgroundGeolocReject('gps-no-authorization');
+                    backgroundGeolocReject = backgroundGeolocResolve = null;
+                }
+            }
+        );
+    } else {
+        // Already authorized or permissions plugin not available — start directly
+        BackgroundGeolocation.start();
+    }
+}
+
 function backgroundGeoloc(positionCallback, errorCallback) {
 
     return new Promise((resolve, reject) => {
@@ -775,7 +817,7 @@ function backgroundGeoloc(positionCallback, errorCallback) {
             }
             else if (!status.isRunning) {
                 console.log('[INFO] Starting BackgroundGeolocation');
-                BackgroundGeolocation.start();
+                _geolocRequestPermissionThenStart(status);
             }
             else {
                 console.log('[INFO] BackgroundGeolocation already running — listeners updated, resolving');
