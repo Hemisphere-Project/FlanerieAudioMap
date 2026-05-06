@@ -518,6 +518,27 @@ class DiagnosticRunner extends EventEmitter {
         let player = this._makeTestHowl('background-ok.mp3', false)
         let originLat = null, originLon = null
         let triggerRadius = 15
+        let lastKnown = GEO.lastTimeUpdate
+
+        this._trackInterval(() => {
+            if (!m.origin_locked || !GEO.lastTimeUpdate || GEO.lastTimeUpdate === lastKnown || !GEO.lastPosition) return
+            lastKnown = GEO.lastTimeUpdate
+
+            let rawLat = GEO.lastPosition.coords ? GEO.lastPosition.coords.latitude : GEO.lastPosition.latitude
+            let rawLon = GEO.lastPosition.coords ? GEO.lastPosition.coords.longitude : GEO.lastPosition.longitude
+            let rawAcc = GEO.lastPosition.coords ? GEO.lastPosition.coords.accuracy : (GEO.lastPosition.accuracy || 999)
+            let dist = geo_distance([rawLat, rawLon], [originLat, originLon])
+
+            m.distance_from_start = Math.round(dist * 10) / 10
+            this.emit('metrics', m)
+
+            if (rawAcc < 15 && dist >= triggerRadius && !m.triggered) {
+                m.triggered = true
+                this._requestAudioFocus()
+                player.play()
+                this.emit('metrics', m)
+            }
+        }, 500)
 
         let onPos = (pos) => {
             let lat = pos.coords ? pos.coords.latitude : pos.latitude
@@ -531,20 +552,10 @@ class DiagnosticRunner extends EventEmitter {
                     m.origin_locked = true
                     m.waiting_for_accuracy = false
                     m.distance_from_start = 0
+                    lastKnown = GEO.lastTimeUpdate
                     this.emit('metrics', m)
                 }
                 return
-            }
-
-            let dist = geo_distance([lat, lon], [originLat, originLon])
-            m.distance_from_start = Math.round(dist * 10) / 10
-            this.emit('metrics', m)
-
-            if (acc < 15 && dist >= triggerRadius && !m.triggered) {
-                m.triggered = true
-                this._requestAudioFocus()
-                player.play()
-                this.emit('metrics', m)
             }
         }
         this._trackListener('position', onPos)
@@ -593,6 +604,27 @@ class DiagnosticRunner extends EventEmitter {
         let player = this._makeTestHowl('background-ok.mp3', false)
         let originLat = null, originLon = null
         let triggerRadius = 10
+        let lastKnown = GEO.lastTimeUpdate
+
+        this._trackInterval(() => {
+            if (!m.origin_locked || !GEO.lastTimeUpdate || GEO.lastTimeUpdate === lastKnown || !GEO.lastPosition) return
+            lastKnown = GEO.lastTimeUpdate
+
+            let rawLat = GEO.lastPosition.coords ? GEO.lastPosition.coords.latitude : GEO.lastPosition.latitude
+            let rawLon = GEO.lastPosition.coords ? GEO.lastPosition.coords.longitude : GEO.lastPosition.longitude
+            let rawAcc = GEO.lastPosition.coords ? GEO.lastPosition.coords.accuracy : (GEO.lastPosition.accuracy || 999)
+            let dist = geo_distance([rawLat, rawLon], [originLat, originLon])
+
+            m.distance_from_start = Math.round(dist * 10) / 10
+            this.emit('metrics', m)
+
+            if (rawAcc < 15 && dist >= triggerRadius && !m.triggered) {
+                m.triggered = true
+                this._requestAudioFocus()
+                player.play()
+                this.emit('metrics', m)
+            }
+        }, 500)
 
         let onPause = () => { m.is_background = true; this.emit('metrics', m) }
         let onResume = () => { m.is_background = false; this.emit('metrics', m) }
@@ -613,20 +645,10 @@ class DiagnosticRunner extends EventEmitter {
                     m.origin_locked = true
                     m.waiting_for_accuracy = false
                     m.distance_from_start = 0
+                    lastKnown = GEO.lastTimeUpdate
                     this.emit('metrics', m)
                 }
                 return
-            }
-
-            let dist = geo_distance([lat, lon], [originLat, originLon])
-            m.distance_from_start = Math.round(dist * 10) / 10
-            this.emit('metrics', m)
-
-            if (acc < 15 && dist >= triggerRadius && !m.triggered) {
-                m.triggered = true
-                this._requestAudioFocus()
-                player.play()
-                this.emit('metrics', m)
             }
         }
         this._trackListener('position', onPos)
