@@ -314,6 +314,20 @@ class DiagnosticRunner extends EventEmitter {
         return Howler.ctx ? Howler.ctx.state : 'unavailable'
     }
 
+    _projectZoneAhead(originLat, originLon, currentLat, currentLon, distanceMeters) {
+        let latMeters = (currentLat - originLat) * 111320
+        let avgLatRad = ((originLat + currentLat) / 2) * Math.PI / 180
+        let lonMeters = (currentLon - originLon) * 111320 * Math.cos(avgLatRad)
+        let displacement = Math.sqrt((latMeters * latMeters) + (lonMeters * lonMeters))
+
+        if (!isFinite(displacement) || displacement < 3) return null
+
+        let scale = distanceMeters / displacement
+        let zoneLat = originLat + ((latMeters * scale) / 111320)
+        let zoneLon = originLon + ((lonMeters * scale) / (111320 * Math.cos(avgLatRad)))
+        return { zoneLat, zoneLon, displacement }
+    }
+
     // ---- Test implementations ----
 
     // T0: GPS startup — start the plugin if not already running, verify first callback
@@ -515,18 +529,20 @@ class DiagnosticRunner extends EventEmitter {
         }, ctx.test.duration)
     }
 
-    // T6: GPS-triggered audio — place a virtual zone 15m north, walk into it
-    // Zone placed at 15m (not 10m) to avoid triggering within the typical fix accuracy radius.
-    // Zone creation waits for accuracy < 15m to ensure zone center is meaningful.
+    // T6: GPS-triggered audio — place a virtual zone 15m ahead in the user's walking direction.
+    // Zone is projected only after a good fix and a few meters of real movement, so
+    // the instruction remains valid even if the user starts in an arbitrary direction.
     _testGpsTrigger(ctx) {
         let m = ctx.metrics
         m.triggered = false
         m.zone_created = false
         m.positions_since_zone = 0
         m.waiting_for_accuracy = true
+        m.waiting_for_direction = false
 
         let player = this._makeTestHowl('background-ok.mp3', false)
         let zoneLat = null, zoneLon = null
+        let originLat = null, originLon = null
 
         let onPos = (pos) => {
             let lat = pos.coords ? pos.coords.latitude : pos.latitude
@@ -535,12 +551,24 @@ class DiagnosticRunner extends EventEmitter {
 
             if (!m.zone_created) {
                 if (acc < 15) {
-                    // Accuracy good enough to place a meaningful zone
-                    m.waiting_for_accuracy = false
-                    zoneLat = lat + (15 / 111320)   // 15m north
-                    zoneLon = lon
-                    m.zone_created = true
-                    this.emit('metrics', m)
+                    if (originLat === null || originLon === null) {
+                        originLat = lat
+                        originLon = lon
+                        m.waiting_for_accuracy = false
+                        m.waiting_for_direction = true
+                        this.emit('metrics', m)
+                        return
+                    }
+
+                    let projected = this._projectZoneAhead(originLat, originLon, lat, lon, 15)
+                    if (projected) {
+                        zoneLat = projected.zoneLat
+                        zoneLon = projected.zoneLon
+                        m.zone_created = true
+                        m.waiting_for_direction = false
+                        m.distance_to_zone = Math.max(0, Math.round((15 - projected.displacement) * 10) / 10)
+                        this.emit('metrics', m)
+                    }
                 }
                 return
             }
@@ -632,7 +660,9 @@ class DiagnosticRunner extends EventEmitter {
         }, ctx.test.duration)
     }
 
-    // T9: GPS-triggered audio with phone locked
+    // T9: GPS-triggered audio with phone locked.
+    // Uses the same direction projection as T6, but from the first movement observed
+    // while the phone may already be locked.
     _testLockedAudioTrigger(ctx) {
         let m = ctx.metrics
         m.triggered = false
@@ -640,9 +670,11 @@ class DiagnosticRunner extends EventEmitter {
         m.bg_positions = 0
         m.is_background = false
         m.waiting_for_accuracy = true
+        m.waiting_for_direction = false
 
         let player = this._makeTestHowl('background-ok.mp3', false)
         let zoneLat = null, zoneLon = null
+        let originLat = null, originLon = null
 
         let onPause = () => { m.is_background = true; this.emit('metrics', m) }
         let onResume = () => { m.is_background = false; this.emit('metrics', m) }
@@ -658,11 +690,24 @@ class DiagnosticRunner extends EventEmitter {
 
             if (!m.zone_created) {
                 if (acc < 15) {
-                    m.waiting_for_accuracy = false
-                    zoneLat = lat + (10 / 111320)
-                    zoneLon = lon
-                    m.zone_created = true
-                    this.emit('metrics', m)
+                    if (originLat === null || originLon === null) {
+                        originLat = lat
+                        originLon = lon
+                        m.waiting_for_accuracy = false
+                        m.waiting_for_direction = true
+                        this.emit('metrics', m)
+                        return
+                    }
+
+                    let projected = this._projectZoneAhead(originLat, originLon, lat, lon, 10)
+                    if (projected) {
+                        zoneLat = projected.zoneLat
+                        zoneLon = projected.zoneLon
+                        m.zone_created = true
+                        m.waiting_for_direction = false
+                        m.distance_to_zone = Math.max(0, Math.round((10 - projected.displacement) * 10) / 10)
+                        this.emit('metrics', m)
+                    }
                 }
                 return
             }

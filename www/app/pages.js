@@ -287,6 +287,7 @@ PAGES['diagnostic'] = () => {
         if (test.id === 'T6') {
             if (metrics.triggered) return { ratio: 1, detail: 'Zone atteinte, son déclenché' }
             if (metrics.waiting_for_accuracy) return { ratio: 0.1, detail: 'Attente d\'une précision GPS < 15m' }
+            if (metrics.waiting_for_direction) return { ratio: 0.2, detail: 'Marchez quelques mètres pour fixer la direction' }
             if (metrics.distance_to_zone !== undefined) return { ratio: 0.6, detail: 'Zone à ' + metrics.distance_to_zone + 'm' }
         }
 
@@ -308,6 +309,7 @@ PAGES['diagnostic'] = () => {
         if (test.id === 'T9') {
             if (metrics.triggered) return { ratio: 1, detail: 'Zone atteinte, son déclenché' }
             if (metrics.waiting_for_accuracy) return { ratio: 0.1, detail: 'Attente d\'une précision GPS < 15m' }
+            if (metrics.waiting_for_direction) return { ratio: 0.2, detail: 'Marchez quelques mètres pour fixer la direction' }
             if (metrics.bg_positions !== undefined && metrics.bg_positions > 0) {
                 return {
                     ratio: Math.min(metrics.bg_positions / 3, 0.8),
