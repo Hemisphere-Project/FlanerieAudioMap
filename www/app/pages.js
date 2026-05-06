@@ -232,6 +232,7 @@ PAGES['diagnostic'] = () => {
     var liveMetrics = {}
     var progressTimer = null
     var answerAdvanceTimer = null
+    var reportUploadPromise = null
 
     // Start a telemetry session for diagnostics
     TELEMETRY.start('__diagnostic__', 'Diagnostic')
@@ -254,6 +255,17 @@ PAGES['diagnostic'] = () => {
         var bounded = Math.max(0, Math.min(1, ratio || 0))
         $progressFill.css('width', Math.round(bounded * 100) + '%')
         $progressDetail.text(detail || '')
+    }
+
+    function showResultBadge(result) {
+        $result.show()
+        if (result.result === 'pass') $badge.attr('class', 'badge-pass').text('✓ PASS')
+        else if (result.result === 'fail') $badge.attr('class', 'badge-fail').text('✗ FAIL')
+        else $badge.attr('class', 'badge-skip').text('— SKIP')
+    }
+
+    function logDiagnosticResult(result) {
+        TELEMETRY.log('diag_result', { test_id: result.test_id, result: result.result, metrics: result.metrics, user_answer: result.user_answer })
     }
 
     function timedProgress(test, result) {
@@ -311,20 +323,18 @@ PAGES['diagnostic'] = () => {
         }
 
         if (test.id === 'T5' && metrics.positions !== undefined) {
-            var trackedPositions = Math.min(metrics.positions, 5)
-            return {
-                ratio: Math.min(metrics.positions / 5, 1) * 0.75,
-                detail: trackedPositions >= 5
-                    ? '5/5 positions utiles, poursuite pour stabilite GPS'
-                    : trackedPositions + '/5 positions GPS utiles'
-            }
+            return null
         }
 
         if (test.id === 'T6') {
             if (metrics.triggered) return { ratio: 1, detail: 'Zone atteinte, son déclenché' }
             if (metrics.waiting_for_accuracy) return { ratio: 0.1, detail: 'Attente d\'une précision GPS < 15m' }
-            if (metrics.waiting_for_direction) return { ratio: 0.2, detail: 'Marchez quelques mètres pour fixer la direction' }
-            if (metrics.distance_to_zone !== undefined) return { ratio: 0.6, detail: 'Zone à ' + metrics.distance_to_zone + 'm' }
+            if (metrics.distance_from_start !== undefined) {
+                return {
+                    ratio: Math.min(metrics.distance_from_start / 15, 1),
+                    detail: 'Rayon depuis le depart: ' + metrics.distance_from_start + '/15m'
+                }
+            }
         }
 
         if (test.id === 'T7' && metrics.bg_positions !== undefined) {
@@ -345,10 +355,15 @@ PAGES['diagnostic'] = () => {
         if (test.id === 'T9') {
             if (metrics.triggered) return { ratio: 1, detail: 'Zone atteinte, son déclenché' }
             if (metrics.waiting_for_accuracy) return { ratio: 0.1, detail: 'Attente d\'une précision GPS < 15m' }
-            if (metrics.waiting_for_direction) return { ratio: 0.2, detail: 'Marchez quelques mètres pour fixer la direction' }
+            if (metrics.distance_from_start !== undefined) {
+                return {
+                    ratio: Math.min(metrics.distance_from_start / 10, 0.85),
+                    detail: 'Rayon depuis le depart: ' + metrics.distance_from_start + '/10m'
+                }
+            }
             if (metrics.bg_positions !== undefined && metrics.bg_positions > 0) {
                 return {
-                    ratio: Math.min(metrics.bg_positions / 3, 0.8),
+                    ratio: Math.min(metrics.bg_positions / 3, 0.35),
                     detail: metrics.bg_positions + ' positions reçues téléphone verrouillé'
                 }
             }
@@ -384,6 +399,18 @@ PAGES['diagnostic'] = () => {
 
         if (result.ended_at) {
             setProgressState(1, test.userQuestion && result.result !== 'skip' ? 'Réponse requise' : 'Test terminé')
+            return
+        }
+
+        if (test.id === 'T5') {
+            var elapsed = Date.now() - result.started_at
+            var seconds = Math.min(Math.ceil(elapsed / 1000), Math.ceil(test.duration / 1000))
+            var usefulPositions = metrics.positions || 0
+            var distance = metrics.total_distance !== undefined ? Math.round(metrics.total_distance) + 'm' : '0m'
+            setProgressState(
+                Math.max(0, Math.min(1, elapsed / test.duration)),
+                'Minimum: ' + Math.min(usefulPositions, 5) + '/5 positions utiles • Duree: ' + seconds + '/' + Math.ceil(test.duration / 1000) + 's • Distance: ' + distance
+            )
             return
         }
 
@@ -455,15 +482,15 @@ PAGES['diagnostic'] = () => {
         var total = runner.tests.length - 1 // exclude report test from count
         var isReport = test.id === 'T11'
         liveMetrics = {}
+        reportUploadPromise = null
         clearAnswerAdvanceTimer()
-        $title.text(isReport ? test.name : displayLabel(index) + ' — ' + test.name)
+        $title.text(test.name)
         $progress.text(isReport ? 'Terminé' : 'Phase ' + test.phase + ' — ' + displayLabel(index) + '/' + total)
         $instructions.text(test.instructions)
         $metrics.text('')
         $question.hide()
         $result.hide()
         $report.hide()
-        $result.hide()
         setActionState(test, { started: false, showResult: false })
 
         if (isReport) {
@@ -486,7 +513,7 @@ PAGES['diagnostic'] = () => {
         if (m.accuracy_min !== undefined && m.accuracy_min < 999) parts.push('Précision: ' + Math.round(m.accuracy_min) + 'm')
         if (m.raw_accuracy !== undefined) parts.push('Brut: ' + m.raw_accuracy + 'm')
         if (m.raw_callbacks !== undefined && m.raw_callbacks > 0) parts.push('Callbacks bruts: ' + m.raw_callbacks)
-        if (m.positions !== undefined) parts.push('Positions: ' + m.positions)
+        if (m.positions !== undefined) parts.push('Positions utiles: ' + m.positions)
         if (m.first_fix_ms !== undefined && m.first_fix_ms !== null) parts.push('1er fix: ' + (m.first_fix_ms / 1000).toFixed(1) + 's')
         // T3/T4: Audio
         if (m.play_ok) parts.push('Audio: OK ✓')
@@ -497,11 +524,11 @@ PAGES['diagnostic'] = () => {
         if (m.ctx_resumed !== undefined) parts.push('Ctx reprise: ' + m.ctx_resumed)
         if (m.ctx_alive !== undefined) parts.push('Ctx vivant: ' + (m.ctx_alive ? '✓' : '✗'))
         // T5/T6/T7/T9: movement
-        if (m.total_distance !== undefined) parts.push('Distance: ' + Math.round(m.total_distance) + 'm')
+        if (m.total_distance !== undefined) parts.push('Distance parcourue: ' + Math.round(m.total_distance) + 'm')
         if (m.max_gap_ms !== undefined && m.max_gap_ms > 0) parts.push('Gap max: ' + (m.max_gap_ms / 1000).toFixed(1) + 's')
         if (m.gps_gap_max_ms !== undefined && m.gps_gap_max_ms > 0) parts.push('Gap GPS: ' + (m.gps_gap_max_ms / 1000).toFixed(1) + 's')
         if (m.waiting_for_accuracy) parts.push('Attente précision…')
-        if (m.distance_to_zone !== undefined) parts.push('Zone: ' + m.distance_to_zone + 'm')
+        if (m.distance_from_start !== undefined) parts.push('Rayon depuis depart: ' + m.distance_from_start + 'm')
         if (m.triggered) parts.push('Déclenché ✓')
         if (m.fg_positions !== undefined) parts.push('Pos. avant-plan: ' + m.fg_positions)
         if (m.bg_positions !== undefined) parts.push('Pos. arrière-plan: ' + m.bg_positions)
@@ -517,21 +544,20 @@ PAGES['diagnostic'] = () => {
     function showResult(result) {
         var test = runner.tests[runner.currentIndex]
         stopProgressTimer()
-        $result.show()
         $start.hide()
-        if (result.result === 'pass') $badge.attr('class', 'badge-pass').text('✓ PASS')
-        else if (result.result === 'fail') $badge.attr('class', 'badge-fail').text('✗ FAIL')
-        else $badge.attr('class', 'badge-skip').text('— SKIP')
-
-        TELEMETRY.log('diag_result', { test_id: result.test_id, result: result.result, metrics: result.metrics, user_answer: result.user_answer })
+        $result.hide()
 
         // If there's a user question, show it
         if (test.userQuestion && result.result !== 'skip') {
             askQuestion(test.userQuestion)
         } else if (shouldAutoAdvance(test, result)) {
+            showResultBadge(result)
+            logDiagnosticResult(result)
             $next.hide()
             $skip.hide()
         } else {
+            showResultBadge(result)
+            logDiagnosticResult(result)
             $next.text('Test suivant →').show()
             $skip.hide()
         }
@@ -549,10 +575,18 @@ PAGES['diagnostic'] = () => {
     function showReport() {
         stopProgressTimer()
         var report = runner.getReport()
+        var reportResult = runner.currentResult()
         $instructions.text('Résultats du diagnostic :')
         $metrics.text('')
         $skip.hide()
-        setProgressState(1, 'Rapport final')
+        $question.hide()
+        $result.hide()
+        setProgressState(0.95, 'Envoi du rapport de télémétrie…')
+
+        if (reportResult && !reportResult.started_at) {
+            reportResult.started_at = Date.now()
+            reportResult.result = 'running'
+        }
 
         var lines = []
         report.tests.forEach((r, reportIndex) => {
@@ -570,7 +604,19 @@ PAGES['diagnostic'] = () => {
 
         // Upload report via telemetry
         TELEMETRY.log('diag_report', report)
-        TELEMETRY.flush()
+        reportUploadPromise = Promise.resolve(TELEMETRY.flush()).then((flushResult) => {
+            var ok = !!(flushResult && flushResult.ok)
+            if (reportResult) {
+                reportResult.ended_at = Date.now()
+                reportResult.result = ok ? 'pass' : 'fail'
+                reportResult.metrics = {
+                    telemetry_flush: ok ? 'ok' : ((flushResult && flushResult.skipped) ? 'skipped' : 'failed')
+                }
+            }
+            showResultBadge({ result: ok ? 'pass' : 'fail' })
+            setProgressState(1, ok ? 'Rapport télémétrique envoyé' : 'Échec envoi télémétrique')
+            return flushResult
+        })
 
         $next.text('Fermer').show()
     }
@@ -645,6 +691,8 @@ PAGES['diagnostic'] = () => {
         if (!result) return
         if (result) result.user_answer = true
         TELEMETRY.log('diag_user_answer', { test_id: result.test_id, answer: true })
+        showResultBadge(result)
+        logDiagnosticResult(result)
         $question.hide()
         scheduleAnswerAdvance(result)
     })
@@ -655,8 +703,9 @@ PAGES['diagnostic'] = () => {
         result.user_answer = false
         // Override result to fail if user says no
         result.result = 'fail'
-        $badge.attr('class', 'badge-fail').text('✗ FAIL')
         TELEMETRY.log('diag_user_answer', { test_id: result.test_id, answer: false })
+        showResultBadge(result)
+        logDiagnosticResult(result)
         $question.hide()
         scheduleAnswerAdvance(result)
     })

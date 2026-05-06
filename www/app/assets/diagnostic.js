@@ -228,7 +228,7 @@ class DiagnosticRunner extends EventEmitter {
             platform: this.platform,
             device: this.device,
             battery: typeof BATTERY !== 'undefined' ? BATTERY : null,
-            tests: this.results.filter(r => r)
+            tests: this.results.filter(r => r && r.test_id !== 'T11' && r.ended_at)
         }
     }
 
@@ -302,20 +302,6 @@ class DiagnosticRunner extends EventEmitter {
 
     _ctxState() {
         return Howler.ctx ? Howler.ctx.state : 'unavailable'
-    }
-
-    _projectZoneAhead(originLat, originLon, currentLat, currentLon, distanceMeters) {
-        let latMeters = (currentLat - originLat) * 111320
-        let avgLatRad = ((originLat + currentLat) / 2) * Math.PI / 180
-        let lonMeters = (currentLon - originLon) * 111320 * Math.cos(avgLatRad)
-        let displacement = Math.sqrt((latMeters * latMeters) + (lonMeters * lonMeters))
-
-        if (!isFinite(displacement) || displacement < 3) return null
-
-        let scale = distanceMeters / displacement
-        let zoneLat = originLat + ((latMeters * scale) / 111320)
-        let zoneLon = originLon + ((lonMeters * scale) / (111320 * Math.cos(avgLatRad)))
-        return { zoneLat, zoneLon, displacement }
     }
 
     // ---- Test implementations ----
@@ -525,50 +511,36 @@ class DiagnosticRunner extends EventEmitter {
     _testGpsTrigger(ctx) {
         let m = ctx.metrics
         m.triggered = false
-        m.zone_created = false
-        m.positions_since_zone = 0
+        m.origin_locked = false
         m.waiting_for_accuracy = true
-        m.waiting_for_direction = false
+        m.distance_from_start = 0
 
         let player = this._makeTestHowl('background-ok.mp3', false)
-        let zoneLat = null, zoneLon = null
         let originLat = null, originLon = null
+        let triggerRadius = 15
 
         let onPos = (pos) => {
             let lat = pos.coords ? pos.coords.latitude : pos.latitude
             let lon = pos.coords ? pos.coords.longitude : pos.longitude
             let acc = pos.coords ? pos.coords.accuracy : (pos.accuracy || 999)
 
-            if (!m.zone_created) {
+            if (!m.origin_locked) {
                 if (acc < 15) {
-                    if (originLat === null || originLon === null) {
-                        originLat = lat
-                        originLon = lon
-                        m.waiting_for_accuracy = false
-                        m.waiting_for_direction = true
-                        this.emit('metrics', m)
-                        return
-                    }
-
-                    let projected = this._projectZoneAhead(originLat, originLon, lat, lon, 15)
-                    if (projected) {
-                        zoneLat = projected.zoneLat
-                        zoneLon = projected.zoneLon
-                        m.zone_created = true
-                        m.waiting_for_direction = false
-                        m.distance_to_zone = Math.max(0, Math.round((15 - projected.displacement) * 10) / 10)
-                        this.emit('metrics', m)
-                    }
+                    originLat = lat
+                    originLon = lon
+                    m.origin_locked = true
+                    m.waiting_for_accuracy = false
+                    m.distance_from_start = 0
+                    this.emit('metrics', m)
                 }
                 return
             }
 
-            m.positions_since_zone++
-            let dist = geo_distance([lat, lon], [zoneLat, zoneLon])
-            m.distance_to_zone = Math.round(dist * 10) / 10
+            let dist = geo_distance([lat, lon], [originLat, originLon])
+            m.distance_from_start = Math.round(dist * 10) / 10
             this.emit('metrics', m)
 
-            if (dist < 8 && !m.triggered) {
+            if (acc < 15 && dist >= triggerRadius && !m.triggered) {
                 m.triggered = true
                 this._requestAudioFocus()
                 player.play()
@@ -612,15 +584,15 @@ class DiagnosticRunner extends EventEmitter {
     _testLockedAudioTrigger(ctx) {
         let m = ctx.metrics
         m.triggered = false
-        m.zone_created = false
+        m.origin_locked = false
         m.bg_positions = 0
         m.is_background = false
         m.waiting_for_accuracy = true
-        m.waiting_for_direction = false
+        m.distance_from_start = 0
 
         let player = this._makeTestHowl('background-ok.mp3', false)
-        let zoneLat = null, zoneLon = null
         let originLat = null, originLon = null
+        let triggerRadius = 10
 
         let onPause = () => { m.is_background = true; this.emit('metrics', m) }
         let onResume = () => { m.is_background = false; this.emit('metrics', m) }
@@ -634,35 +606,23 @@ class DiagnosticRunner extends EventEmitter {
 
             if (m.is_background) m.bg_positions++
 
-            if (!m.zone_created) {
+            if (!m.origin_locked) {
                 if (acc < 15) {
-                    if (originLat === null || originLon === null) {
-                        originLat = lat
-                        originLon = lon
-                        m.waiting_for_accuracy = false
-                        m.waiting_for_direction = true
-                        this.emit('metrics', m)
-                        return
-                    }
-
-                    let projected = this._projectZoneAhead(originLat, originLon, lat, lon, 10)
-                    if (projected) {
-                        zoneLat = projected.zoneLat
-                        zoneLon = projected.zoneLon
-                        m.zone_created = true
-                        m.waiting_for_direction = false
-                        m.distance_to_zone = Math.max(0, Math.round((10 - projected.displacement) * 10) / 10)
-                        this.emit('metrics', m)
-                    }
+                    originLat = lat
+                    originLon = lon
+                    m.origin_locked = true
+                    m.waiting_for_accuracy = false
+                    m.distance_from_start = 0
+                    this.emit('metrics', m)
                 }
                 return
             }
 
-            let dist = geo_distance([lat, lon], [zoneLat, zoneLon])
-            m.distance_to_zone = Math.round(dist * 10) / 10
+            let dist = geo_distance([lat, lon], [originLat, originLon])
+            m.distance_from_start = Math.round(dist * 10) / 10
             this.emit('metrics', m)
 
-            if (dist < 8 && !m.triggered) {
+            if (acc < 15 && dist >= triggerRadius && !m.triggered) {
                 m.triggered = true
                 this._requestAudioFocus()
                 player.play()
