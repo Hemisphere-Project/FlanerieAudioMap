@@ -310,7 +310,10 @@ input[type=number].input-page::-webkit-outer-spin-button {
 }
 
 /* Diagnostic page */
-#diag-progress { font-size: 0.85em; color: #aaa; margin-bottom: 10px; }
+#diag-progress { font-size: 0.85em; color: #aaa; margin-bottom: 4px; text-align: center; }
+#diag-progress-detail { font-size: 0.8em; color: #8fb3c9; min-height: 1.2em; margin-bottom: 8px; text-align: center; }
+#diag-progress-bar { width: min(100%, 360px); height: 8px; margin: 0 auto 16px; background: rgba(255,255,255,0.12); border-radius: 999px; overflow: hidden; }
+#diag-progress-fill { width: 0; height: 100%; background: linear-gradient(90deg, #3aa675, #6fc0ff); transition: width 0.25s ease; }
 #diag-instructions { white-space: pre-line; margin-bottom: 15px; line-height: 1.5; }
 #diag-metrics { font-size: 0.85em; color: #8f8; margin-bottom: 10px; min-height: 40px; }
 #diag-question { margin: 15px 0; }
@@ -320,4 +323,5 @@ input[type=number].input-page::-webkit-outer-spin-button {
 .badge-fail { background: #c33; color: #fff; }
 .badge-skip { background: #555; color: #fff; }
 #diag-report { font-size: 0.8em; color: #ccc; white-space: pre-wrap; max-height: 300px; overflow-y: auto; margin-top: 15px; border: 1px solid #444; padding: 10px; }
+#diag-actions { display: flex; flex-direction: column; align-items: center; gap: 12px; margin-top: 20px; }
 #diag-skip { font-size: 0.9em; color: #999; border-color: #666; }

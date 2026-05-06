@@ -907,7 +907,7 @@ These items emerged from comparing FlanerieCordova against FlanerieAudioMap afte
 
 #### C1 Audiofocus plugin — deprecated API + wrong focus type ✅ DONE (2026-05-05, follow-up 2026-05-06)
 
-Plugin upgraded to v1.2.0 in the `cordova-plugin-audiofocus` fork workspace. The native/API issues are fixed; the duplicate plugin identity cleanup in the Cordova app config remains to be reconciled.
+Plugin upgraded to v1.2.0 in the `cordova-plugin-audiofocus` fork workspace. FlanerieCordova has now been refreshed to upstream commit `69915be1b2c3fd4faa41ff05c02806484d0023f2`, and the duplicate plugin identity in the app config has been removed.
 
 **What was done:**
 
@@ -922,7 +922,7 @@ Plugin upgraded to v1.2.0 in the `cordova-plugin-audiofocus` fork workspace. The
     - `handleInterruption:`: emits `AUDIOFOCUS_LOSS` on interruption begin. On interruption end, it now emits `AUDIOFOCUS_GAIN` only when `ShouldResume` is present and `setActive:YES` succeeds. This prevents the app from auto-resuming after interruptions that iOS expects to stay paused.
     - This covers mid-session phone calls and Siri-like interruptions that do NOT background the app, without conflating them with ordinary app backgrounding.
 
-4. **Duplicate plugin identity still present in the Cordova app config**: the plugin source and installed copy are aligned, but `FlanerieCordova/package.json` still carries both `cordova-plugin-audiofocus` and `com.maigre.cordova.plugins.audiofocus` under `cordova.plugins`. This is maintenance-fragile and should be cleaned up in the app workspace separately from the plugin commit.
+4. **Cordova app config refreshed to the upstream plugin snapshot**: `FlanerieCordova/package-lock.json` now resolves `cordova-plugin-audiofocus` to commit `69915be1b2c3fd4faa41ff05c02806484d0023f2`, the installed plugin copy under `plugins/com.maigre.cordova.plugins.audiofocus/` matches that snapshot, and the duplicate `com.maigre.cordova.plugins.audiofocus` key has been removed from `FlanerieCordova/package.json` so only `cordova-plugin-audiofocus` remains in `cordova.plugins`.
 
 **Interaction with app-side lifecycle in `player.js` / `geoloc.js`:**
 The temporary iOS `document.pause`/`resume` proxy added during P1.11 has now been removed. Generic iOS background/foreground transitions no longer pause or resume playback; only the native interruption callback path does. Android still re-requests audio focus on generic app resume. The overlay and vibration from the `AUDIOFOCUS_LOSS`/`GAIN` handler now represent real audio interruptions on both platforms.
@@ -939,7 +939,8 @@ Files changed:
 - `cordova-plugin-audiofocus/plugin.xml`
 - `cordova-plugin-audiofocus/package.json`
 - `FlanerieCordova/plugins/com.maigre.cordova.plugins.audiofocus/` (synced)
-- `FlanerieCordova/package.json` (duplicate plugin entry cleanup still pending)
+- `FlanerieCordova/package.json` (duplicate plugin entry removed)
+- `FlanerieCordova/package-lock.json` (audiofocus resolved to `69915be1b2c3fd4faa41ff05c02806484d0023f2`)
 
 #### C1b Android: `FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK` in audiofocus plugin fork 🆕 [LOW EFFORT]
 

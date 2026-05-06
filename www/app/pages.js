@@ -217,6 +217,8 @@ PAGES['diagnostic'] = () => {
     var runner = DIAGNOSTIC
     var $title = $('#diag-title')
     var $progress = $('#diag-progress')
+    var $progressDetail = $('#diag-progress-detail')
+    var $progressFill = $('#diag-progress-fill')
     var $instructions = $('#diag-instructions')
     var $metrics = $('#diag-metrics')
     var $question = $('#diag-question')
@@ -226,14 +228,153 @@ PAGES['diagnostic'] = () => {
     var $report = $('#diag-report')
     var $next = $('#diag-next')
     var $skip = $('#diag-skip')
+    var liveMetrics = {}
+    var progressTimer = null
+    var answerAdvanceTimer = null
 
     // Start a telemetry session for diagnostics
     TELEMETRY.start('__diagnostic__', 'Diagnostic')
 
+    function stopProgressTimer() {
+        if (progressTimer) clearInterval(progressTimer)
+        progressTimer = null
+    }
+
+    function clearAnswerAdvanceTimer() {
+        if (answerAdvanceTimer) clearTimeout(answerAdvanceTimer)
+        answerAdvanceTimer = null
+    }
+
+    function formatRemaining(ms) {
+        return Math.max(0, Math.ceil(ms / 1000)) + 's restantes'
+    }
+
+    function setProgressState(ratio, detail) {
+        var bounded = Math.max(0, Math.min(1, ratio || 0))
+        $progressFill.css('width', Math.round(bounded * 100) + '%')
+        $progressDetail.text(detail || '')
+    }
+
+    function timedProgress(test, result) {
+        if (!test || !test.duration || !result || result.ended_at) return null
+        var elapsed = Date.now() - result.started_at
+        var ratio = Math.max(0, Math.min(1, elapsed / test.duration))
+        return {
+            ratio: ratio,
+            detail: Math.round(ratio * 100) + '% • ' + formatRemaining(test.duration - elapsed)
+        }
+    }
+
+    function actualProgress(test, metrics) {
+        if (!test || !metrics) return null
+
+        if (test.id === 'T0') {
+            var startupRatio = (metrics.gps_started ? 0.5 : 0) + (metrics.first_callback ? 0.5 : 0)
+            if (!startupRatio) return null
+            return {
+                ratio: startupRatio,
+                detail: metrics.first_callback ? 'Premier callback GPS reçu' : 'GPS démarré, attente du premier callback'
+            }
+        }
+
+        if (test.id === 'T5' && metrics.positions !== undefined) {
+            return {
+                ratio: Math.min(metrics.positions / 5, 1),
+                detail: Math.min(metrics.positions, 5) + '/5 positions GPS utiles'
+            }
+        }
+
+        if (test.id === 'T6') {
+            if (metrics.triggered) return { ratio: 1, detail: 'Zone atteinte, son déclenché' }
+            if (metrics.waiting_for_accuracy) return { ratio: 0.1, detail: 'Attente d\'une précision GPS < 15m' }
+            if (metrics.distance_to_zone !== undefined) return { ratio: 0.6, detail: 'Zone à ' + metrics.distance_to_zone + 'm' }
+        }
+
+        if (test.id === 'T7' && metrics.bg_positions !== undefined) {
+            return {
+                ratio: Math.min(metrics.bg_positions / 3, 1),
+                detail: Math.min(metrics.bg_positions, 3) + '/3 positions GPS en arrière-plan'
+            }
+        }
+
+        if (test.id === 'T8' && metrics.heartbeat_count !== undefined) {
+            var expectedHeartbeats = Math.max(1, Math.round(test.duration / 10000))
+            return {
+                ratio: Math.min(metrics.heartbeat_count / expectedHeartbeats, 1),
+                detail: metrics.heartbeat_count + '/' + expectedHeartbeats + ' heartbeats keepalive'
+            }
+        }
+
+        if (test.id === 'T9') {
+            if (metrics.triggered) return { ratio: 1, detail: 'Zone atteinte, son déclenché' }
+            if (metrics.waiting_for_accuracy) return { ratio: 0.1, detail: 'Attente d\'une précision GPS < 15m' }
+            if (metrics.bg_positions !== undefined && metrics.bg_positions > 0) {
+                return {
+                    ratio: Math.min(metrics.bg_positions / 3, 0.8),
+                    detail: metrics.bg_positions + ' positions reçues téléphone verrouillé'
+                }
+            }
+        }
+
+        return null
+    }
+
+    function renderProgress() {
+        var test = runner.current()
+        var result = runner.currentResult()
+        var metrics = result && result.ended_at ? result.metrics : liveMetrics
+
+        if (!test || !result) {
+            setProgressState(0, '')
+            return
+        }
+
+        if (test.id === 'T11') {
+            setProgressState(1, 'Rapport final')
+            return
+        }
+
+        if (result.result === 'skip') {
+            setProgressState(1, 'Test passé')
+            return
+        }
+
+        if (result.ended_at) {
+            setProgressState(1, test.userQuestion && result.result !== 'skip' ? 'Réponse requise' : 'Test terminé')
+            return
+        }
+
+        var timed = timedProgress(test, result)
+        var actual = actualProgress(test, metrics)
+        var chosen = timed || { ratio: 0, detail: '' }
+        if (actual && actual.ratio >= chosen.ratio) chosen = actual
+        setProgressState(chosen.ratio, chosen.detail)
+    }
+
+    function startProgressTimer() {
+        stopProgressTimer()
+        renderProgress()
+        var test = runner.current()
+        if (!test || test.id === 'T11' || !test.duration) return
+        progressTimer = setInterval(renderProgress, 500)
+    }
+
+    function scheduleAnswerAdvance(result) {
+        clearAnswerAdvanceTimer()
+        setProgressState(1, 'Réponse enregistrée, suite…')
+        $next.hide()
+        $skip.hide()
+        answerAdvanceTimer = setTimeout(() => {
+            if (runner.currentResult() === result) runner.next()
+        }, 700)
+    }
+
     function showTest(test, index) {
         var total = runner.tests.length - 1 // exclude report test from count
         var isReport = test.id === 'T11'
-        $title.text('🔧 ' + test.name)
+        liveMetrics = {}
+        clearAnswerAdvanceTimer()
+        $title.text(test.name)
         $progress.text(isReport ? 'Terminé' : 'Phase ' + test.phase + ' — Test ' + (index + 1) + '/' + total)
         $instructions.text(test.instructions)
         $metrics.text('')
@@ -252,9 +393,12 @@ PAGES['diagnostic'] = () => {
         } else {
             $next.text('Suivant')
         }
+
+        startProgressTimer()
     }
 
     function showMetrics(m) {
+        liveMetrics = { ...m }
         var parts = []
         // T0: GPS startup
         if (m.plugin_available !== undefined) parts.push('Plugin: ' + (m.plugin_available ? 'OK' : 'absent'))
@@ -290,10 +434,12 @@ PAGES['diagnostic'] = () => {
         if (m.gps_recovered !== undefined && m.gps_recovered > 0) parts.push('GPS récupérés: ' + m.gps_recovered)
         if (m.motion_stationary !== undefined) parts.push('Immobile détecté: ' + (m.motion_stationary ? '✓' : '—'))
         $metrics.text(parts.join(' | '))
+        renderProgress()
     }
 
     function showResult(result) {
         var test = runner.tests[runner.currentIndex]
+        stopProgressTimer()
         $result.show()
         if (result.result === 'pass') $badge.attr('class', 'badge-pass').text('✓ PASS')
         else if (result.result === 'fail') $badge.attr('class', 'badge-fail').text('✗ FAIL')
@@ -308,6 +454,8 @@ PAGES['diagnostic'] = () => {
             $next.text('Test suivant →').show()
             $skip.hide()
         }
+
+        renderProgress()
     }
 
     function askQuestion(text) {
@@ -318,10 +466,12 @@ PAGES['diagnostic'] = () => {
     }
 
     function showReport() {
+        stopProgressTimer()
         var report = runner.getReport()
         $instructions.text('Résultats du diagnostic :')
         $metrics.text('')
         $skip.hide()
+        setProgressState(1, 'Rapport final')
 
         var lines = []
         report.tests.forEach(r => {
@@ -365,6 +515,8 @@ PAGES['diagnostic'] = () => {
         showResult(result)
     })
     runner.on('complete', () => {
+        stopProgressTimer()
+        clearAnswerAdvanceTimer()
         PAGE('select')
     })
 
@@ -396,23 +548,23 @@ PAGES['diagnostic'] = () => {
     // User question buttons
     $('#diag-yes').off().on('click', () => {
         var result = runner.currentResult()
+        if (!result) return
         if (result) result.user_answer = true
         TELEMETRY.log('diag_user_answer', { test_id: result.test_id, answer: true })
         $question.hide()
-        $next.text('Test suivant →').show()
+        scheduleAnswerAdvance(result)
     })
 
     $('#diag-no').off().on('click', () => {
         var result = runner.currentResult()
-        if (result) {
-            result.user_answer = false
-            // Override result to fail if user says no
-            result.result = 'fail'
-            $badge.attr('class', 'badge-fail').text('✗ FAIL')
-        }
+        if (!result) return
+        result.user_answer = false
+        // Override result to fail if user says no
+        result.result = 'fail'
+        $badge.attr('class', 'badge-fail').text('✗ FAIL')
         TELEMETRY.log('diag_user_answer', { test_id: result.test_id, answer: false })
         $question.hide()
-        $next.text('Test suivant →').show()
+        scheduleAnswerAdvance(result)
     })
 
     // Start the runner

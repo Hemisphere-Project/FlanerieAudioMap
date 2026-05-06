@@ -134,7 +134,7 @@
             <div class="content">
                 <p>Choisissez un parcours:</p>
                 <ul id="select-parcours"></ul>
-                <button id="select-diagnostic" class="dev btn btn-primary btn-page" style="margin-top:30px;">🔧 Diagnostic appareil</button>
+                <button id="select-diagnostic" class="dev btn btn-primary btn-page" style="margin-top:30px;">Diagnostic appareil</button>
             </div>
         </div>
 
@@ -222,8 +222,10 @@
         </div>
 
         <div id="diagnostic" class="page">
-            <h2 id="diag-title">🔧 Diagnostic</h2>
+            <h2 id="diag-title">Diagnostic</h2>
             <div id="diag-progress"></div>
+            <div id="diag-progress-detail"></div>
+            <div id="diag-progress-bar"><div id="diag-progress-fill"></div></div>
             <div id="diag-instructions"></div>
             <div id="diag-metrics"></div>
             <div id="diag-question" style="display:none;">
@@ -235,8 +237,10 @@
                 <span id="diag-result-badge"></span>
             </div>
             <div id="diag-report" style="display:none;"></div>
-            <button id="diag-next" class="btn btn-primary btn-page">Suivant</button>
-            <button id="diag-skip" class="btn btn-primary" style="margin-left:10px;">Passer</button>
+            <div id="diag-actions">
+                <button id="diag-next" class="btn btn-primary btn-page">Suivant</button>
+                <button id="diag-skip" class="btn btn-primary">Passer</button>
+            </div>
         </div>
 
         <div id="sidepanel" class="dev">
