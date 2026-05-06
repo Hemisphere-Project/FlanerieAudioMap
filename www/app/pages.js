@@ -1195,6 +1195,7 @@ GEO.on('stateUpdate', (state) => {
         if (GEO.mode() == 'simulate') return;                                   // not in simulate mode
         if (PARCOURS.currentStep() == PARCOURS.spots.steps.length - 1) return;  // not if last step
         if (AUDIOFOCUS == 0) return;
+        if (GEO.motionIsStationary) return;                                     // standing still — gap is expected, keepalive handles it
         console.warn('GEO lost position');
         TELEMETRY.log('gps_lost', {step: PARCOURS.currentStep()});
         if (navigator.vibrate) navigator.vibrate([500, 200, 500]);

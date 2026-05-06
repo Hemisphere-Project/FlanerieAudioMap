@@ -140,3 +140,4 @@ x En DEV: afficher les sorties de route sur la carte
 ************************
 
 - Disable WEB telemetry
+- Review Notifications lifecycle, usage and efficiency

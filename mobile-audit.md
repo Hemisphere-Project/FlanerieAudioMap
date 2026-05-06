@@ -205,24 +205,82 @@ Code-level detail (from 2026-04-27 code review):
 - **Mitigating factor:** `NOTIF_COUNTER` (37) is a fixed ID, so only one notification is pending at a time in the OS queue. The leak wastes CPU scheduling but doesn't flood the notification tray.
 - **Permission polling loop:** fixed by a bounded timer plus explicit re-check action after settings return. Users are no longer trapped in an invisible infinite loop, but they also cannot proceed without granting permission.
 
+Plugin source analysis (2026-05-05):
+
+Two structural bugs make the 59s local notification chain ineffective in the locked-screen scenario.
+
+**Bug 1 — Android: `silent: true` suppresses the notification AND the JS trigger event**
+
+`Notification.java` `show()` calls `getBuilder()` which returns `null` for silent notifications. The method returns early before `LocalNotification.fireEvent("trigger")` is ever reached:
+
+```java
+NotificationCompat.Builder builder = getBuilder(isUpdate);
+if (builder == null) {   // null when silent=true
+    return;              // exits — no notification shown, no trigger event fired
+}
+// ...
+if (!isUpdate && LocalNotification.isAppRunning()) {
+    LocalNotification.fireEvent("trigger", this);  // never reached
+}
+```
+
+`TriggerReceiver.onReceive()` does run (the AlarmManager wakes the process), but it calls `show()` which returns immediately, then `scheduleNext()` to arm the next alarm. The JS `on('trigger')` handler in pages.js **never executes** on Android. `resumeAudioContext('notif_wakeup')` is dead code.
+
+**Bug 2 — iOS: `trigger` event only fires in foreground**
+
+`willPresentNotification` — the only place where `fireEvent("trigger")` is called in the iOS plugin — is documented and only invoked when the **app is in the foreground**. When the screen is locked, iOS delivers the notification to the notification center but never calls this delegate method. The JS layer is never touched. Every 59s a notification accumulates silently in the tray.
+
+**What actually keeps things alive (source-confirmed):**
+
+| Mechanism | Android | iOS |
+|---|---|---|
+| BackgroundGeolocation foreground service notification | **primary keepalive** ✅ | n/a |
+| `UIBackgroundModes: location` + `startUpdatingLocation` | n/a | **primary keepalive** ✅ |
+| 59s local notification chain | ❌ zero contribution | ❌ zero contribution |
+| GPS → native callback → Cordova bridge → JS wake | ✅ secondary | ✅ secondary |
+
+**Telemetry note:** the 8–15 `session_resume` events per session are not caused by the notification trigger handler (it never fires in background). They are more likely caused by: Android — AlarmManager wakeups bringing the activity briefly back into focus; iOS — the OS briefly waking the native process to deliver the notification, triggering the Cordova `resume` event via the native-to-JS bridge without the JS trigger handler ever running.
+
+**Reschedule fragility:** `NOTIF_TIMER` (setTimeout) is the actual reschedule mechanism. The trigger handler path for rescheduling is dead in background. A suspended WKWebView on iOS can silence setTimeout, making the cadence unreliable — consistent with uneven `session_resume` spacing in telemetry.
+
+**Recommended fixes:**
+
+- **iOS**: Remove the notification chain entirely. It delivers no keepalive and accumulates ghost notifications in the tray every 59s. iOS keepalive is location-based (`UIBackgroundModes: location`). With Fix 1b (native NSTimer) in the fork, the JS layer stays warm without notifications. The `checknotifications` page guard on iOS can be removed or softened.
+- **Android**: Either remove the chain (the foreground service carries everything) or de-silence it — drop `silent: true`, use `IMPORTANCE_MIN` channel (no sound, no heads-up banner). A non-silent notification fires `fireEvent("trigger")` while the app is running, at least giving `resumeAudioContext` when the app returns to foreground. The foreground service notification ("localisation en cours") is the real keepalive and is already visible.
+- **Both**: The notification permission step at startup (`checknotifications`) is currently Android-only, which is correct — iOS location keepalive does not depend on notification permission. Keep that gate Android-only.
+
 What remains:
-- Clarify the exact role of local notifications on Android vs iOS keepalive behavior.
-- Add telemetry around permission state checks and wakeup trigger timing, not only console logging.
-- Validate the cadence on real Android devices to confirm the app stays alive quietly enough while locked.
+
+**Immediate: disable the notification chain (mark for deletion)**
+- Gate `scheduleWakeupNotification()` with a disabled flag so it stops scheduling. Do not delete yet — confirm no unexpected side-effect before removing the code.
+- Remove the iOS scheduling branch: `if (PLATFORM == 'ios') return` at the top of `scheduleWakeupNotification()`. iOS keepalive is location-based and gains nothing from local notifications.
+- The `on('trigger')` deviceready handler can stay dormant — it does nothing in background; cleaning it up is a separate pass.
+- The `checknotifications` Android 13+ permission gate **must be kept**: Android 13+ requires `POST_NOTIFICATIONS` permission for the BackgroundGeolocation foreground service notification, independent of the local notification chain.
+
+**Replacement strategies (tracked in P0.5 and C1b):**
+- Fix 1d (P0.5): `WKWebView.allowsBackgroundTimeExtension` (iOS 17+) — prevents WKWebView JS suspension natively, merged into the background GPS plugin fork.
+- Fix 1e (P0.5): Android direct AlarmManager + WebView wakeup — replaces the broken notification chain, merged into the background GPS plugin fork.
+- C1b: Android `FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK` in the audiofocus plugin fork — OEM-level audio service protection on Samsung/Xiaomi.
+
+**Future: internet-assisted keepalive**
+A server sending FCM (Android) or APNs silent push (iOS) every 30–60s can unconditionally wake the app — more reliable than any local mechanism. Not suitable as a primary strategy (the walk runs offline after media preload), but viable as a supplementary layer for visitors who still have a data connection, which is common in practice. Track as a future improvement once the local keepalive stack is confirmed solid in field tests.
+
+Add telemetry around permission state checks and wakeup trigger timing, not only console logging.
 
 Telemetry evidence (Apr 2026):
-- Multiple GIVORS_V3 sessions show 8–15 `session_resume` events. The notification chain firing every ~59s is the most plausible driver: each chain instance pulls the JS context from the background, generating a resume event.
-- The scheduling leak (multiple chains after page transitions) compounds with each restart, explaining why resume counts grow over time in long sessions.
+- Multiple GIVORS_V3 sessions show 8–15 `session_resume` events per session. Previously attributed to notification trigger wakeup — source analysis shows this is incorrect: the trigger event never fires in background on either platform.
+- The scheduling leak (multiple chains after page transitions) compounds with each restart, explaining why resume counts grow over time in long sessions. Fixed by `NOTIF_TIMER` single-chain guard.
 
-Regression risk: **MEDIUM-HIGH**. The notification step now blocks startup by design until permission is granted. This matches the operational requirement, but it must be tested on Android 13+ and at least one older Android to confirm there is no false negative or plugin-specific permission mismatch.
+Regression risk: **MEDIUM-HIGH**. The notification step now blocks startup by design until permission is granted. This matches the operational requirement, but it must be tested on Android 13+ and at least one older Android to confirm there is no false negative or plugin-specific permission mismatch. Removing the iOS notification chain carries **LOW** regression risk — it currently does nothing.
 
 Files:
 - `www/app/pages.js`
 
 Acceptance:
 - Android 13+ users cannot get stuck in the permission flow.
-- Notification-based keepalive behavior is observable in logs/telemetry.
-- The app remains quiet enough for the experience while still improving survivability.
+- iOS users are not blocked by a notification permission gate.
+- Notification accumulation in the iOS tray is eliminated.
+- Android keepalive relies explicitly on the foreground service, not the local notification chain.
 
 #### P0.4 Plugin guards [SAFE-TODAY]
 
@@ -240,6 +298,314 @@ Files:
 - `www/app/pages.js`
 - `www/app/assets/player.js`
 - `www/app/assets/geoloc.js`
+
+#### P0.5 Background geolocation plugin fork — GPS keepalive improvements 🆕 [RESEARCH-FIRST] — Partial ✅ (2026-05-06)
+
+Applied to fork, bumped to v2.4.0. Fix 1 + Fix 1b + Fix 1c + Fix 2 done on iOS; Fix 1b + Fix 1c done on Android. Fix 1d done on iOS (WKWebView). JS guard added in pages.js stateUpdate handler. Deferred: Fix 1e (AlarmManager), Fix 3 (DistanceFilter eval), Fix 4 (FusedLocation). Rebuild + field test pending.
+
+**Prerequisite:** fork `cordova-background-geolocation-plugin` (HaylLtd) into the project so it can be edited and versioned. The audiofocus plugin fork is the model. The background geolocation plugin is a much larger codebase — fork it, do not patch in-place.
+
+Context:
+- `RAW_PROVIDER` on Android uses the legacy `android.location.LocationManager` API wired directly to `GPS_PROVIDER`. Google's `FusedLocationProvider` — which blends GPS, WiFi, and network, handles Doze mode, and adapts to background power restrictions — is not used by this plugin at all.
+- On iOS, `showsBackgroundLocationIndicator` exists in the plugin's `MAURLocationManager` but is never set. Significant location changes are explicitly stopped on `onStart` and never used as a parallel keepalive.
+- These gaps are structural and require native changes. The JS-layer proactive heartbeat (P0.1) mitigates the iOS symptom but does not address the root cause: the heartbeat runs inside WKWebView's JS runtime, which iOS can suspend independently of the app process. The native fix below removes that dependency entirely.
+
+**Fix 1 — iOS: `showsBackgroundLocationIndicator = YES`** [HIGH IMPACT, LOW EFFORT]
+
+Add one line to `MAURRawLocationProvider.onStart` after `[locationManager start:]`:
+```objc
+[locationManager setShowsBackgroundLocationIndicator:YES];
+```
+This signals to CoreLocation that the app is in an active navigation session — the same privilege Maps and Waze receive. iOS becomes less aggressive about throttling background position events. The blue location bar appears in the status bar during the walk, which is accurate (the app is tracking). No config needed; it should always be on during the walk.
+
+Regression risk: **LOW**. Additive, iOS 11+.
+
+**Fix 1b — iOS: native NSTimer keepalive in `MAURRawLocationProvider`** [HIGH IMPACT, LOW EFFORT]
+
+The JS proactive heartbeat (P0.1) fires at 60% of the 30s lost-timeout, but it depends on the WKWebView JS runtime being alive — iOS can suspend WKWebView independently of the app process even with the location entitlement active. An `NSTimer` on the app's main thread run loop is not subject to this: as long as `UIBackgroundModes: location` keeps the process alive, the timer fires.
+
+Implementation — all changes in `MAURRawLocationProvider.m`:
+
+Add to the ivar block:
+```objc
+NSTimer *_keepaliveTimer;
+NSDate  *_lastRealLocationTime;  // only real CLLocationManager callbacks reset this
+```
+
+In `onLocationsChanged:`, record when a real update arrives:
+```objc
+- (void) onLocationsChanged:(NSArray*)locations
+{
+    _lastRealLocationTime = [NSDate date];
+    for (CLLocation *location in locations) {
+        MAURLocation *bgloc = [MAURLocation fromCLLocation:location];
+        [self.delegate onLocationChanged:bgloc];
+    }
+}
+```
+
+In `onStart:`, after `[locationManager start:]`:
+```objc
+_lastRealLocationTime = [NSDate date];
+[_keepaliveTimer invalidate];
+_keepaliveTimer = [NSTimer scheduledTimerWithTimeInterval:15.0
+                                                   target:self
+                                                 selector:@selector(_keepaliveTick:)
+                                                 userInfo:nil
+                                                  repeats:YES];
+```
+
+The tick — delivers the CLLocationManager cached position directly, bypassing `onLocationsChanged:` so it does not reset `_lastRealLocationTime`:
+```objc
+- (void) _keepaliveTick:(NSTimer *)timer
+{
+    if (!isStarted) return;
+    if (-[_lastRealLocationTime timeIntervalSinceNow] < 15.0) return;
+
+    CLLocation *cached = [MAURLocationManager sharedInstance].locationManager.location;
+    if (cached == nil) return;
+
+    DDLogDebug(@"%@ keepalive: %.0fs since last real update — delivering cached position",
+               TAG, -[_lastRealLocationTime timeIntervalSinceNow]);
+    MAURLocation *bgloc = [MAURLocation fromCLLocation:cached];
+    [self.delegate onLocationChanged:bgloc];
+}
+```
+
+In `onStop:` and `onDestroy:`:
+```objc
+[_keepaliveTimer invalidate];
+_keepaliveTimer = nil;
+```
+
+Effect: every 15s without a real CLLocationManager callback, the cached `CLLocationManager.location` (which iOS always maintains internally even when suppressing delegate callbacks) is re-delivered through the existing position pipeline. `lastTimeUpdate` is refreshed in JS, the 30s lost-timeout is never reached, and `_lastRealLocationTime` is only reset by genuine hardware updates — the keepalive does not feed itself. The JS proactive heartbeat (P0.1) remains as a redundant safety net but is no longer the primary mechanism.
+
+Regression risk: **LOW**. Additive. The cached position has the same coordinates as the last real fix; accuracy and step-triggering behaviour are unchanged.
+
+**Fix 1b — Android: native Handler keepalive in `RawLocationProvider`** [HIGH IMPACT, LOW EFFORT]
+
+Direct parallel to iOS Fix 1b. `LocationManager.GPS_PROVIDER` can go silent between callbacks without signalling an error — same symptom as iOS, different cause (Doze, background scheduler, GPS chip sleep). A `Handler` + `Runnable` periodic check re-delivers `getLastKnownLocation()` when no real callback has arrived, keeping `lastTimeUpdate` alive without depending on hardware GPS.
+
+Implementation — all changes in `RawLocationProvider.java`:
+
+Add fields:
+```java
+private Handler  _keepaliveHandler;
+private Runnable _keepaliveTick;
+private long     _lastRealLocationTime;
+private static final long KEEPALIVE_INTERVAL_MS = 15_000;
+```
+
+In `onLocationChanged()`, record real callback arrival:
+```java
+@Override
+public void onLocationChanged(Location location) {
+    _lastRealLocationTime = SystemClock.elapsedRealtime();
+    logger.debug("Location change: {}", location.toString());
+    showDebugToast("acy:" + location.getAccuracy() + ",v:" + location.getSpeed());
+    handleLocation(location);
+}
+```
+
+In `onStart()`, after `locationManager.requestLocationUpdates(...)`:
+```java
+_lastRealLocationTime = SystemClock.elapsedRealtime();
+_keepaliveHandler = new Handler(Looper.getMainLooper());
+_keepaliveTick = new Runnable() {
+    @Override public void run() {
+        if (!isStarted) return;
+        long elapsed = SystemClock.elapsedRealtime() - _lastRealLocationTime;
+        if (elapsed >= KEEPALIVE_INTERVAL_MS) {
+            Location cached = locationManager.getLastKnownLocation(provider);
+            if (cached != null) {
+                logger.debug("Keepalive: {}ms since last real update — delivering cached position", elapsed);
+                handleLocation(cached);
+            }
+        }
+        _keepaliveHandler.postDelayed(this, KEEPALIVE_INTERVAL_MS);
+    }
+};
+_keepaliveHandler.postDelayed(_keepaliveTick, KEEPALIVE_INTERVAL_MS);
+```
+
+In `onStop()`:
+```java
+if (_keepaliveHandler != null) {
+    _keepaliveHandler.removeCallbacks(_keepaliveTick);
+    _keepaliveHandler = null;
+}
+```
+
+Note: `provider` must be promoted to an instance field (currently a local in `onStart()`) so the Runnable can reference it. The `handleLocation()` call goes through the existing pipeline — same filtering and delegate path as a real callback.
+
+Regression risk: **LOW**. Additive. Same pattern as iOS Fix 1b — `_lastRealLocationTime` is only reset by genuine hardware callbacks, so the keepalive does not feed itself. FusedLocationProvider (Fix 4) addresses the delivery reliability at a deeper level; this fix is complementary and useful even without Fix 4.
+
+**Fix 1e — Android: direct AlarmManager JS wakeup (replacing broken notification chain)** [MEDIUM IMPACT, MEDIUM EFFORT]
+
+The `silent: true` local notification chain was intended to deliver a periodic JS wakeup via the `trigger` event every 59s. It never does (see P0.3 Bug 1 — `silent: true` makes `getBuilder()` return null, `show()` exits early, `fireEvent("trigger")` is never reached). A direct `AlarmManager.setExactAndAllowWhileIdle` call without the notification UI layer achieves the original intent: fire every 60s, wake the Cordova WebView via `evaluateJavascript`, reschedule.
+
+Can be added to the background geolocation plugin fork as a companion `LocationWakeReceiver` (one new Java file + additions to `LocationServiceImpl`). The Handler keepalive (Fix 1b Android) already covers the case where the WebView is alive inside the foreground service process. This AlarmManager supplement covers the edge case where the WebView is suspended despite the foreground service running — the equivalent of iOS Fix 1b's NSTimer waking the Cordova bridge.
+
+Key difference from the broken notification chain: no notification is created, no `silent` flag, no dependency on `LocalNotification.isAppRunning()`. The receiver directly calls `webView.evaluateJavascript("if(typeof resumeAudioContext!=='undefined') resumeAudioContext('alarm_wakeup');", null)` via a `WeakReference<WebView>` stored when the service starts — the same weak-reference pattern used by `LocalNotification.java`.
+
+Regression risk: **LOW**. Additive. Guarded by a null check on the WebView reference. The foreground service Handler (Fix 1b) remains primary; this is supplementary.
+
+**Fix 1c — iOS + Android: motion state awareness in `RAW_PROVIDER`** [HIGH IMPACT, MEDIUM EFFORT]
+
+The plugin already contains `SOMotionDetector` (a `CMMotionActivityManager` wrapper) and `MAURActivityLocationProvider` already uses it and emits `activity` events to JS via `onActivityChanged:`. The infrastructure is complete. The problem with `ACTIVITY_PROVIDER` is that it **stops GPS when the device is stationary** (`[self stopTracking]` in `onLocationsChanged:` when `lastMotionType == MotionTypeNotMoving`) — catastrophic for 5-minute static listening spots. The correct approach is motion state awareness in `RAW_PROVIDER` without any stop/start behaviour.
+
+Why this matters: currently "GPS updates are slow" and "user has a GPS problem" are conflated. The 30s lost-timeout fires on both. Motion state resolves the ambiguity — if the device is stationary, a GPS update gap is expected and the alarm should be suppressed; if the device is walking, a gap is a real signal loss worth alarming.
+
+**Native side** — `MAURRawLocationProvider.m` (~60 lines):
+
+Add to ivar block:
+```objc
+CMMotionActivityManager *_motionActivityManager;
+BOOL _deviceIsStationary;
+```
+
+In `onStart:`, after `[locationManager start:]` — `CoreMotion.framework` is already linked:
+```objc
+if ([CMMotionActivityManager isActivityAvailable]) {
+    _motionActivityManager = [[CMMotionActivityManager alloc] init];
+    [_motionActivityManager startActivityUpdatesToQueue:[NSOperationQueue mainQueue]
+                                           withHandler:^(CMMotionActivity *activity) {
+        _deviceIsStationary = activity.stationary;
+        MAURActivity *act = [[MAURActivity alloc] init];
+        act.type = activity.stationary ? @"STILL" : activity.walking ? @"WALKING" : @"UNKNOWN";
+        act.confidence = @(activity.confidence);
+        [self.delegate onActivityChanged:act];  // reuses existing bridge pipeline
+    }];
+}
+```
+
+In `_keepaliveTick:`, add motion context to the log:
+```objc
+DDLogDebug(@"%@ keepalive: %.0fs gap, device %@", TAG,
+           elapsed, _deviceIsStationary ? @"stationary (expected)" : @"moving (GPS signal loss)");
+```
+
+In `onStop:` / `onDestroy:`:
+```objc
+[_motionActivityManager stopActivityUpdates];
+_motionActivityManager = nil;
+```
+
+**JS side** — `geoloc.js` (~10 lines, in `prepareBackgroundGeoloc` alongside other `on()` registrations):
+```js
+BackgroundGeolocation.on('activity', function(activity) {
+    GEO.motionIsStationary = (activity.type === 'STILL');
+    if (typeof TELEMETRY !== 'undefined')
+        TELEMETRY.log('motion_activity', {type: activity.type, confidence: activity.confidence});
+});
+```
+
+**pages.js** — one extra guard in the GPS-lost handler:
+```js
+if (state == 'lost') {
+    if (GEO.motionIsStationary) return; // device hasn't moved — gap is expected, keepalive handles it
+    // ... existing alarm logic (vibrate, overlay, audio)
+}
+```
+
+**Android**: `ActivityRecognition` from Google Play Services is already a dependency. The same pattern applies to `RawLocationProvider.java` — start an `ActivityRecognitionClient`, track `deviceIsStationary`, emit the existing `activity` event via the provider delegate. Skip `ACTIVITY_PROVIDER` entirely for the same reason as iOS.
+
+What this buys:
+
+| Scenario | Without motion | With motion |
+|---|---|---|
+| Static 5-min spot, GPS slows | Alarm at 30s | Suppressed — stationary confirmed |
+| Dense building, user walking | Alarm at 30s | Alarm at 30s — correctly urgent |
+| Telemetry | GPS state only | GPS + motion correlated |
+
+What this does NOT give: position data, dead reckoning, or step advancement without GPS. Motion state only.
+
+Regression risk: **LOW**. The `activity` event is already wired end-to-end (used by ACTIVITY_PROVIDER). Adding it to RAW_PROVIDER is purely additive. The GPS-lost handler guard only suppresses the alarm when stationary — existing recovery and manual-resume paths are unchanged.
+
+**Fix 1d — iOS: `WKWebView.allowsBackgroundTimeExtension` (iOS 17+)** [HIGH IMPACT, LOW EFFORT]
+
+iOS 17 added this public property on `WKWebView`. Setting it `YES` tells iOS not to suspend the JS context while the app is backgrounded — directly removing the root cause that Fix 1b works around. Instead of compensating for JS suspension after the fact, the suspension is prevented.
+
+Implementation — a single `pluginInitialize` method, added to the background geolocation plugin fork (no new file needed, can live alongside the RAW_PROVIDER changes):
+```objc
+- (void) pluginInitialize
+{
+    if (@available(iOS 17.0, *)) {
+        WKWebView *wv = (WKWebView *)self.webViewEngine.engineWebView;
+        wv.allowsBackgroundTimeExtension = YES;
+    }
+}
+```
+
+`UIBackgroundModes: location` is already declared — no additional entitlement needed. Fix 1b (NSTimer keepalive) remains as fallback for pre-iOS 17 devices (~30% of active iPhones at time of writing). On iOS 17+ the WKWebView stays awake and Fix 1b's cached positions flow through without delivery gaps; on older iOS the NSTimer compensates as before.
+
+Regression risk: **NONE**. Additive. Pre-iOS 17 devices are unaffected by the `@available` guard.
+
+**Fix 2 — iOS: significant location changes as parallel keepalive** [MEDIUM IMPACT, LOW EFFORT]
+
+`MAURRawLocationProvider.onStart` (line 59) explicitly calls `stopMonitoringSignificantLocationChanges` before starting `startUpdatingLocation`. Remove that call.
+
+Effect: significant changes (city-block accuracy, fires on ~500m movement or cell change) run alongside `startUpdatingLocation`. During static 5-minute listening spots, they keep CoreLocation's subsystem active and deliver coarse wakeup events. These events flow through `_callbackPosition` and are rejected by the 30m accuracy gate — they do not affect step triggering but do update `lastTimeUpdate`, as a second layer alongside Fix 1b. The `onStop` path already calls `stopMonitoringSignificantLocationChanges` (line 74), so cleanup on walk end is correct.
+
+Regression risk: **LOW**. Additive. Coarse events are already filtered at the JS accuracy gate.
+
+**Fix 3 — Android: evaluate `DistanceFilterLocationProvider`** [MEDIUM IMPACT, MEDIUM EFFORT]
+
+`DistanceFilterLocationProvider` adapts its update rate: when the device is stationary it calls `requestLocationUpdates(provider, 0, 0, this)` — interval 0, distance 0, maximally frequent. `RAW_PROVIDER` uses the configured interval (1000ms) unconditionally. For the static listening spots, the adaptive rate may deliver more consistent updates. Neither provider uses `FusedLocationProvider`.
+
+Plan:
+- Make `locationProvider` platform-conditional in `geoloc.js`: `ACTIVITY_PROVIDER` or `DISTANCE_FILTER_PROVIDER` on Android, `RAW_PROVIDER` on iOS.
+- Test with locked-screen Android walks with and without static pauses.
+- Revert to `RAW_PROVIDER` if Android behavior degrades.
+
+Regression risk: **MEDIUM**. Changes Android GPS update delivery pattern. Requires field test.
+
+**Fix 4 — Android: FusedLocationProvider** [HIGH IMPACT, HIGH EFFORT — longer shot]
+
+Neither existing Android provider uses `com.google.android.gms.location.FusedLocationProviderClient`. Fused combines GPS + WiFi + network location, handles Android Doze mode more gracefully, and adapts to background power restrictions in ways the raw `LocationManager` cannot. In dense building areas where raw GPS drops out, Fused falls back to WiFi/network positioning — lower accuracy but still enough to keep `lastTimeUpdate` alive and avoid false GPS-lost.
+
+Implementation requires a new `FusedLocationProvider` Java class in the plugin alongside the existing providers. The JS side would select it via `locationProvider: BackgroundGeolocation.FUSED_PROVIDER`. This is a significant native addition but the plugin architecture already supports multiple providers.
+
+Regression risk: **HIGH** for the implementation itself. No regression to existing providers if added as an opt-in.
+
+Files to modify (after fork):
+- `plugins/cordova-background-geolocation-plugin/ios/common/BackgroundGeolocation/MAURRawLocationProvider.m` — Fix 1, Fix 1b, Fix 2 (all in one file)
+- `plugins/cordova-background-geolocation-plugin/android/common/src/main/java/com/marianhello/bgloc/provider/` — Fix 3 evaluation, Fix 4 new class
+- `www/app/assets/geoloc.js` — Fix 3 platform-conditional provider selection
+
+Acceptance:
+- iOS: standing still for 5 minutes mid-walk does not trigger GPS-lost audio or overlay.
+- Android: GPS updates continue at consistent rate during static listening spots with screen locked.
+- No regression on moving segments.
+
+---
+
+**Alternative: transistorsoft/cordova-background-geolocation-lt** [EVALUATED 2026-05-05]
+
+Evaluated as a potential drop-in replacement. Key findings:
+
+Architecture: closed-source commercial binary (`TSLocationManager.xcframework` on iOS, prebuilt `.aar`/`.jar` on Android). The Cordova bridge is a thin wrapper — the tracking logic cannot be inspected or modified.
+
+What it does better than the current plugin:
+- **Android**: almost certainly uses `FusedLocationProvider` (declared `GOOGLE_API_VERSION` dependency, config options `locationUpdateInterval`/`fastestLocationUpdateInterval`/`deferTime` match the Fused API exactly). This is Fix 4 delivered out of the box.
+- **iOS `showsBackgroundLocationIndicator`**: first-class config option — Fix 1 without any native modification.
+- **iOS `preventSuspend`**: native-level heartbeat that prevents iOS from suspending the app during stationary periods. Equivalent to Fix 1b (native NSTimer keepalive) — both avoid the JS context dependency, but transistorsoft's implementation is black-box.
+- **Motion detection**: uses CMMotionActivity (accelerometer + gyroscope) to distinguish stationary from moving. The current plugin has no motion detection — it relies solely on time and distance thresholds.
+- **Maintenance**: actively maintained commercial product, tracks iOS and Android platform releases.
+
+Critical trap for this use case:
+- Default behavior turns location services **off** when the device is stationary (`stopTimeout: 5 min`). For the 5-minute static listening spots this would silently kill GPS mid-step. Must be overridden with `disableStopDetection: true, isMoving: true` — it is configurable but the wrong default is a field risk.
+
+Licensing: free in DEBUG builds, **paid production license** required (price not published; typically $100–400/year per app for commercial use). Recurring vendor dependency with no exit path.
+
+Migration cost: non-trivial but achievable. API surface is similar; `locationProvider`, `stationary` event, and restart-churn patterns would need remapping.
+
+**Verdict**: transistorsoft is meaningfully better engineered, particularly on Android where FusedLocationProvider is the correct API and the current plugin bypasses it entirely. On iOS the gap is now small — Fix 1 (`showsBackgroundLocationIndicator`) + Fix 1b (native NSTimer keepalive) + Fix 2 (significant changes) in the fork directly match what transistorsoft's `showsBackgroundLocationIndicator` config and `preventSuspend` provide, and the implementation is inspectable rather than a black box.
+
+Recommended decision path:
+1. Fork the current plugin and apply Fix 1 + Fix 1b + Fix 2 (all in `MAURRawLocationProvider.m`, low effort, free). The JS proactive heartbeat (P0.1) remains as a safety net but is no longer the primary mechanism.
+2. Run a full locked-screen field test on both platforms.
+3. If **Android** GPS reliability remains a field problem after that, re-evaluate transistorsoft — the FusedLocationProvider difference is real and Fix 4 is substantial work in the fork. At that point the licensing cost is worth comparing against the engineering cost of implementing Fix 4 ourselves.
 
 ### P1: Correctness and stability
 
@@ -767,13 +1133,28 @@ Files changed:
 - `FlanerieCordova/plugins/com.maigre.cordova.plugins.audiofocus/` (synced)
 - `FlanerieCordova/package.json` (duplicate plugin entry removed)
 
+#### C1b Android: `FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK` in audiofocus plugin fork 🆕 [LOW EFFORT]
+
+Currently `LocationServiceImpl` declares `foregroundServiceType="location"` only. On stock Android this is sufficient. On OEM ROMs (Xiaomi MIUI, Samsung One UI, OnePlus OxygenOS) aggressive battery savers apply extra restrictions to location-only services while granting additional protection to media services.
+
+Adding a minimal foreground service of type `mediaPlayback` to the audiofocus plugin fork creates an independent audio-keepalive service on Android that is not subject to location service throttling. The audiofocus plugin is the correct home for this: it already owns the `AVAudioSession` lifecycle on iOS and the `AudioFocusRequest` lifecycle on Android. Extending it with a `mediaPlayback` service type:
+- Signals to OEM battery savers that audio is active and should be protected
+- Is independent of the GPS service — audio survives even if the location service is briefly throttled
+- Pairs naturally with the existing `requestFocus` / `cancelFocus` lifecycle
+
+Changes required in the audiofocus plugin fork:
+- `AudioFocus.java`: start a foreground service with `foregroundServiceType=mediaPlayback` in `requestFocus()`, stop it in `cancelFocus()`
+- `plugin.xml`: declare `android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK` (Android 14+) and the new service entry
+
+Regression risk: **LOW**. The service is started and stopped paired with existing audio focus requests. No change to audio session logic or the JS API.
+
 #### C2 Upgrade candidates ✅ CONFIGURED (2026-05-05) [TEST-FIRST — rebuild pending]
 
 Configuration applied 2026-05-05. `package.json` and `config.xml` updated. Rebuild must be run on Mac.
 
 | Dependency | Was | Now | Status | Relevant app impact |
 |---|---|---|---|---|
-| `cordova-background-geolocation-plugin` | `2.3.2` | `2.3.3` | ✅ configured | Android 14 startup/onCreate fixes, Android 13 notification flow, activity recognition improvements, iOS 18 settings |
+| `cordova-background-geolocation-plugin` | `2.3.2` | `2.4.0` | ✅ configured | iOS NSTimer keepalive, showsBackgroundLocationIndicator, significant-changes keepalive, WKWebView background extension (iOS 17+); Android Handler keepalive |
 | `cordova-plugin-local-notification` | `1.2.0` | `1.2.3` | ✅ configured | Notification permission and restore/reboot behavior; affects keepalive. `NotificationClickActivity` renamed → `ClickActivity` (trampoline fix). `ANDROIDX_CORE_VERSION` bumped to 1.13.0 |
 | `cordova-android` | `14.0.1` | `15.0.0` | ✅ configured | SDK 36, AGP 8.10.1, Kotlin 2.1.21, Gradle 8.14.2. minSdk 23→24 (drops Android 6). App version bumped v9→v10 |
 | `cordova-ios` | `7.1.1` | `8.0.1` | ✅ configured | Requires Xcode 15+ |
@@ -828,8 +1209,9 @@ Phase 1 — Core lifecycle (needs dedicated field testing)
 - P1.17 offlimit reentry resume ✅ DONE
 - P0.1b AudioContext resume on foreground ✅ DONE
 - P0.3 notification strategy: fix scheduling leak + permission flow — Partial ✅
-- P0.1 geolocation lifecycle and anti-sleep strategy (research + full field test)
-- P1.5c GPS lost timeout tuning (research, coupled with P0.1)
+- P0.1 geolocation lifecycle and anti-sleep strategy (research + full field test) ✅ DONE (geoloc.js internal fixes: document listener stacking, confirm() removed, heartbeat throttle, error dispatch, alive() null guard, immediate ok transition, proactive heartbeat, activityType OtherNavigation)
+- P1.5c GPS lost timeout tuning (research, coupled with P0.1) — 30s retained; proactive heartbeat at 60% threshold makes this viable
+- P0.5 background geolocation plugin fork ✅ Partial (2026-05-06): Fix 1 + Fix 1b + Fix 2 + Fix 1d applied, v2.4.0. Fix 3 (Android DistanceFilter) and Fix 4 (FusedLocation) deferred.
 
 Phase 2 — Stability cleanup (test with repeated staff starts)
 - P1.5 listener/timer cleanup (partial ✅ — P1.13 framework in place, CHECKGEO leak deferred)
@@ -858,6 +1240,7 @@ Later
 - Zone audio boundary thrashing (Known Dormant Bug) 🆕
 - PlayerSimple `_playRequested` stuck flag (Known Dormant Bug) 🆕
 - `allSteps` global leak (Known Dormant Bug) 🆕
+- Internet-assisted keepalive: FCM high-priority (Android) + APNs silent push `content-available:1` (iOS) sent every 30–60s from the server. Unconditionally wakes the app even when all local mechanisms fail. Not primary (walk runs offline after preload) but viable as a supplementary layer — visitors commonly retain a data connection during walks. Requires push server infrastructure, APNs/FCM credentials, and push entitlements. Revisit once the local keepalive stack is field-confirmed.
 
 ## Validation Matrix
 

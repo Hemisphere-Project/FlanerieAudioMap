@@ -175,7 +175,19 @@ class GeoLoc extends EventEmitter {
                 if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_state', {state: nextStep});
             }
 
-            // GPS heartbeat: when lost + background, try to actively get a position
+            // Proactive heartbeat: approaching timeout but not yet lost.
+            // On iOS, stationary periods suppress CLLocation delegate callbacks but
+            // CLLocationManager.location (cached) remains valid. Refreshing lastTimeUpdate
+            // from cache before the timeout fires prevents false GPS-lost declarations.
+            if (this.stateUpdate === 'ok' &&
+                this.lastTimeUpdate !== null &&
+                (Date.now() - this.lastTimeUpdate) > this.stateUpdateTimeout * 0.6 &&
+                this.runMode === 'gps' &&
+                typeof BackgroundGeolocation !== 'undefined') {
+                this._heartbeat();
+            }
+
+            // Reactive heartbeat: already lost — try to recover
             if (this.stateUpdate === 'lost' && this.runMode === 'gps' && typeof BackgroundGeolocation !== 'undefined') {
                 this._heartbeat();
             }
@@ -189,8 +201,8 @@ class GeoLoc extends EventEmitter {
     // to nudge the OS into resuming GPS and feed a position back into the pipeline
     _heartbeat() {
         if (this._heartbeatInProgress) return;
-        // Throttle: max one heartbeat every 5 seconds
-        if (Date.now() - this._lastHeartbeatTime < 5000) return;
+        // Throttle: must be larger than the getCurrentLocation timeout to avoid back-to-back requests
+        if (Date.now() - this._lastHeartbeatTime < 15000) return;
         this._heartbeatInProgress = true;
         this._lastHeartbeatTime = Date.now();
 
@@ -275,6 +287,12 @@ class GeoLoc extends EventEmitter {
         // next measure
         this.lastPosition = position;
         this.lastTimeUpdate = Date.now();
+        // Immediately reflect 'ok' without waiting for the next timer tick
+        if (this.stateUpdate !== 'ok') {
+            this.stateUpdate = 'ok';
+            this.emit('stateUpdate', 'ok');
+            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_state', {state: 'ok'});
+        }
         if (typeof TELEMETRY !== 'undefined') TELEMETRY.gps(position);
     }
 
@@ -383,6 +401,7 @@ class GeoLoc extends EventEmitter {
     }
 
     alive(timeout=5000) {
+        if (!this.lastTimeUpdate) return false;
         return (Date.now() - this.lastTimeUpdate) < timeout;
     }
 
@@ -560,7 +579,7 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
             interval: 1000,
             fastestInterval: 1000,
             activitiesInterval: 1000,
-            activityType: 'Fitness',
+            activityType: 'OtherNavigation',
         });
     }
 
@@ -629,13 +648,12 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
     BackgroundGeolocation.on('error', function(error) {
         console.log('[ERROR] BackgroundGeolocation error:', error.code, error.message);
         if (backgroundGeolocReject) {
-            // alert('Erreur du GPS: ' + error.message);
-
             backgroundGeolocReject(error);
             backgroundGeolocReject = null;
             backgroundGeolocResolve = null;
+        } else {
+            errorCallback(error);
         }
-        errorCallback(error);
     });
 
     BackgroundGeolocation.on('start', function() {
@@ -667,15 +685,8 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
 
         if (status !== BackgroundGeolocation.AUTHORIZED) {
             console.warn('[WARN] BackgroundGeolocation not fully authorized, status:', status);
-            // Prompt user to fix permissions — non-blocking
-            setTimeout(function() {
-                var msg = (status === BackgroundGeolocation.AUTHORIZED_FOREGROUND)
-                    ? 'La localisation en arrière-plan est désactivée. Pour que l\'application fonctionne correctement en poche, veuillez activer "Toujours" dans les réglages.'
-                    : 'La localisation est désactivée. Veuillez l\'activer dans les réglages pour continuer la promenade.';
-                if (confirm(msg + '\n\nOuvrir les réglages ?')) {
-                    BackgroundGeolocation.showAppSettings();
-                }
-            }, 500);
+            // Emit non-blocking event — the UI layer (pages.js) can respond without freezing GPS
+            if (typeof GEO !== 'undefined') GEO.emit('authorizationChanged', status);
         }
     });
 
@@ -698,20 +709,27 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
         document.dispatchEvent(new Event('resume'));
     });
 
-    document.addEventListener('pause', function() {
-        console.log('[INFO] App is paused');
-        APP_VISIBILITY = 'background';
-        // BackgroundGeolocation.switchMode(BackgroundGeolocation.BACKGROUND_MODE);
-    }, false);
+    BackgroundGeolocation.on('activity', function(activity) {
+        GEO.motionIsStationary = (activity.type === 'STILL');
+        if (typeof TELEMETRY !== 'undefined')
+            TELEMETRY.log('motion_activity', {type: activity.type, confidence: activity.confidence});
+    });
 
-    document.addEventListener('resume', function() {
-        console.log('[INFO] App is resumed');
-        APP_VISIBILITY = 'foreground';
-        resumeAudioContext('resume');
-        if (typeof requestAudioFocus === 'function') {
-            requestAudioFocus().catch(function(e) { console.warn('[AudioFocus] re-request on resume failed:', e); });
-        }
-    }, false);
+    if (!backgroundGeolocSetup) {
+        document.addEventListener('pause', function() {
+            console.log('[INFO] App is paused');
+            APP_VISIBILITY = 'background';
+        }, false);
+
+        document.addEventListener('resume', function() {
+            console.log('[INFO] App is resumed');
+            APP_VISIBILITY = 'foreground';
+            resumeAudioContext('resume');
+            if (typeof requestAudioFocus === 'function') {
+                requestAudioFocus().catch(function(e) { console.warn('[AudioFocus] re-request on resume failed:', e); });
+            }
+        }, false);
+    }
 
     backgroundGeolocSetup = true;
     return true;
