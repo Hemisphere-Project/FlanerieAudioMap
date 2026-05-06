@@ -1,7 +1,7 @@
 // ============================================================
-// DIAGNOSTIC TEST PARCOURS
-// A sequential test runner for diagnosing GPS + Audio issues
-// DEV mode only — no parcours JSON needed
+// DIAGNOSTIC TEST SUITE
+// Sequential test runner for GPS + Audio field diagnosis.
+// DEV mode only — no parcours JSON needed.
 // ============================================================
 
 class DiagnosticRunner extends EventEmitter {
@@ -11,9 +11,10 @@ class DiagnosticRunner extends EventEmitter {
         this.tests = []
         this.results = []
         this.currentIndex = -1
-        this._listeners = []     // tracked GEO listeners for cleanup
-        this._timers = []        // tracked timers for cleanup
-        this._players = []       // tracked Howl instances for cleanup
+        this._listeners = []        // GEO event listeners
+        this._docListeners = []     // document event listeners
+        this._timers = []           // setTimeout / setInterval ids
+        this._players = []          // Howl instances
         this._collecting = false
         this._metrics = {}
         this.platform = 'browser'
@@ -27,21 +28,35 @@ class DiagnosticRunner extends EventEmitter {
     _buildTests() {
         this.tests = [
 
+            // ====== PHASE 0: Init ======
+
+            {
+                id: 'T0', phase: 0,
+                name: 'Démarrage GPS',
+                instructions: 'Démarrage du plugin BackgroundGeolocation.\nSi une fenêtre d\'autorisation apparaît, acceptez la localisation.',
+                duration: 20000,
+                auto: true,
+                run: (ctx) => this._testGpsStart(ctx),
+                // Pass: GPS entered 'gps' runMode and got at least one raw callback
+                pass: (m) => m.gps_started && m.first_callback,
+            },
+
             // ====== PHASE 1: Static checks ======
 
             {
                 id: 'T1', phase: 1,
                 name: 'Acquisition GPS',
-                instructions: 'Restez immobile à l\'extérieur.\nLe test vérifie l\'obtention d\'un signal GPS.',
+                instructions: 'Restez immobile à l\'extérieur.\nLe test vérifie l\'obtention d\'un signal GPS précis (≤30m).',
                 duration: 30000,
                 auto: true,
                 run: (ctx) => this._testGpsAcquire(ctx),
-                pass: (m) => m.fix_obtained && m.accuracy_min < 50,
+                // position event only fires when accuracy ≤ 30m (geoloc.js accuracy gate)
+                pass: (m) => m.fix_obtained,
             },
             {
                 id: 'T2', phase: 1,
                 name: 'Précision GPS',
-                instructions: 'Restez immobile.\nLe test vérifie que la précision s\'améliore.',
+                instructions: 'Restez immobile.\nLe test vérifie que la précision atteint < 20m.',
                 duration: 30000,
                 auto: true,
                 run: (ctx) => this._testGpsWarmup(ctx),
@@ -62,7 +77,7 @@ class DiagnosticRunner extends EventEmitter {
                 name: 'Audio en veille',
                 instructions: 'Un son va jouer.\nVerrouillez votre téléphone.\nAttendez 15 secondes, puis déverrouillez.',
                 duration: 25000,
-                auto: false,  // user presses next
+                auto: false,
                 run: (ctx) => this._testAudioLock(ctx),
                 pass: (m) => m.play_ok && !m.had_error,
                 userQuestion: 'Le son jouait-il toujours quand vous avez déverrouillé ?',
@@ -73,7 +88,7 @@ class DiagnosticRunner extends EventEmitter {
             {
                 id: 'T5', phase: 2,
                 name: 'Suivi GPS en marchant',
-                instructions: 'Marchez environ 15 mètres dans une direction.\nLe test compte les positions GPS reçues.',
+                instructions: 'Marchez environ 15 mètres dans une direction.\nLe test compte les positions GPS reçues (≤30m).',
                 duration: 30000,
                 auto: true,
                 run: (ctx) => this._testGpsTracking(ctx),
@@ -82,7 +97,7 @@ class DiagnosticRunner extends EventEmitter {
             {
                 id: 'T6', phase: 2,
                 name: 'Déclenchement audio par GPS',
-                instructions: 'Marchez lentement dans n\'importe quelle direction (~10m).\nUn son doit se déclencher automatiquement quand vous atteignez la zone.',
+                instructions: 'Marchez lentement dans n\'importe quelle direction (~15m).\nUn son doit se déclencher automatiquement quand vous atteignez la zone.',
                 duration: 60000,
                 auto: false,
                 run: (ctx) => this._testGpsTrigger(ctx),
@@ -99,12 +114,12 @@ class DiagnosticRunner extends EventEmitter {
                 pass: (m) => m.bg_positions >= 3,
             },
 
-            // ====== PHASE 3: Stress ======
+            // ====== PHASE 3: Keepalive stress ======
 
             {
                 id: 'T8', phase: 3,
                 name: 'GPS immobile (90s)',
-                instructions: 'Restez complètement immobile pendant 90 secondes.\nLe test vérifie que le GPS ne se déconnecte pas.',
+                instructions: 'Restez complètement immobile pendant 90 secondes.\nLe test vérifie que le GPS et le keepalive natif fonctionnent.',
                 duration: 95000,
                 auto: true,
                 run: (ctx) => this._testStationaryKeepAlive(ctx),
@@ -128,7 +143,8 @@ class DiagnosticRunner extends EventEmitter {
                 duration: 135000,
                 auto: false,
                 run: (ctx) => this._testLongLockSurvival(ctx),
-                pass: (m) => m.ctx_alive && m.heartbeat_count > 0,
+                // GPS must stay alive in background + AudioContext must resume on unlock
+                pass: (m) => m.ctx_alive && m.bg_positions > 0,
                 userQuestion: 'L\'application semblait-elle toujours active quand vous avez déverrouillé ?',
             },
 
@@ -184,13 +200,11 @@ class DiagnosticRunner extends EventEmitter {
             device: this.device
         }
         this.emit('test', test, this.currentIndex)
-        // Run test logic (unless report)
         if (test.id !== 'T11') {
             test.run({ metrics: this._metrics, test: test })
         }
     }
 
-    // Called when auto test completes or user presses Next
     finishCurrent(userAnswer) {
         let test = this.tests[this.currentIndex]
         let result = this.results[this.currentIndex]
@@ -200,9 +214,8 @@ class DiagnosticRunner extends EventEmitter {
         result.metrics = { ...this._metrics }
         result.user_answer = userAnswer !== undefined ? userAnswer : null
 
-        // Determine pass/fail
         let autoPassed = test.pass(result.metrics)
-        if (userAnswer === false) autoPassed = false   // user override
+        if (userAnswer === false) autoPassed = false
         result.result = autoPassed ? 'pass' : 'fail'
 
         this.emit('result', result, this.currentIndex)
@@ -240,6 +253,11 @@ class DiagnosticRunner extends EventEmitter {
         this._listeners.push({ event, fn })
     }
 
+    _trackDocListener(event, fn) {
+        document.addEventListener(event, fn)
+        this._docListeners.push({ event, fn })
+    }
+
     _trackTimer(fn, ms) {
         let id = setTimeout(fn, ms)
         this._timers.push(id)
@@ -260,6 +278,8 @@ class DiagnosticRunner extends EventEmitter {
     _cleanup() {
         this._listeners.forEach(l => { try { GEO.off(l.event, l.fn) } catch(e) {} })
         this._listeners = []
+        this._docListeners.forEach(l => { try { document.removeEventListener(l.event, l.fn) } catch(e) {} })
+        this._docListeners = []
         this._timers.forEach(id => { clearTimeout(id); clearInterval(id) })
         this._timers = []
         this._players.forEach(p => { try { p.stop(); p.unload() } catch(e) {} })
@@ -269,7 +289,7 @@ class DiagnosticRunner extends EventEmitter {
 
     // ---- Utility ----
 
-    _html5() { 
+    _html5() {
         try { return cordova.platformId === 'ios' } catch(e) { return false }
     }
 
@@ -284,52 +304,106 @@ class DiagnosticRunner extends EventEmitter {
         return this._trackPlayer(h)
     }
 
+    _requestAudioFocus() {
+        if (typeof requestAudioFocus === 'function') {
+            requestAudioFocus().catch(e => console.warn('[DIAG] audio focus request failed:', e))
+        }
+    }
+
+    _ctxState() {
+        return Howler.ctx ? Howler.ctx.state : 'unavailable'
+    }
+
     // ---- Test implementations ----
 
-    // T1: GPS acquisition — measure time to first fix + accuracy
+    // T0: GPS startup — start the plugin if not already running, verify first callback
+    // Critical: the diagnostic is reached from select without going through startgeo,
+    // so GEO.runMode is 'off'. This test ensures GPS is running before T1–T10.
+    _testGpsStart(ctx) {
+        let m = ctx.metrics
+        m.gps_started = false
+        m.first_callback = false
+        m.plugin_available = typeof BackgroundGeolocation !== 'undefined'
+        m.run_mode = GEO.runMode
+
+        // Watch for first raw position callback (updates lastTimeUpdate even for filtered fixes)
+        let lastKnown = GEO.lastTimeUpdate
+        let watchInterval = this._trackInterval(() => {
+            if (GEO.lastTimeUpdate && GEO.lastTimeUpdate !== lastKnown) {
+                m.first_callback = true
+                m.accuracy_on_start = GEO.lastPosition ? Math.round(GEO.lastPosition.coords.accuracy) : null
+                this.emit('metrics', m)
+            }
+        }, 500)
+
+        if (GEO.runMode === 'gps') {
+            m.gps_started = true
+            m.run_mode = 'gps'
+            // GPS already running — check if we're receiving callbacks
+            this.emit('metrics', m)
+            this._trackTimer(() => this.emit('autoFinish'), ctx.test.duration)
+            return
+        }
+
+        GEO.startGeoloc().then(() => {
+            m.gps_started = true
+            m.run_mode = GEO.runMode
+            this.emit('metrics', m)
+            this._trackTimer(() => this.emit('autoFinish'), ctx.test.duration)
+        }).catch((err) => {
+            m.gps_started = false
+            m.error = String(err)
+            this.emit('metrics', m)
+            this._trackTimer(() => this.emit('autoFinish'), 1000)
+        })
+    }
+
+    // T1: GPS acquisition — verify a position passes the ≤30m accuracy gate
+    // Note: GEO.on('position') only fires when accuracy ≤ 30m (_callbackPosition gate).
+    // If fix_obtained stays false but raw_callbacks > 0, the plugin is working but accuracy is poor.
     _testGpsAcquire(ctx) {
         let m = ctx.metrics
         m.fix_obtained = false
         m.accuracy_min = 999
-        m.accuracy_max = 0
         m.accuracy_samples = []
         m.first_fix_ms = null
         m.positions = 0
+        m.raw_callbacks = 0
         let startTime = Date.now()
+        let lastKnown = GEO.lastTimeUpdate
+
+        // Count raw callbacks via lastTimeUpdate polling (catches positions filtered by accuracy gate)
+        this._trackInterval(() => {
+            if (GEO.lastTimeUpdate && GEO.lastTimeUpdate !== lastKnown) {
+                m.raw_callbacks++
+                lastKnown = GEO.lastTimeUpdate
+                if (GEO.lastPosition) {
+                    let rawAcc = GEO.lastPosition.coords.accuracy
+                    m.raw_accuracy = Math.round(rawAcc)
+                }
+                this.emit('metrics', m)
+            }
+        }, 500)
 
         let onPos = (pos) => {
             m.positions++
-            let acc = pos.accuracy || 999
+            let acc = pos.coords ? pos.coords.accuracy : (pos.accuracy || 999)
             if (!m.fix_obtained) {
                 m.fix_obtained = true
                 m.first_fix_ms = Date.now() - startTime
             }
             if (acc < m.accuracy_min) m.accuracy_min = acc
-            if (acc > m.accuracy_max) m.accuracy_max = acc
-            m.accuracy_samples.push(acc)
+            m.accuracy_samples.push(Math.round(acc))
             this.emit('metrics', m)
         }
         this._trackListener('position', onPos)
-
-        // Also try raw position if background plugin provides it
-        let onRaw = (pos) => {
-            if (!m.fix_obtained && pos && pos.latitude) {
-                m.fix_obtained = true
-                m.first_fix_ms = Date.now() - startTime
-                let acc = pos.accuracy || 999
-                if (acc < m.accuracy_min) m.accuracy_min = acc
-                m.positions++
-                this.emit('metrics', m)
-            }
-        }
-        this._trackListener('rawPosition', onRaw)
 
         this._trackTimer(() => {
             this.emit('autoFinish')
         }, ctx.test.duration)
     }
 
-    // T2: GPS warm-up — watch accuracy improve
+    // T2: GPS precision warm-up
     _testGpsWarmup(ctx) {
         let m = ctx.metrics
         m.accuracy_min = 999
@@ -339,10 +413,10 @@ class DiagnosticRunner extends EventEmitter {
 
         let onPos = (pos) => {
             m.positions++
-            let acc = pos.accuracy || 999
+            let acc = pos.coords ? pos.coords.accuracy : (pos.accuracy || 999)
             if (acc < m.accuracy_min) m.accuracy_min = acc
             if (acc > m.accuracy_max) m.accuracy_max = acc
-            m.accuracy_samples.push(acc)
+            m.accuracy_samples.push(Math.round(acc))
             this.emit('metrics', m)
         }
         this._trackListener('position', onPos)
@@ -352,17 +426,19 @@ class DiagnosticRunner extends EventEmitter {
         }, ctx.test.duration)
     }
 
-    // T3: Audio playback
+    // T3: Audio playback — check AudioContext state and audio focus
     _testAudioPlay(ctx) {
         let m = ctx.metrics
         m.play_ok = false
         m.had_error = false
-        m.ctx_state = Howler.ctx ? Howler.ctx.state : 'unavailable'
+        m.ctx_state = this._ctxState()
+
+        this._requestAudioFocus()
 
         let player = this._makeTestHowl('test.mp3', false)
         player.on('play', () => {
             m.play_ok = true
-            m.ctx_state = Howler.ctx ? Howler.ctx.state : 'unavailable'
+            m.ctx_state = this._ctxState()
             this.emit('metrics', m)
         })
         player.on('loaderror', (id, err) => { m.had_error = true; m.error = String(err); this.emit('metrics', m) })
@@ -374,12 +450,16 @@ class DiagnosticRunner extends EventEmitter {
         }, ctx.test.duration)
     }
 
-    // T4: Audio under lock
+    // T4: Audio under screen lock
+    // Tests that audio survives the screen lock and that AudioContext is not suspended on unlock.
     _testAudioLock(ctx) {
         let m = ctx.metrics
         m.play_ok = false
         m.had_error = false
-        m.was_playing_on_unlock = null
+        m.ctx_state_on_unlock = null
+        m.ctx_resumed = null
+
+        this._requestAudioFocus()
 
         let player = this._makeTestHowl('test.mp3', true)
         player.on('play', () => { m.play_ok = true; this.emit('metrics', m) })
@@ -387,18 +467,20 @@ class DiagnosticRunner extends EventEmitter {
         player.on('playerror', (id, err) => { m.had_error = true; this.emit('metrics', m) })
         player.play()
 
-        // On resume (unlock), check if still playing
         let onResume = () => {
+            m.ctx_state_on_unlock = this._ctxState()
             m.was_playing_on_unlock = player.playing()
-            m.ctx_state = Howler.ctx ? Howler.ctx.state : 'unavailable'
+            // resumeAudioContext is defined in geoloc.js — test that the fix from P0.1b works
+            if (typeof resumeAudioContext === 'function') {
+                resumeAudioContext('diag_t4')
+                this._trackTimer(() => {
+                    m.ctx_resumed = this._ctxState()
+                    this.emit('metrics', m)
+                }, 500)
+            }
             this.emit('metrics', m)
-            document.removeEventListener('resume', onResume)
         }
-        document.addEventListener('resume', onResume)
-        // cleanup handler tracked manually
-        this._timers.push(setTimeout(() => {
-            document.removeEventListener('resume', onResume)
-        }, 60000))
+        this._trackDocListener('resume', onResume)
     }
 
     // T5: GPS tracking while walking
@@ -417,11 +499,13 @@ class DiagnosticRunner extends EventEmitter {
                 let gap = now - m.last_time
                 if (gap > m.max_gap_ms) m.max_gap_ms = gap
             }
-            if (m.last_pos && pos.latitude && pos.longitude) {
-                m.total_distance += geo_distance([pos.latitude, pos.longitude], [m.last_pos.latitude, m.last_pos.longitude])
+            let lat = pos.coords ? pos.coords.latitude : pos.latitude
+            let lon = pos.coords ? pos.coords.longitude : pos.longitude
+            if (m.last_pos && lat && lon) {
+                m.total_distance += geo_distance([lat, lon], [m.last_pos.lat, m.last_pos.lon])
             }
             m.last_time = now
-            m.last_pos = { latitude: pos.latitude, longitude: pos.longitude }
+            m.last_pos = { lat, lon }
             this.emit('metrics', m)
         }
         this._trackListener('position', onPos)
@@ -431,44 +515,52 @@ class DiagnosticRunner extends EventEmitter {
         }, ctx.test.duration)
     }
 
-    // T6: GPS-triggered audio — create a virtual zone at ~10m from current position
+    // T6: GPS-triggered audio — place a virtual zone 15m north, walk into it
+    // Zone placed at 15m (not 10m) to avoid triggering within the typical fix accuracy radius.
+    // Zone creation waits for accuracy < 15m to ensure zone center is meaningful.
     _testGpsTrigger(ctx) {
         let m = ctx.metrics
         m.triggered = false
         m.zone_created = false
         m.positions_since_zone = 0
+        m.waiting_for_accuracy = true
 
         let player = this._makeTestHowl('background-ok.mp3', false)
-
-        // Wait for a fix, then create a zone 10m in a random direction
         let zoneLat = null, zoneLon = null
-        let got_first = false
 
         let onPos = (pos) => {
-            if (!got_first && pos.latitude && pos.longitude) {
-                got_first = true
-                // Place zone 10m north
-                zoneLat = pos.latitude + (10 / 111320)
-                zoneLon = pos.longitude
-                m.zone_created = true
-                this.emit('metrics', m)
-            }
-            if (m.zone_created) {
-                m.positions_since_zone++
-                let dist = geo_distance([pos.latitude, pos.longitude], [zoneLat, zoneLon])
-                m.distance_to_zone = Math.round(dist * 10) / 10
-                this.emit('metrics', m)
-                if (dist < 8 && !m.triggered) {
-                    m.triggered = true
-                    player.play()
+            let lat = pos.coords ? pos.coords.latitude : pos.latitude
+            let lon = pos.coords ? pos.coords.longitude : pos.longitude
+            let acc = pos.coords ? pos.coords.accuracy : (pos.accuracy || 999)
+
+            if (!m.zone_created) {
+                if (acc < 15) {
+                    // Accuracy good enough to place a meaningful zone
+                    m.waiting_for_accuracy = false
+                    zoneLat = lat + (15 / 111320)   // 15m north
+                    zoneLon = lon
+                    m.zone_created = true
                     this.emit('metrics', m)
                 }
+                return
+            }
+
+            m.positions_since_zone++
+            let dist = geo_distance([lat, lon], [zoneLat, zoneLon])
+            m.distance_to_zone = Math.round(dist * 10) / 10
+            this.emit('metrics', m)
+
+            if (dist < 8 && !m.triggered) {
+                m.triggered = true
+                this._requestAudioFocus()
+                player.play()
+                this.emit('metrics', m)
             }
         }
         this._trackListener('position', onPos)
     }
 
-    // T7: Locked GPS tracking — count background positions
+    // T7: GPS tracking while phone is locked — count background positions
     _testLockedGpsTracking(ctx) {
         let m = ctx.metrics
         m.bg_positions = 0
@@ -477,8 +569,10 @@ class DiagnosticRunner extends EventEmitter {
         m.last_time = null
         m.is_background = false
 
-        document.addEventListener('pause', () => { m.is_background = true })
-        document.addEventListener('resume', () => { m.is_background = false })
+        let onPause = () => { m.is_background = true; this.emit('metrics', m) }
+        let onResume = () => { m.is_background = false; this.emit('metrics', m) }
+        this._trackDocListener('pause', onPause)
+        this._trackDocListener('resume', onResume)
 
         let onPos = (pos) => {
             let now = Date.now()
@@ -494,13 +588,18 @@ class DiagnosticRunner extends EventEmitter {
         this._trackListener('position', onPos)
     }
 
-    // T8: Stationary GPS keepalive — stand still for 90s, watch for GPS lost
+    // T8: Stationary GPS keepalive (90s)
+    // Key v2.4.0 check: GEO.motionIsStationary should become true (CMMotionActivity / ActivityRecognition).
+    // The motion guard in pages.js suppresses the GPS-lost UX overlay, but stateUpdate events still
+    // fire — so gps_lost_events counts real keepalive failures even when the guard is active.
     _testStationaryKeepAlive(ctx) {
         let m = ctx.metrics
         m.gps_lost_events = 0
         m.gps_recovered = 0
         m.positions = 0
         m.heartbeat_count = 0
+        m.motion_stationary_at = null  // timestamp when GEO.motionIsStationary first went true
+        m.motion_stationary = false
 
         let onPos = () => { m.positions++; this.emit('metrics', m) }
         this._trackListener('position', onPos)
@@ -512,12 +611,19 @@ class DiagnosticRunner extends EventEmitter {
         }
         this._trackListener('stateUpdate', onState)
 
-        // Count heartbeats via telemetry-like approach
-        let hbInterval = this._trackInterval(() => {
-            // Check if GEO is still receiving
-            if (GEO.lastTimeUpdate && (Date.now() - GEO.lastTimeUpdate) < 15000) {
+        // Poll GEO.lastTimeUpdate to confirm keepalive (NSTimer on iOS, Handler on Android, v2.4.0)
+        // Also track motion state (v2.4.0 CMMotionActivity / ActivityRecognition)
+        this._trackInterval(() => {
+            if (GEO.lastTimeUpdate && (Date.now() - GEO.lastTimeUpdate) < 20000) {
                 m.heartbeat_count++
             }
+            // Detect when device is correctly recognized as stationary
+            let isNowStationary = GEO.motionIsStationary === true
+            if (isNowStationary && !m.motion_stationary) {
+                m.motion_stationary = true
+                m.motion_stationary_at = Date.now()
+            }
+            m.motion_stationary = GEO.motionIsStationary === true
             this.emit('metrics', m)
         }, 10000)
 
@@ -526,66 +632,96 @@ class DiagnosticRunner extends EventEmitter {
         }, ctx.test.duration)
     }
 
-    // T9: Locked audio trigger — same as T6 but phone is locked
+    // T9: GPS-triggered audio with phone locked
     _testLockedAudioTrigger(ctx) {
         let m = ctx.metrics
         m.triggered = false
         m.zone_created = false
         m.bg_positions = 0
         m.is_background = false
+        m.waiting_for_accuracy = true
 
         let player = this._makeTestHowl('background-ok.mp3', false)
-
-        document.addEventListener('pause', () => { m.is_background = true })
-        document.addEventListener('resume', () => { m.is_background = false })
-
         let zoneLat = null, zoneLon = null
-        let got_first = false
+
+        let onPause = () => { m.is_background = true; this.emit('metrics', m) }
+        let onResume = () => { m.is_background = false; this.emit('metrics', m) }
+        this._trackDocListener('pause', onPause)
+        this._trackDocListener('resume', onResume)
 
         let onPos = (pos) => {
+            let lat = pos.coords ? pos.coords.latitude : pos.latitude
+            let lon = pos.coords ? pos.coords.longitude : pos.longitude
+            let acc = pos.coords ? pos.coords.accuracy : (pos.accuracy || 999)
+
             if (m.is_background) m.bg_positions++
-            if (!got_first && pos.latitude && pos.longitude) {
-                got_first = true
-                zoneLat = pos.latitude + (10 / 111320)
-                zoneLon = pos.longitude
-                m.zone_created = true
-                this.emit('metrics', m)
-            }
-            if (m.zone_created && pos.latitude && pos.longitude) {
-                let dist = geo_distance([pos.latitude, pos.longitude], [zoneLat, zoneLon])
-                m.distance_to_zone = Math.round(dist * 10) / 10
-                this.emit('metrics', m)
-                if (dist < 8 && !m.triggered) {
-                    m.triggered = true
-                    player.play()
+
+            if (!m.zone_created) {
+                if (acc < 15) {
+                    m.waiting_for_accuracy = false
+                    zoneLat = lat + (10 / 111320)
+                    zoneLon = lon
+                    m.zone_created = true
                     this.emit('metrics', m)
                 }
+                return
+            }
+
+            let dist = geo_distance([lat, lon], [zoneLat, zoneLon])
+            m.distance_to_zone = Math.round(dist * 10) / 10
+            this.emit('metrics', m)
+
+            if (dist < 8 && !m.triggered) {
+                m.triggered = true
+                this._requestAudioFocus()
+                player.play()
+                this.emit('metrics', m)
             }
         }
         this._trackListener('position', onPos)
     }
 
-    // T10: Long lock survival — 2 min locked, check everything alive
+    // T10: Long lock survival (2 min)
+    // Key checks:
+    // - GPS positions received while background (BackgroundGeolocation foreground service / UIBackgroundModes)
+    // - AudioContext state on resume (validates P0.1b resumeAudioContext('foreground') fix)
+    // Note: notification wakeup counter removed — the 59s chain is disabled (NOTIF_CHAIN_ENABLED=false).
+    // Background keepalive is now purely GPS-driven on both platforms.
     _testLongLockSurvival(ctx) {
         let m = ctx.metrics
         m.ctx_alive = false
+        m.ctx_state_on_unlock = null
         m.heartbeat_count = 0
-        m.notif_wakeups = 0
         m.gps_lost_events = 0
         m.positions = 0
         m.bg_positions = 0
         m.is_background = false
+        m.motion_stationary = false
+        m.gps_gap_max_ms = 0
+        m.last_pos_time = null
 
-        document.addEventListener('pause', () => { m.is_background = true })
-        document.addEventListener('resume', () => {
+        let onPause = () => { m.is_background = true; this.emit('metrics', m) }
+        let onResume = () => {
             m.is_background = false
-            m.ctx_alive = Howler.ctx ? Howler.ctx.state === 'running' : false
-            this.emit('metrics', m)
-        })
+            m.ctx_state_on_unlock = this._ctxState()
+            // Give resumeAudioContext() (P0.1b foreground handler) 300ms to run
+            this._trackTimer(() => {
+                m.ctx_alive = this._ctxState() === 'running'
+                this.emit('metrics', m)
+            }, 300)
+        }
+        this._trackDocListener('pause', onPause)
+        this._trackDocListener('resume', onResume)
 
         let onPos = (pos) => {
+            let now = Date.now()
             m.positions++
             if (m.is_background) m.bg_positions++
+            if (m.last_pos_time) {
+                let gap = now - m.last_pos_time
+                if (gap > m.gps_gap_max_ms) m.gps_gap_max_ms = gap
+            }
+            m.last_pos_time = now
             this.emit('metrics', m)
         }
         this._trackListener('position', onPos)
@@ -596,26 +732,14 @@ class DiagnosticRunner extends EventEmitter {
         }
         this._trackListener('stateUpdate', onState)
 
-        // Count heartbeats
+        // Heartbeat + motion tracking (same as T8)
         this._trackInterval(() => {
-            if (GEO.lastTimeUpdate && (Date.now() - GEO.lastTimeUpdate) < 15000) {
+            if (GEO.lastTimeUpdate && (Date.now() - GEO.lastTimeUpdate) < 20000) {
                 m.heartbeat_count++
             }
+            m.motion_stationary = GEO.motionIsStationary === true
             this.emit('metrics', m)
-        }, 10000)
-
-        // Count notification wakeups if possible
-        if (typeof cordova !== 'undefined' && cordova.plugins && cordova.plugins.notification && cordova.plugins.notification.local) {
-            let origHandler = null // we just count via our own listener
-            let notifFn = (notification) => {
-                m.notif_wakeups++
-                this.emit('metrics', m)
-            }
-            cordova.plugins.notification.local.on('trigger', notifFn)
-            this._timers.push(setTimeout(() => {
-                try { cordova.plugins.notification.local.un('trigger', notifFn) } catch(e) {}
-            }, 180000))
-        }
+        }, 15000)
     }
 }
 

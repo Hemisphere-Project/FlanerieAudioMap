@@ -256,18 +256,39 @@ PAGES['diagnostic'] = () => {
 
     function showMetrics(m) {
         var parts = []
+        // T0: GPS startup
+        if (m.plugin_available !== undefined) parts.push('Plugin: ' + (m.plugin_available ? 'OK' : 'absent'))
+        if (m.gps_started !== undefined) parts.push('GPS: ' + (m.gps_started ? 'démarré ✓' : 'erreur ✗'))
+        if (m.first_callback) parts.push('1er callback ✓')
+        if (m.accuracy_on_start !== undefined && m.accuracy_on_start !== null) parts.push('Précision init: ' + m.accuracy_on_start + 'm')
+        if (m.error) parts.push('Erreur: ' + m.error)
+        // T1/T2: GPS accuracy
         if (m.accuracy_min !== undefined && m.accuracy_min < 999) parts.push('Précision: ' + Math.round(m.accuracy_min) + 'm')
+        if (m.raw_accuracy !== undefined) parts.push('Brut: ' + m.raw_accuracy + 'm')
+        if (m.raw_callbacks !== undefined && m.raw_callbacks > 0) parts.push('Callbacks bruts: ' + m.raw_callbacks)
         if (m.positions !== undefined) parts.push('Positions: ' + m.positions)
         if (m.first_fix_ms !== undefined && m.first_fix_ms !== null) parts.push('1er fix: ' + (m.first_fix_ms / 1000).toFixed(1) + 's')
+        // T3/T4: Audio
         if (m.play_ok) parts.push('Audio: OK ✓')
         if (m.had_error) parts.push('Audio: ERREUR ✗')
+        if (m.ctx_state !== undefined) parts.push('Ctx: ' + m.ctx_state)
+        if (m.ctx_state_on_unlock !== undefined) parts.push('Ctx@unlock: ' + m.ctx_state_on_unlock)
+        if (m.ctx_resumed !== undefined) parts.push('Ctx reprise: ' + m.ctx_resumed)
+        if (m.ctx_alive !== undefined) parts.push('Ctx vivant: ' + (m.ctx_alive ? '✓' : '✗'))
+        // T5/T6/T7/T9: movement
         if (m.total_distance !== undefined) parts.push('Distance: ' + Math.round(m.total_distance) + 'm')
         if (m.max_gap_ms !== undefined && m.max_gap_ms > 0) parts.push('Gap max: ' + (m.max_gap_ms / 1000).toFixed(1) + 's')
+        if (m.gps_gap_max_ms !== undefined && m.gps_gap_max_ms > 0) parts.push('Gap GPS: ' + (m.gps_gap_max_ms / 1000).toFixed(1) + 's')
+        if (m.waiting_for_accuracy) parts.push('Attente précision…')
         if (m.distance_to_zone !== undefined) parts.push('Zone: ' + m.distance_to_zone + 'm')
         if (m.triggered) parts.push('Déclenché ✓')
+        if (m.fg_positions !== undefined) parts.push('Pos. avant-plan: ' + m.fg_positions)
         if (m.bg_positions !== undefined) parts.push('Pos. arrière-plan: ' + m.bg_positions)
+        // T8/T10: keepalive + motion
         if (m.heartbeat_count !== undefined) parts.push('Heartbeats: ' + m.heartbeat_count)
         if (m.gps_lost_events !== undefined && m.gps_lost_events > 0) parts.push('GPS perdus: ' + m.gps_lost_events)
+        if (m.gps_recovered !== undefined && m.gps_recovered > 0) parts.push('GPS récupérés: ' + m.gps_recovered)
+        if (m.motion_stationary !== undefined) parts.push('Immobile détecté: ' + (m.motion_stationary ? '✓' : '—'))
         $metrics.text(parts.join(' | '))
     }
 
@@ -330,6 +351,15 @@ PAGES['diagnostic'] = () => {
     runner.on('metrics', (m) => showMetrics(m))
     runner.on('autoFinish', () => {
         runner.finishCurrent()
+        // Auto tests without a user question that passed: advance automatically after a brief pause.
+        // Identity check prevents double-advance if user clicks "Test suivant" before timeout fires.
+        var test = runner.current()
+        var result = runner.currentResult()
+        if (test && !test.userQuestion && result && result.result === 'pass') {
+            setTimeout(() => {
+                if (runner.currentResult() === result) runner.next()
+            }, 1500)
+        }
     })
     runner.on('result', (result) => {
         showResult(result)
