@@ -1226,15 +1226,22 @@ $('#gpslost-resume').on('click', () => {
 
 /// NOTIFICATIONS TRIGGER
 // Trigger a silent notification
+// DISABLED: silent:true makes getBuilder() return null on Android so fireEvent("trigger") is never
+// reached; on iOS trigger only fires in foreground. The chain delivers zero keepalive on either
+// platform. Android keepalive = BackgroundGeolocation foreground service. iOS = UIBackgroundModes
+// location. Set to true only to re-enable for debugging.
+const NOTIF_CHAIN_ENABLED = false;
 const NOTIF_REPEAT = 1 * 59 * 1000; // 59 seconds
 var NOTIF_COUNTER = 37;
 function scheduleWakeupNotification() {
+    if (PLATFORM == 'ios') return  // iOS keepalive is location-based; notifications accumulate silently
+    if (!NOTIF_CHAIN_ENABLED) return
     clearWakeupNotification(false)
     if (currentPage !== 'parcours') {
         clearWakeupNotification()
         return
     }
-    if (PLATFORM != 'android' && PLATFORM != 'ios') return
+    if (PLATFORM != 'android') return
     if (typeof cordova === 'undefined' || !cordova.plugins || !cordova.plugins.notification || !cordova.plugins.notification.local) {
         console.warn('NOTIF: cordova.plugins.notification.local not available, notifications will not work');
         if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('notif_schedule', {ok: false, reason: 'plugin_missing'});
