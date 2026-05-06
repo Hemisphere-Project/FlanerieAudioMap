@@ -172,24 +172,32 @@ class DiagnosticRunner extends EventEmitter {
             test_id: test.id,
             test_name: test.name,
             phase: test.phase,
-            started_at: Date.now(),
+            started_at: null,
             ended_at: null,
-            result: 'running',
+            result: 'pending',
             metrics: {},
             user_answer: null,
             platform: this.platform,
             device: this.device
         }
         this.emit('test', test, this.currentIndex)
-        if (test.id !== 'T11') {
-            test.run({ metrics: this._metrics, test: test })
-        }
+    }
+
+    startCurrent() {
+        let test = this.tests[this.currentIndex]
+        let result = this.results[this.currentIndex]
+        if (!test || !result || result.started_at || test.id === 'T11') return
+
+        result.started_at = Date.now()
+        result.result = 'running'
+        this.emit('started', test, this.currentIndex)
+        test.run({ metrics: this._metrics, test: test })
     }
 
     finishCurrent(userAnswer) {
         let test = this.tests[this.currentIndex]
         let result = this.results[this.currentIndex]
-        if (!result) return
+        if (!result || !result.started_at || result.ended_at) return
         this._cleanup()
         result.ended_at = Date.now()
         result.metrics = { ...this._metrics }
@@ -206,6 +214,7 @@ class DiagnosticRunner extends EventEmitter {
         let result = this.results[this.currentIndex]
         if (result) {
             this._cleanup()
+            if (!result.started_at) result.started_at = Date.now()
             result.ended_at = Date.now()
             result.metrics = { ...this._metrics }
             result.result = 'skip'

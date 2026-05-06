@@ -226,6 +226,7 @@ PAGES['diagnostic'] = () => {
     var $result = $('#diag-result')
     var $badge = $('#diag-result-badge')
     var $report = $('#diag-report')
+    var $start = $('#diag-start')
     var $next = $('#diag-next')
     var $skip = $('#diag-skip')
     var liveMetrics = {}
@@ -256,13 +257,21 @@ PAGES['diagnostic'] = () => {
     }
 
     function timedProgress(test, result) {
-        if (!test || !test.duration || !result || result.ended_at) return null
+        if (!test || !test.duration || !result || result.ended_at || !result.started_at) return null
         var elapsed = Date.now() - result.started_at
         var ratio = Math.max(0, Math.min(1, elapsed / test.duration))
         return {
             ratio: ratio,
             detail: Math.round(ratio * 100) + '% • ' + formatRemaining(test.duration - elapsed)
         }
+    }
+
+    function displayNumber(index) {
+        return index + 1
+    }
+
+    function displayLabel(index) {
+        return 'Test ' + displayNumber(index)
     }
 
     function actualProgress(test, metrics) {
@@ -302,9 +311,12 @@ PAGES['diagnostic'] = () => {
         }
 
         if (test.id === 'T5' && metrics.positions !== undefined) {
+            var trackedPositions = Math.min(metrics.positions, 5)
             return {
-                ratio: Math.min(metrics.positions / 5, 1),
-                detail: Math.min(metrics.positions, 5) + '/5 positions GPS utiles'
+                ratio: Math.min(metrics.positions / 5, 1) * 0.75,
+                detail: trackedPositions >= 5
+                    ? '5/5 positions utiles, poursuite pour stabilite GPS'
+                    : trackedPositions + '/5 positions GPS utiles'
             }
         }
 
@@ -360,6 +372,11 @@ PAGES['diagnostic'] = () => {
             return
         }
 
+        if (!result.started_at) {
+            setProgressState(0, 'Appuyez sur Demarrer quand vous etes pret')
+            return
+        }
+
         if (result.result === 'skip') {
             setProgressState(1, 'Test passé')
             return
@@ -372,8 +389,10 @@ PAGES['diagnostic'] = () => {
 
         var timed = timedProgress(test, result)
         var actual = actualProgress(test, metrics)
+        var preferActual = test.id === 'T0' || test.id === 'T1'
         var chosen = timed || { ratio: 0, detail: '' }
-        if (actual && actual.ratio >= chosen.ratio) chosen = actual
+        if (preferActual && actual) chosen = actual
+        else if (actual && actual.ratio >= chosen.ratio) chosen = actual
         setProgressState(chosen.ratio, chosen.detail)
     }
 
@@ -396,7 +415,40 @@ PAGES['diagnostic'] = () => {
     }
 
     function shouldAutoAdvance(test, result) {
-        return !!(test && result && !test.userQuestion && result.result === 'pass')
+        return !!(test && result && test.auto && !test.userQuestion && result.result === 'pass')
+    }
+
+    function setActionState(test, options) {
+        var started = !!options.started
+        var showResult = !!options.showResult
+        var isReport = test.id === 'T11'
+
+        if (isReport) {
+            $start.hide()
+            $next.text('Fermer').show()
+            $skip.hide()
+            return
+        }
+
+        if (!started) {
+            $start.show()
+            $next.hide()
+            $skip.show()
+            return
+        }
+
+        $start.hide()
+        if (showResult) {
+            return
+        }
+
+        if (test.auto) {
+            $next.hide()
+            $skip.show()
+        } else {
+            $next.text('Terminer le test').show()
+            $skip.show()
+        }
     }
 
     function showTest(test, index) {
@@ -404,24 +456,18 @@ PAGES['diagnostic'] = () => {
         var isReport = test.id === 'T11'
         liveMetrics = {}
         clearAnswerAdvanceTimer()
-        $title.text(test.name)
-        $progress.text(isReport ? 'Terminé' : 'Phase ' + test.phase + ' — Test ' + (index + 1) + '/' + total)
+        $title.text(isReport ? test.name : displayLabel(index) + ' — ' + test.name)
+        $progress.text(isReport ? 'Terminé' : 'Phase ' + test.phase + ' — ' + displayLabel(index) + '/' + total)
         $instructions.text(test.instructions)
         $metrics.text('')
         $question.hide()
         $result.hide()
         $report.hide()
-        $next.show()
-        $skip.show()
+        $result.hide()
+        setActionState(test, { started: false, showResult: false })
 
         if (isReport) {
             showReport()
-            $skip.hide()
-        } else if (test.auto) {
-            $next.hide()
-            $skip.show()
-        } else {
-            $next.text('Suivant')
         }
 
         startProgressTimer()
@@ -472,6 +518,7 @@ PAGES['diagnostic'] = () => {
         var test = runner.tests[runner.currentIndex]
         stopProgressTimer()
         $result.show()
+        $start.hide()
         if (result.result === 'pass') $badge.attr('class', 'badge-pass').text('✓ PASS')
         else if (result.result === 'fail') $badge.attr('class', 'badge-fail').text('✗ FAIL')
         else $badge.attr('class', 'badge-skip').text('— SKIP')
@@ -508,12 +555,12 @@ PAGES['diagnostic'] = () => {
         setProgressState(1, 'Rapport final')
 
         var lines = []
-        report.tests.forEach(r => {
+        report.tests.forEach((r, reportIndex) => {
             var icon = r.result === 'pass' ? '✓' : r.result === 'fail' ? '✗' : '—'
             var userNote = ''
             if (r.user_answer === true) userNote = ' [utilisateur: oui]'
             if (r.user_answer === false) userNote = ' [utilisateur: non]'
-            lines.push(icon + ' ' + r.test_id + ' ' + r.test_name + ': ' + r.result.toUpperCase() + userNote)
+            lines.push(icon + ' ' + displayLabel(reportIndex) + ' ' + r.test_name + ': ' + r.result.toUpperCase() + userNote)
         })
         lines.push('')
         lines.push('Plateforme: ' + report.platform)
@@ -532,6 +579,10 @@ PAGES['diagnostic'] = () => {
     runner.clearAllListeners()  // clear previous listeners
 
     runner.on('test', (test, index) => showTest(test, index))
+    runner.on('started', (test) => {
+        setActionState(test, { started: true, showResult: false })
+        renderProgress()
+    })
     runner.on('metrics', (m) => showMetrics(m))
     runner.on('autoFinish', () => {
         runner.finishCurrent()
@@ -566,6 +617,11 @@ PAGES['diagnostic'] = () => {
             return
         }
 
+        if (result && !result.started_at) {
+            runner.startCurrent()
+            return
+        }
+
         // If result already shown, advance
         if (result && result.ended_at) {
             runner.next()
@@ -573,6 +629,10 @@ PAGES['diagnostic'] = () => {
             // Manual test: finish it
             runner.finishCurrent()
         }
+    })
+
+    $start.off().on('click', () => {
+        runner.startCurrent()
     })
 
     $skip.off().on('click', () => {
