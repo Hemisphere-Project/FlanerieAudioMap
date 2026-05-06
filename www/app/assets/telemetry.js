@@ -201,6 +201,10 @@ var TELEMETRY = (function() {
 
     function flush() {
         try {
+            if (typeof PLATFORM !== 'undefined' && PLATFORM === 'browser') {
+                console.log('[TELEMETRY] flush skipped: browser mode');
+                return;
+            }
             if (!sessionId || buffer.length === 0) {
                 console.log('[TELEMETRY] flush skipped: sessionId=' + sessionId + ' buffer=' + buffer.length);
                 return;
@@ -250,6 +254,7 @@ var TELEMETRY = (function() {
 
     // Best-effort flush for page unload / session end
     function _flushFinal() {
+        if (typeof PLATFORM !== 'undefined' && PLATFORM === 'browser') return;
         if (!sessionId || buffer.length === 0) return;
         var payload = JSON.stringify({
             sessionId: sessionId,
