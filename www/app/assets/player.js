@@ -1,21 +1,14 @@
 var ALL_PLAYERS = []
 var PAUSED_PLAYERS = []  // Interrupted players that are paused and can be resumed later
+var DUCKED_PLAYERS = new Map()
 var AUDIOFOCUS = -1  // Audio focus state, -1 means not available, 0 means no focus, 1 means focus gained
+var AUDIOFOCUS_DUCK_FACTOR = 0.25
 
 Howler.autoUnlock = true; // Enable automatic context unlocking
 Howler.autoSuspend = false; // Prevent automatic context suspension
 
 // Watch for audio focus changes
 document.addEventListener('deviceready', function() {
-    // iOS: also watch document pause/resume so non-call backgrounding (home button, etc.)
-    // is handled — AVAudioSessionInterruptionNotification only fires for actual audio
-    // interruptions (calls, Siri), not for plain app background events.
-    // Both paths may fire for a phone call; pauseAllPlayers() is idempotent.
-    if (PLATFORM === 'ios') {
-        document.addEventListener('pause',  () => { pauseAllPlayers(); });
-        document.addEventListener('resume', () => { resumeAllPlayers(); });
-    }
-
     if (typeof cordova.plugins.audiofocus === 'undefined') {
         console.warn('[AudioFocus] plugin not available. Audio focus will not be handled.');
         return;
@@ -30,11 +23,12 @@ document.addEventListener('deviceready', function() {
             $('#resume-overlay').css('display', 'flex');
         } else if (focusState === "AUDIOFOCUS_GAIN") {
             if (navigator.vibrate) navigator.vibrate([100]);
+            restoreDuckedPlayers();
             resumeAllPlayers();
             AUDIOFOCUS = 1;
             $('#resume-overlay').hide();
         } else if (focusState === "AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK") {
-            // duck: intentionally not handled
+            duckPlayingPlayers();
         }
     });
     console.log('[AudioFocus] plugin available. Audio focus will be handled.');
@@ -72,6 +66,25 @@ function resumeAllPlayers() {
     PAUSED_PLAYERS = [];
 }
 
+function duckPlayingPlayers() {
+    ALL_PLAYERS.forEach(player => {
+        if (!player.isPlaying() || DUCKED_PLAYERS.has(player)) return;
+        let volume = player.volume();
+        DUCKED_PLAYERS.set(player, volume);
+        player.volume(volume * AUDIOFOCUS_DUCK_FACTOR);
+        console.log('Ducked player:', player._src);
+    });
+}
+
+function restoreDuckedPlayers() {
+    DUCKED_PLAYERS.forEach((volume, player) => {
+        if (!ALL_PLAYERS.includes(player)) return;
+        player.volume(volume);
+        console.log('Restored player volume:', player._src);
+    });
+    DUCKED_PLAYERS.clear();
+}
+
 function requestAudioFocus() {
     // if (!cordova || !cordova.plugins.audiofocus) return Promise.resolve();
     // check if cordova and cordova.plugins.audiofocus are defined
@@ -83,6 +96,7 @@ function requestAudioFocus() {
         cordova.plugins.audiofocus.requestFocus(
             function() {
                 console.log('[AudioFocus] requested successfully.');
+                restoreDuckedPlayers();
                 resumeAllPlayers();
                 AUDIOFOCUS = 1;  // Focus gained
                 $('#resume-overlay').hide();
@@ -222,6 +236,7 @@ class PlayerSimple extends EventEmitter
             // remove from global ALL_PLAYERS array
             ALL_PLAYERS = ALL_PLAYERS.filter(player => player !== this)
             PAUSED_PLAYERS = PAUSED_PLAYERS.filter(player => player !== this)
+            DUCKED_PLAYERS.delete(this)
             this._player.stop()
             this._player.unload()
             this._player = null
@@ -271,7 +286,9 @@ class PlayerSimple extends EventEmitter
         }, 5000)
         console.log('PlayerSimple play requested:', this._player._src, 'seek:', seek, 'volume:', volume)
 
-        if (PLATFORM == 'ios' || AUDIOFOCUS < 1) {
+        // Only re-request native focus when it was explicitly lost.
+        // Unknown/unavailable focus state (-1) should not block playback.
+        if (PLATFORM == 'ios' || AUDIOFOCUS !== 0) {
             if (!this._player) return
             this._player.play()
 

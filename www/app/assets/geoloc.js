@@ -725,7 +725,9 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
             console.log('[INFO] App is resumed');
             APP_VISIBILITY = 'foreground';
             resumeAudioContext('resume');
-            if (typeof requestAudioFocus === 'function') {
+            // iOS backgrounding is not an audio interruption. Let the native
+            // AVAudioSession interruption callback drive pause/resume there.
+            if (PLATFORM !== 'ios' && typeof requestAudioFocus === 'function') {
                 requestAudioFocus().catch(function(e) { console.warn('[AudioFocus] re-request on resume failed:', e); });
             }
         }, false);

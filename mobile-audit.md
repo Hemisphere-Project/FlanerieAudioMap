@@ -573,22 +573,26 @@ Acceptance:
 
 #### P1.11 Audio focus auto-resume 🆕 [TEST-FIRST] ✅ DONE
 
-Implemented 2026-05-05.
+Implemented 2026-05-05. Updated 2026-05-06.
 
 What was done:
 - `navigator.vibrate([300])` on `AUDIOFOCUS_LOSS` / `AUDIOFOCUS_LOSS_TRANSIENT` (call or other app takes focus).
 - `navigator.vibrate([100])` on `AUDIOFOCUS_GAIN` (focus returned, audio resuming).
-- **iOS proxy:** `cordova-plugin-audiofocus` is Android-only. On iOS, added `document.pause` → `pauseAllPlayers()` and `document.resume` → `resumeAllPlayers()` listeners inside `deviceready`, guarded by `PLATFORM === 'ios'`. Covers the common case where a phone call backgrounds the app. Mid-session calls that don't background the app (edge case, mostly iPad) require native `AVAudioSession` interruption handling in the plugin fork — deferred.
+- **Android focus gate fix:** `PlayerSimple.play()` now re-requests native focus only when `AUDIOFOCUS === 0` (explicitly lost). The previous logic tried to reacquire focus in the opposite branch, which let the next GPS-triggered step play without first regaining focus after a call or competing app interruption.
+- **iOS background/interruption split:** the temporary `document.pause` / `document.resume` proxy was removed from `player.js`. Generic app backgrounding is no longer treated as an audio interruption, which preserves locked-screen background playback. Real pause/resume now comes from the native `AVAudioSession` interruption callback path.
+- **Foreground resume split:** `geoloc.js` now re-requests audio focus on generic app resume only on Android. iOS foregrounding only resumes the AudioContext; it does not auto-resume players unless the native interruption layer emits `AUDIOFOCUS_GAIN`.
+- **Ducking policy:** `AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK` is now handled. Active players are reduced to 25% of their current logical volume and restored on `AUDIOFOCUS_GAIN` or successful manual focus request.
 - Chime before resume: intentionally skipped — visitor knows they had a call, audio return is expected.
 - `#resume-button` kept as manual fallback for edge cases where auto-resume fails.
 
-Regression risk: **LOW**. Additive. Existing Android auto-resume behavior unchanged.
+Regression risk: **MEDIUM**. The iOS behavior change is intentional and correct for locked-screen walks, but it changes when audio pauses or resumes relative to app backgrounding and real interruptions. Must be field-tested on both platforms.
 
 Files changed:
 - `www/app/assets/player.js`
+- `www/app/assets/geoloc.js`
 
-Remaining: ✅ COMPLETE (2026-05-05 — C1 plugin upgrade)
-- iOS `AVAudioSessionInterruptionNotification` is now implemented in `src/ios/AudioFocus.m`. The plugin now fires `AUDIOFOCUS_LOSS`/`GAIN` on iOS for mid-session calls that do not background the app. The `document.pause`/`resume` proxy in `player.js` stays in place as a harmless second layer.
+Remaining: ✅ COMPLETE (2026-05-06 — C1 plugin follow-up)
+- iOS `AVAudioSessionInterruptionNotification` is now implemented in `src/ios/AudioFocus.m`. The plugin now fires `AUDIOFOCUS_LOSS` on interruption begin and only emits `AUDIOFOCUS_GAIN` when iOS sets `ShouldResume` and the session reactivation succeeds. This prevents unwanted auto-resume after interruptions that should stay paused.
 - Requires plugin reinstall to take effect in the build: `cordova plugin remove com.maigre.cordova.plugins.audiofocus && cordova plugin add /path/to/fork`.
 
 #### P1.12 Android battery optimization guidance 🆕 [TEST-FIRST] ✅ DONE
@@ -901,9 +905,9 @@ Regression risk: **NONE** — already handled.
 
 These items emerged from comparing FlanerieCordova against FlanerieAudioMap after the Cordova project was added to the workspace.
 
-#### C1 Audiofocus plugin — deprecated API + wrong focus type ✅ DONE (2026-05-05)
+#### C1 Audiofocus plugin — deprecated API + wrong focus type ✅ DONE (2026-05-05, follow-up 2026-05-06)
 
-Plugin upgraded to v1.2.0 in the `cordova-plugin-audiofocus` fork workspace. All four issues fixed.
+Plugin upgraded to v1.2.0 in the `cordova-plugin-audiofocus` fork workspace. The native/API issues are fixed; the duplicate plugin identity cleanup in the Cordova app config remains to be reconciled.
 
 **What was done:**
 
@@ -915,13 +919,13 @@ Plugin upgraded to v1.2.0 in the `cordova-plugin-audiofocus` fork workspace. All
    - `requestFocus`: sets `AVAudioSessionCategoryPlayback`, activates the session, registers for `AVAudioSessionInterruptionNotification`.
    - `cancelFocus`: removes observer, deactivates session with `NotifyOthersOnDeactivation`.
    - `onFocusChange`: stores the persistent callback (same keepCallback pattern as Android).
-   - `handleInterruption:`: emits `AUDIOFOCUS_LOSS` on interruption begin, reactivates the session and emits `AUDIOFOCUS_GAIN` on interruption end. Handles the `ShouldResume` option.
-   - This covers mid-session phone calls that do NOT background the app, which the old `document.pause`/`resume` proxy could not catch.
+    - `handleInterruption:`: emits `AUDIOFOCUS_LOSS` on interruption begin. On interruption end, it now emits `AUDIOFOCUS_GAIN` only when `ShouldResume` is present and `setActive:YES` succeeds. This prevents the app from auto-resuming after interruptions that iOS expects to stay paused.
+    - This covers mid-session phone calls and Siri-like interruptions that do NOT background the app, without conflating them with ordinary app backgrounding.
 
-4. **Duplicate plugin identity removed**: `com.maigre.cordova.plugins.audiofocus` entry removed from `FlanerieCordova/package.json` cordova.plugins section. The single `cordova-plugin-audiofocus` key matches the devDependency name.
+4. **Duplicate plugin identity still present in the Cordova app config**: the plugin source and installed copy are aligned, but `FlanerieCordova/package.json` still carries both `cordova-plugin-audiofocus` and `com.maigre.cordova.plugins.audiofocus` under `cordova.plugins`. This is maintenance-fragile and should be cleaned up in the app workspace separately from the plugin commit.
 
-**Interaction with existing iOS proxy in `player.js`:**
-The `document.pause`/`resume` proxy added in P1.11 remains in place as a fallback layer. Both will now fire on iOS call interruptions — `pauseAllPlayers`/`resumeAllPlayers` are idempotent so double calls are harmless. The overlay and vibration from the `AUDIOFOCUS_LOSS`/`GAIN` handler will now also appear on iOS (matching Android behavior).
+**Interaction with app-side lifecycle in `player.js` / `geoloc.js`:**
+The temporary iOS `document.pause`/`resume` proxy added during P1.11 has now been removed. Generic iOS background/foreground transitions no longer pause or resume playback; only the native interruption callback path does. Android still re-requests audio focus on generic app resume. The overlay and vibration from the `AUDIOFOCUS_LOSS`/`GAIN` handler now represent real audio interruptions on both platforms.
 
 **To apply to the Cordova build** (reinstall required for iOS platform to pick up the new source file):
 ```sh
@@ -935,7 +939,7 @@ Files changed:
 - `cordova-plugin-audiofocus/plugin.xml`
 - `cordova-plugin-audiofocus/package.json`
 - `FlanerieCordova/plugins/com.maigre.cordova.plugins.audiofocus/` (synced)
-- `FlanerieCordova/package.json` (duplicate plugin entry removed)
+- `FlanerieCordova/package.json` (duplicate plugin entry cleanup still pending)
 
 #### C1b Android: `FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK` in audiofocus plugin fork 🆕 [LOW EFFORT]
 
@@ -1021,7 +1025,7 @@ Phase 2 — Stability cleanup (test with repeated staff starts)
 - P1.5 listener/timer cleanup (partial ✅ — P1.13 framework in place, CHECKGEO leak deferred)
 - P1.5b GPS accuracy filtering ✅ DONE
 - P1.10 GPS lost recovery UX ✅ DONE
-- P1.11 Audio focus auto-resume ✅ DONE (iOS mid-session call handling deferred to plugin fork)
+- P1.11 Audio focus auto-resume ✅ DONE (Android focus gate fixed, iOS interruption-only resume policy, ducking enabled)
 - opportunistic P0.4 plugin guards in touched files
 
 Phase 2 — UX and logic (test with full walk-through)
@@ -1062,6 +1066,8 @@ Run after P0 work and again before release:
 ### Audio
 - audio continues playing after screen lock on both platforms
 - audio resumes correctly after phone call interruption (AudioFocus loss/gain)
+- audio does not auto-resume on iOS when the interruption ends without `ShouldResume`
+- transient notification/navigation prompts duck active audio and restore volume correctly on gain
 - step transition triggers correct audio (voice plays, not afterplay, on first entry)
 - audio from previous step stops cleanly when entering next step zone
 - 🆕 lock phone during active audio playback, wait 2 minutes, unlock: verify audio still playing
