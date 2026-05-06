@@ -858,27 +858,23 @@ Regression risk: **NONE** — entitlement already present.
 Files:
 - `FlanerieCordova/config.xml` (verified)
 
-#### P3.2 iOS location permission progression 🆕 [TEST-FIRST]
+#### P3.2 iOS location permission progression 🆕 [TEST-FIRST] ✅ DONE (2026-05-06)
 
-Current state:
-- `confirmgeo` page (`pages.js` lines ~280-330) goes straight to requesting "Always" authorization.
-- iOS presents "Allow Once" → "While Using" first. iOS only shows the native permission prompt once — after that, the user must go to Settings manually.
-- The `AUTHORIZED_FOREGROUND` catch in `checkAuthorized()` increments `retryAuth` and loops back, showing increasingly urgent settings instructions.
+**Why "While Using" breaks the walk:** iOS only delivers background location via `startUpdatingLocation` when authorization is "Always". `UIBackgroundModes: location` does not override this. With "While Using", GPS stops the moment the screen locks. The hard requirement for "Always" is correct — softening it would cause silent walk failures at minute 1.
 
-Problem:
-- This can feel like a broken loop to the visitor. The app seems stuck asking for something the user already granted.
+**UX problem (now fixed):** iOS 13+ no longer shows "Always" in the initial permission dialog — only "Allow Once" / "While Using App" / "Don't Allow". A user who taps "While Using App" (the only real "yes" available) was silently stuck in the 1s polling loop. `onError()` in the catch was a dead call (undefined → silent ReferenceError), so the visitor saw zero feedback and no path forward.
 
-Plan:
-- Accept `AUTHORIZED_FOREGROUND` as a valid starting state. Start GPS with foreground-only authorization.
-- Show a calm explanation of why "Always" is better, with a Settings link.
-- Only block if authorization is fully denied.
-- This may interact with P0.1 lifecycle — background location may not work without "Always" on iOS.
+What was done:
+- In `confirmgeo`'s `checkAuth()` catch: when `e === 'gps-error-authorization'` on iOS (i.e. `AUTHORIZED_FOREGROUND` detected), the "need Always" guidance is shown immediately — same clear message and Settings button that `retryAuth > 0` would eventually show, but without requiring the user to tap "J'accepte" and go through `startgeo` first.
+- Removed the dead `onError()` call. The polling loop itself handles retry.
+- The "J'accepte" button is hidden on AUTHORIZED_FOREGROUND so the visitor has only the Settings path.
+- When the user returns from Settings with "Always", the 1s polling loop detects `AUTHORIZED` and proceeds automatically to `startgeo`.
+- The `retryAuth > 0` block is kept as a safety net for the rare case where `startgeo` itself fails after the user bypassed the initial auth check.
 
-Regression risk: **MEDIUM**. Changing permission flow affects first-launch experience. Test on fresh iOS install.
+Regression risk: **LOW**. Additive: the new branch only fires when AUTHORIZED_FOREGROUND is detected on iOS. Android and fully-denied paths unchanged.
 
-Files:
-- `www/app/pages.js`
-- `www/app/assets/geoloc.js`
+Files changed:
+- `www/app/pages.js` — `checkAuth()` catch in `confirmgeo`
 
 #### P3.3 Android 14+ foreground service type 🆕 [RESEARCH-FIRST] ✅ VERIFIED DONE
 
@@ -942,7 +938,9 @@ Files changed:
 - `FlanerieCordova/package.json` (duplicate plugin entry removed)
 - `FlanerieCordova/package-lock.json` (audiofocus resolved to `69915be1b2c3fd4faa41ff05c02806484d0023f2`)
 
-#### C1b Android: `FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK` in audiofocus plugin fork 🆕 [LOW EFFORT]
+#### C1b Android: `FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK` in audiofocus plugin fork 🆕 ✅ DONE (2026-05-06)
+
+Implemented in audiofocus plugin v1.3.0.
 
 Currently `LocationServiceImpl` declares `foregroundServiceType="location"` only. On stock Android this is sufficient. On OEM ROMs (Xiaomi MIUI, Samsung One UI, OnePlus OxygenOS) aggressive battery savers apply extra restrictions to location-only services while granting additional protection to media services.
 
@@ -951,9 +949,12 @@ Adding a minimal foreground service of type `mediaPlayback` to the audiofocus pl
 - Is independent of the GPS service — audio survives even if the location service is briefly throttled
 - Pairs naturally with the existing `requestFocus` / `cancelFocus` lifecycle
 
-Changes required in the audiofocus plugin fork:
-- `AudioFocus.java`: start a foreground service with `foregroundServiceType=mediaPlayback` in `requestFocus()`, stop it in `cancelFocus()`
-- `plugin.xml`: declare `android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK` (Android 14+) and the new service entry
+What was done:
+- New `AudioFocusService.java`: `IMPORTANCE_MIN` notification channel (no status bar icon, no sound), starts foreground with `FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK` on API 29+ (graceful fallback on 24-28), `START_STICKY`.
+- `AudioFocus.java`: `startAudioFocusService()` called on `AUDIOFOCUS_REQUEST_GRANTED` in `requestFocus()`; `stopAudioFocusService()` called unconditionally in `cancelFocus()`. Service lifecycle paired 1:1 with audio focus.
+- `plugin.xml` v1.3.0: `FOREGROUND_SERVICE` + `FOREGROUND_SERVICE_MEDIA_PLAYBACK` permissions declared; service entry with `android:foregroundServiceType="mediaPlayback" android:exported="false"`; `AudioFocusService.java` source file registered.
+
+Requires plugin reinstall: `cordova plugin remove com.maigre.cordova.plugins.audiofocus && cordova plugin add /path/to/cordova-plugin-audiofocus`
 
 Regression risk: **LOW**. The service is started and stopped paired with existing audio focus requests. No change to audio session logic or the JS API.
 
@@ -1038,9 +1039,10 @@ Phase 4 — Observability + platform
 - P2.10 telemetry and usage diagnostics ✅ DONE (extended with offlimit/restart markers)
 - P3.1 iOS background audio entitlement ✅ VERIFIED DONE (UIBackgroundModes already present in config.xml)
 - P3.3 Android 14+ foreground service type ✅ VERIFIED DONE (FOREGROUND_SERVICE_LOCATION + foregroundServiceType already declared)
-- P3.2 iOS AUTHORIZED_FOREGROUND non-blocking start (still open — geoloc.js rejects it as error)
+- P3.2 iOS AUTHORIZED_FOREGROUND: immediate "need Always" guidance shown in confirmgeo ✅ DONE (2026-05-06)
 - C2 plugin/platform upgrades ✅ CONFIGURED — rebuild pending on Mac (see C2 section for commands)
 - C1 audiofocus plugin upgrade ✅ DONE
+- C1b Android FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK in audiofocus plugin ✅ DONE (v1.3.0)
 - C4 add container build checklist before platform upgrades
 
 Later
@@ -1211,7 +1213,8 @@ Title: Phase 3 — Cordova container hardening + audiofocus plugin fix
 
 All app-only P1/P2 items are code-complete. The remaining open work falls into two areas:
 
-**Area 1 — Audiofocus plugin fork:** ✅ COMPLETE (v1.2.0)
+**Area 1 — Audiofocus plugin fork:** ✅ COMPLETE (v1.3.0)
+- v1.3.0 adds `AudioFocusService` (C1b: Android `FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK`)
 - Plugin reinstall required before building: `cordova plugin remove com.maigre.cordova.plugins.audiofocus && cordova plugin add /path/to/fork`
 
 **Area 2 — Plugin/platform upgrades:** ✅ CONFIGURED (2026-05-05)

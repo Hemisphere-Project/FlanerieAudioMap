@@ -855,9 +855,15 @@ PAGES['confirmgeo'] = () => {
                 PAGE('startgeo')
             })
             .catch((e) => {
-                console.log('GEO NOT AUTHORIZED');
+                console.log('GEO NOT AUTHORIZED', e);
+                if (e === 'gps-error-authorization' && PLATFORM === 'ios') {
+                    // User picked "While Using App" — iOS initial dialog has no "Always" option.
+                    // Show guidance immediately instead of silently polling.
+                    $('#confirmgeo-desc').html(`Vous avez autorisé la localisation <u>"Pendant l'utilisation"</u>. Pour fonctionner lorsque le téléphone est en poche écran éteint, l'application a besoin de l'autorisation <u>"Toujours"</u>.<br><br>Réglages > Confidentialité > Services de localisation > Flanerie > <u>"Toujours"</u>`);
+                    $('#confirmgeo-settings').show().text('Réglages');
+                    $('#confirmgeo-accept').hide();
+                }
                 recheck = setTimeout(() => checkAuth(), 1000);
-                onError()
             })
     }
     checkAuth()
