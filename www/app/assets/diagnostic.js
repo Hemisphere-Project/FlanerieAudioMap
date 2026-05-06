@@ -45,22 +45,13 @@ class DiagnosticRunner extends EventEmitter {
 
             {
                 id: 'T1', phase: 1,
-                name: 'Acquisition GPS',
-                instructions: 'Restez immobile à l\'extérieur.\nLe test vérifie l\'obtention d\'un signal GPS précis (≤30m).',
-                duration: 30000,
+                name: 'Acquisition + précision GPS',
+                instructions: 'Restez immobile à l\'extérieur.\nLe test vérifie qu\'un fix GPS utile arrive puis que la précision descend sous 20m.',
+                duration: 45000,
                 auto: true,
                 run: (ctx) => this._testGpsAcquire(ctx),
                 // position event only fires when accuracy ≤ 30m (geoloc.js accuracy gate)
-                pass: (m) => m.fix_obtained,
-            },
-            {
-                id: 'T2', phase: 1,
-                name: 'Précision GPS',
-                instructions: 'Restez immobile.\nLe test vérifie que la précision atteint < 20m.',
-                duration: 30000,
-                auto: true,
-                run: (ctx) => this._testGpsWarmup(ctx),
-                pass: (m) => m.accuracy_min < 20,
+                pass: (m) => m.fix_obtained && m.accuracy_min < 20,
             },
             {
                 id: 'T3', phase: 1,
@@ -117,16 +108,6 @@ class DiagnosticRunner extends EventEmitter {
             // ====== PHASE 3: Keepalive stress ======
 
             {
-                id: 'T8', phase: 3,
-                name: 'GPS immobile (90s)',
-                instructions: 'Restez complètement immobile pendant 90 secondes.\nLe test vérifie que le GPS et le keepalive natif fonctionnent.',
-                duration: 95000,
-                auto: true,
-                run: (ctx) => this._testStationaryKeepAlive(ctx),
-                pass: (m) => m.gps_lost_events === 0,
-                userQuestion: 'Avez-vous entendu un son de "GPS perdu" pendant le test ?',
-            },
-            {
                 id: 'T9', phase: 3,
                 name: 'Audio verrouillé + GPS',
                 instructions: 'Verrouillez votre téléphone et mettez-le en poche.\nMarchez lentement ~10m.\nUn son doit se déclencher.\nDéverrouillez après ~30s.',
@@ -138,14 +119,14 @@ class DiagnosticRunner extends EventEmitter {
             },
             {
                 id: 'T10', phase: 3,
-                name: 'Survie longue (2 min veille)',
-                instructions: 'Verrouillez votre téléphone.\nRestez immobile pendant 2 minutes.\nPuis déverrouillez.',
-                duration: 135000,
+                name: 'Statique verrouillé + audio (2 min)',
+                instructions: 'Laissez le téléphone déverrouillé quelques secondes, sans bouger.\nUn son tourne en continu pendant tout le test.\nVerrouillez ensuite le téléphone, restez immobile pendant 2 minutes, puis déverrouillez.',
+                duration: 145000,
                 auto: false,
                 run: (ctx) => this._testLongLockSurvival(ctx),
-                // GPS must stay alive in background + AudioContext must resume on unlock
-                pass: (m) => m.ctx_alive && m.bg_positions > 0,
-                userQuestion: 'L\'application semblait-elle toujours active quand vous avez déverrouillé ?',
+                // Audio must remain continuous, GPS must stay alive in background, and AudioContext must resume on unlock.
+                pass: (m) => m.ctx_alive && m.bg_positions > 0 && m.gps_lost_events === 0 && m.play_ok && !m.had_error && !m.audio_interrupted,
+                userQuestion: 'Le son est-il resté continu, sans coupure ni message "GPS perdu", et l\'application semblait-elle toujours active au déverrouillage ?',
             },
 
             // ====== PHASE 4: Report ======
@@ -339,14 +320,25 @@ class DiagnosticRunner extends EventEmitter {
         m.first_callback = false
         m.plugin_available = typeof BackgroundGeolocation !== 'undefined'
         m.run_mode = GEO.runMode
+        let completed = false
+
+        let finishIfReady = () => {
+            if (completed) return
+            if (m.gps_started && m.first_callback) {
+                completed = true
+                this.emit('autoFinish')
+            }
+        }
 
         // Watch for first raw position callback (updates lastTimeUpdate even for filtered fixes)
         let lastKnown = GEO.lastTimeUpdate
-        let watchInterval = this._trackInterval(() => {
+        this._trackInterval(() => {
             if (GEO.lastTimeUpdate && GEO.lastTimeUpdate !== lastKnown) {
+                lastKnown = GEO.lastTimeUpdate
                 m.first_callback = true
                 m.accuracy_on_start = GEO.lastPosition ? Math.round(GEO.lastPosition.coords.accuracy) : null
                 this.emit('metrics', m)
+                finishIfReady()
             }
         }, 500)
 
@@ -356,6 +348,7 @@ class DiagnosticRunner extends EventEmitter {
             // GPS already running — check if we're receiving callbacks
             this.emit('metrics', m)
             this._trackTimer(() => this.emit('autoFinish'), ctx.test.duration)
+            finishIfReady()
             return
         }
 
@@ -364,6 +357,7 @@ class DiagnosticRunner extends EventEmitter {
             m.run_mode = GEO.runMode
             this.emit('metrics', m)
             this._trackTimer(() => this.emit('autoFinish'), ctx.test.duration)
+            finishIfReady()
         }).catch((err) => {
             m.gps_started = false
             m.error = String(err)
@@ -385,6 +379,15 @@ class DiagnosticRunner extends EventEmitter {
         m.raw_callbacks = 0
         let startTime = Date.now()
         let lastKnown = GEO.lastTimeUpdate
+        let completed = false
+
+        let finishIfReady = () => {
+            if (completed) return
+            if (m.fix_obtained && m.accuracy_min < 20) {
+                completed = true
+                this.emit('autoFinish')
+            }
+        }
 
         // Count raw callbacks via lastTimeUpdate polling (catches positions filtered by accuracy gate)
         this._trackInterval(() => {
@@ -409,29 +412,7 @@ class DiagnosticRunner extends EventEmitter {
             if (acc < m.accuracy_min) m.accuracy_min = acc
             m.accuracy_samples.push(Math.round(acc))
             this.emit('metrics', m)
-        }
-        this._trackListener('position', onPos)
-
-        this._trackTimer(() => {
-            this.emit('autoFinish')
-        }, ctx.test.duration)
-    }
-
-    // T2: GPS precision warm-up
-    _testGpsWarmup(ctx) {
-        let m = ctx.metrics
-        m.accuracy_min = 999
-        m.accuracy_max = 0
-        m.accuracy_samples = []
-        m.positions = 0
-
-        let onPos = (pos) => {
-            m.positions++
-            let acc = pos.coords ? pos.coords.accuracy : (pos.accuracy || 999)
-            if (acc < m.accuracy_min) m.accuracy_min = acc
-            if (acc > m.accuracy_max) m.accuracy_max = acc
-            m.accuracy_samples.push(Math.round(acc))
-            this.emit('metrics', m)
+            finishIfReady()
         }
         this._trackListener('position', onPos)
 
@@ -616,50 +597,6 @@ class DiagnosticRunner extends EventEmitter {
         this._trackListener('position', onPos)
     }
 
-    // T8: Stationary GPS keepalive (90s)
-    // Key v2.4.0 check: GEO.motionIsStationary should become true (CMMotionActivity / ActivityRecognition).
-    // The motion guard in pages.js suppresses the GPS-lost UX overlay, but stateUpdate events still
-    // fire — so gps_lost_events counts real keepalive failures even when the guard is active.
-    _testStationaryKeepAlive(ctx) {
-        let m = ctx.metrics
-        m.gps_lost_events = 0
-        m.gps_recovered = 0
-        m.positions = 0
-        m.heartbeat_count = 0
-        m.motion_stationary_at = null  // timestamp when GEO.motionIsStationary first went true
-        m.motion_stationary = false
-
-        let onPos = () => { m.positions++; this.emit('metrics', m) }
-        this._trackListener('position', onPos)
-
-        let onState = (state) => {
-            if (state === 'lost') m.gps_lost_events++
-            if (state === 'ok') m.gps_recovered++
-            this.emit('metrics', m)
-        }
-        this._trackListener('stateUpdate', onState)
-
-        // Poll GEO.lastTimeUpdate to confirm keepalive (NSTimer on iOS, Handler on Android, v2.4.0)
-        // Also track motion state (v2.4.0 CMMotionActivity / ActivityRecognition)
-        this._trackInterval(() => {
-            if (GEO.lastTimeUpdate && (Date.now() - GEO.lastTimeUpdate) < 20000) {
-                m.heartbeat_count++
-            }
-            // Detect when device is correctly recognized as stationary
-            let isNowStationary = GEO.motionIsStationary === true
-            if (isNowStationary && !m.motion_stationary) {
-                m.motion_stationary = true
-                m.motion_stationary_at = Date.now()
-            }
-            m.motion_stationary = GEO.motionIsStationary === true
-            this.emit('metrics', m)
-        }, 10000)
-
-        this._trackTimer(() => {
-            this.emit('autoFinish')
-        }, ctx.test.duration)
-    }
-
     // T9: GPS-triggered audio with phone locked.
     // Uses the same direction projection as T6, but from the first movement observed
     // while the phone may already be locked.
@@ -726,9 +663,11 @@ class DiagnosticRunner extends EventEmitter {
         this._trackListener('position', onPos)
     }
 
-    // T10: Long lock survival (2 min)
+    // T10: Static endurance with lock-screen survival (>2 min)
     // Key checks:
+    // - Looping audio starts in foreground and remains continuous while the phone is locked
     // - GPS positions received while background (BackgroundGeolocation foreground service / UIBackgroundModes)
+    // - No GPS-lost state while stationary
     // - AudioContext state on resume (validates P0.1b resumeAudioContext('foreground') fix)
     // Note: notification wakeup counter removed — the 59s chain is disabled (NOTIF_CHAIN_ENABLED=false).
     // Background keepalive is now purely GPS-driven on both platforms.
@@ -744,11 +683,35 @@ class DiagnosticRunner extends EventEmitter {
         m.motion_stationary = false
         m.gps_gap_max_ms = 0
         m.last_pos_time = null
+        m.play_ok = false
+        m.had_error = false
+        m.audio_interrupted = false
+
+        this._requestAudioFocus()
+        let player = this._makeTestHowl('test.mp3', true)
+        player.on('play', () => {
+            m.play_ok = true
+            this.emit('metrics', m)
+        })
+        player.on('loaderror', (id, err) => {
+            m.had_error = true
+            m.error = String(err)
+            this.emit('metrics', m)
+        })
+        player.on('playerror', (id, err) => {
+            m.had_error = true
+            m.error = String(err)
+            this.emit('metrics', m)
+        })
+        player.play()
 
         let onPause = () => { m.is_background = true; this.emit('metrics', m) }
         let onResume = () => {
             m.is_background = false
             m.ctx_state_on_unlock = this._ctxState()
+            if (m.play_ok && !player.playing()) {
+                m.audio_interrupted = true
+            }
             // Give resumeAudioContext() (P0.1b foreground handler) 300ms to run
             this._trackTimer(() => {
                 m.ctx_alive = this._ctxState() === 'running'
@@ -777,10 +740,13 @@ class DiagnosticRunner extends EventEmitter {
         }
         this._trackListener('stateUpdate', onState)
 
-        // Heartbeat + motion tracking (same as T8)
+        // Heartbeat + motion tracking while continuous audio is expected to stay alive.
         this._trackInterval(() => {
             if (GEO.lastTimeUpdate && (Date.now() - GEO.lastTimeUpdate) < 20000) {
                 m.heartbeat_count++
+            }
+            if (m.play_ok && !player.playing()) {
+                m.audio_interrupted = true
             }
             m.motion_stationary = GEO.motionIsStationary === true
             this.emit('metrics', m)

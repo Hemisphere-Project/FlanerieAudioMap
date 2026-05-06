@@ -277,6 +277,30 @@ PAGES['diagnostic'] = () => {
             }
         }
 
+        if (test.id === 'T1') {
+            if (metrics.fix_obtained && metrics.accuracy_min < 20) {
+                return { ratio: 1, detail: 'Fix obtenu, précision < 20m' }
+            }
+            if (metrics.fix_obtained) {
+                var accuracyRatio = 0.6
+                if (metrics.accuracy_min !== undefined && metrics.accuracy_min < 999) {
+                    accuracyRatio = Math.max(0.6, Math.min(0.95, 1 - ((metrics.accuracy_min - 20) / 25)))
+                }
+                return {
+                    ratio: accuracyRatio,
+                    detail: metrics.accuracy_min !== undefined && metrics.accuracy_min < 999
+                        ? 'Fix obtenu, meilleure précision: ' + Math.round(metrics.accuracy_min) + 'm'
+                        : 'Fix obtenu, amélioration de la précision…'
+                }
+            }
+            if (metrics.raw_callbacks !== undefined && metrics.raw_callbacks > 0) {
+                return {
+                    ratio: 0.25,
+                    detail: metrics.raw_callbacks + ' callback(s) GPS reçus, attente d\'un fix utile'
+                }
+            }
+        }
+
         if (test.id === 'T5' && metrics.positions !== undefined) {
             return {
                 ratio: Math.min(metrics.positions / 5, 1),
@@ -298,8 +322,8 @@ PAGES['diagnostic'] = () => {
             }
         }
 
-        if (test.id === 'T8' && metrics.heartbeat_count !== undefined) {
-            var expectedHeartbeats = Math.max(1, Math.round(test.duration / 10000))
+        if (test.id === 'T10' && metrics.heartbeat_count !== undefined) {
+            var expectedHeartbeats = Math.max(1, Math.round(test.duration / 15000))
             return {
                 ratio: Math.min(metrics.heartbeat_count / expectedHeartbeats, 1),
                 detail: metrics.heartbeat_count + '/' + expectedHeartbeats + ' heartbeats keepalive'
@@ -371,6 +395,10 @@ PAGES['diagnostic'] = () => {
         }, 700)
     }
 
+    function shouldAutoAdvance(test, result) {
+        return !!(test && result && !test.userQuestion && result.result === 'pass')
+    }
+
     function showTest(test, index) {
         var total = runner.tests.length - 1 // exclude report test from count
         var isReport = test.id === 'T11'
@@ -408,7 +436,7 @@ PAGES['diagnostic'] = () => {
         if (m.first_callback) parts.push('1er callback ✓')
         if (m.accuracy_on_start !== undefined && m.accuracy_on_start !== null) parts.push('Précision init: ' + m.accuracy_on_start + 'm')
         if (m.error) parts.push('Erreur: ' + m.error)
-        // T1/T2: GPS accuracy
+        // T1: GPS acquisition + accuracy
         if (m.accuracy_min !== undefined && m.accuracy_min < 999) parts.push('Précision: ' + Math.round(m.accuracy_min) + 'm')
         if (m.raw_accuracy !== undefined) parts.push('Brut: ' + m.raw_accuracy + 'm')
         if (m.raw_callbacks !== undefined && m.raw_callbacks > 0) parts.push('Callbacks bruts: ' + m.raw_callbacks)
@@ -417,6 +445,7 @@ PAGES['diagnostic'] = () => {
         // T3/T4: Audio
         if (m.play_ok) parts.push('Audio: OK ✓')
         if (m.had_error) parts.push('Audio: ERREUR ✗')
+        if (m.audio_interrupted) parts.push('Audio interrompu ✗')
         if (m.ctx_state !== undefined) parts.push('Ctx: ' + m.ctx_state)
         if (m.ctx_state_on_unlock !== undefined) parts.push('Ctx@unlock: ' + m.ctx_state_on_unlock)
         if (m.ctx_resumed !== undefined) parts.push('Ctx reprise: ' + m.ctx_resumed)
@@ -430,7 +459,7 @@ PAGES['diagnostic'] = () => {
         if (m.triggered) parts.push('Déclenché ✓')
         if (m.fg_positions !== undefined) parts.push('Pos. avant-plan: ' + m.fg_positions)
         if (m.bg_positions !== undefined) parts.push('Pos. arrière-plan: ' + m.bg_positions)
-        // T8/T10: keepalive + motion
+        // T10: keepalive + motion
         if (m.heartbeat_count !== undefined) parts.push('Heartbeats: ' + m.heartbeat_count)
         if (m.gps_lost_events !== undefined && m.gps_lost_events > 0) parts.push('GPS perdus: ' + m.gps_lost_events)
         if (m.gps_recovered !== undefined && m.gps_recovered > 0) parts.push('GPS récupérés: ' + m.gps_recovered)
@@ -452,6 +481,9 @@ PAGES['diagnostic'] = () => {
         // If there's a user question, show it
         if (test.userQuestion && result.result !== 'skip') {
             askQuestion(test.userQuestion)
+        } else if (shouldAutoAdvance(test, result)) {
+            $next.hide()
+            $skip.hide()
         } else {
             $next.text('Test suivant →').show()
             $skip.hide()
@@ -507,7 +539,7 @@ PAGES['diagnostic'] = () => {
         // Identity check prevents double-advance if user clicks "Test suivant" before timeout fires.
         var test = runner.current()
         var result = runner.currentResult()
-        if (test && !test.userQuestion && result && result.result === 'pass') {
+        if (shouldAutoAdvance(test, result)) {
             setTimeout(() => {
                 if (runner.currentResult() === result) runner.next()
             }, 1500)
