@@ -346,7 +346,9 @@ class DiagnosticRunner extends EventEmitter {
     }
 
     _requestAudioFocus() {
-        if (PLATFORM === 'ios') return
+        let currentTest = this.tests && this.currentIndex >= 0 ? this.tests[this.currentIndex] : null
+        let allowIOSFocus = currentTest && (currentTest.id === 'T8' || currentTest.id === 'T9')
+        if (PLATFORM === 'ios' && !allowIOSFocus) return
         if (typeof requestAudioFocus === 'function') {
             requestAudioFocus().catch(e => console.warn('[DIAG] audio focus request failed:', e))
         }

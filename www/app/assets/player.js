@@ -104,6 +104,10 @@ function requestAudioFocus() {
         cordova.plugins.audiofocus.requestFocus(
             function() {
                 console.log('[AudioFocus] requested successfully.');
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audiofocus_request_ok', {
+                    visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
+                    platform: typeof PLATFORM !== 'undefined' ? PLATFORM : 'unknown',
+                })
                 restoreDuckedPlayers();
                 resumeAllPlayers();
                 AUDIOFOCUS = 1;  // Focus gained
@@ -112,6 +116,11 @@ function requestAudioFocus() {
             },
             function(error) {
                 console.error('[AudioFocus] failed to request:', error);
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audiofocus_request_fail', {
+                    visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
+                    platform: typeof PLATFORM !== 'undefined' ? PLATFORM : 'unknown',
+                    error: String(error),
+                })
                 let pausedCount = pauseAllPlayers();
                 AUDIOFOCUS = 0;  // No focus
                 showResumeOverlayIfNeeded(pausedCount);
@@ -119,6 +128,14 @@ function requestAudioFocus() {
             }
         );
     });
+}
+
+function shouldRequestAudioFocusForPlay() {
+    if (typeof cordova === 'undefined' || typeof cordova.plugins.audiofocus === 'undefined') return false
+    if (PLATFORM !== 'ios') return AUDIOFOCUS === 0
+
+    // iOS background starts need AVAudioSession active at the moment play() is issued.
+    return typeof APP_VISIBILITY !== 'undefined' && APP_VISIBILITY === 'background'
 }
 
 $('#resume-button').on('click', function() { requestAudioFocus() })
@@ -365,9 +382,18 @@ class PlayerSimple extends EventEmitter
             seek: seek,
         })
 
-        // Only re-request native focus when it was explicitly lost.
-        // Unknown/unavailable focus state (-1) should not block playback.
-        if (PLATFORM == 'ios' || AUDIOFOCUS !== 0) {
+        let needsFocusRequest = shouldRequestAudioFocusForPlay()
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_play_gate', {
+            src: this._src(),
+            visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
+            platform: typeof PLATFORM !== 'undefined' ? PLATFORM : 'unknown',
+            audiofocus: AUDIOFOCUS,
+            request_focus_before_play: needsFocusRequest,
+        })
+
+        // Unknown/unavailable focus state (-1) should not block playback unless
+        // this specific play requires a fresh native audio-session activation.
+        if (!needsFocusRequest) {
             if (!this._player) return
             this._player.play()
 
