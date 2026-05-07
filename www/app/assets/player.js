@@ -138,6 +138,89 @@ function shouldRequestAudioFocusForPlay() {
     return typeof APP_VISIBILITY !== 'undefined' && APP_VISIBILITY === 'background'
 }
 
+function primeHowlForBackground(howl, options) {
+    options = options || {}
+    if (!howl || PLATFORM !== 'ios') return Promise.resolve(false)
+    if (howl.__backgroundPrimed) return Promise.resolve(true)
+    if (howl.__backgroundPrimingPromise) return howl.__backgroundPrimingPromise
+
+    let state = typeof howl.state === 'function' ? howl.state() : 'unknown'
+    if (state !== 'loaded') {
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_prime_skip', {
+            src: options.src || null,
+            reason: options.reason || 'unknown',
+            visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
+            load_state: state,
+        })
+        return Promise.resolve(false)
+    }
+
+    let originalVolume = 1
+    try { originalVolume = howl.volume() } catch (e) {}
+
+    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_prime_attempt', {
+        src: options.src || null,
+        reason: options.reason || 'unknown',
+        visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
+    })
+
+    howl.__isPrimingForBackground = true
+    howl.__backgroundPrimingPromise = new Promise(resolve => {
+        let settled = false
+        let timeoutId = null
+
+        let settle = (ok, extra) => {
+            if (settled) return
+            settled = true
+            if (timeoutId) clearTimeout(timeoutId)
+            howl.__isPrimingForBackground = false
+            howl.__backgroundPrimingPromise = null
+            try { howl.volume(originalVolume) } catch (e) {}
+            if (ok) howl.__backgroundPrimed = true
+
+            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log(ok ? 'audio_prime_ok' : 'audio_prime_fail', Object.assign({
+                src: options.src || null,
+                reason: options.reason || 'unknown',
+                visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
+            }, extra || {}))
+
+            resolve(ok)
+        }
+
+        let onPlay = () => {
+            try {
+                howl.pause()
+                howl.seek(0)
+            }
+            catch (e) {}
+            settle(true)
+        }
+
+        let onPlayError = (id, error) => {
+            try {
+                howl.stop()
+                howl.seek(0)
+            }
+            catch (e) {}
+            settle(false, { error: String(error) })
+        }
+
+        howl.once('play', onPlay)
+        howl.once('playerror', onPlayError)
+        timeoutId = setTimeout(() => settle(false, { error: 'prime-timeout' }), 3000)
+
+        try {
+            howl.volume(0)
+            howl.play()
+        }
+        catch (error) {
+            settle(false, { error: String(error) })
+        }
+    })
+
+    return howl.__backgroundPrimingPromise
+}
+
 $('#resume-button').on('click', function() { requestAudioFocus() })
 $('#resume-overlay').hide();
 
@@ -248,6 +331,10 @@ class PlayerSimple extends EventEmitter
         })
         this._player.on('play', () => {
             if (!this._player) return
+            if (this._player.__isPrimingForBackground) {
+                console.log('PlayerSimple prime play:', this._player._src)
+                return
+            }
             if (!this._playRequested) {
                 console.warn('PlayerSimple play but is not requested ...')
                 this._player.stop()
@@ -289,6 +376,12 @@ class PlayerSimple extends EventEmitter
                     visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
                     load_state: this.loadState(),
                 })
+                if (PLATFORM === 'ios' && APP_VISIBILITY === 'foreground') {
+                    primeHowlForBackground(this._player, {
+                        src: this._src(),
+                        reason: 'player-load'
+                    })
+                }
                 // console.log('PlayerSimple ready:', this._player._src)
             }
         })
@@ -302,6 +395,7 @@ class PlayerSimple extends EventEmitter
             this._resolveGeoTask('loaderror', { error: String(error) })
         })
         this._player.on('playerror', (id, error) => {
+            if (this._player && this._player.__isPrimingForBackground) return
             console.error('PlayerSimple playerror:', this._player ? this._player._src : '?', error)
             this._loadError = true
             this._playRequested = false

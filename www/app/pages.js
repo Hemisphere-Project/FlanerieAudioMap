@@ -521,6 +521,8 @@ PAGES['diagnostic'] = () => {
         if (m.audio_interrupted) parts.push('Audio interrompu ✗')
         if (m.trigger_mode) parts.push('Mode trigger: ' + m.trigger_mode)
         if (m.prewarm_ready !== undefined) parts.push('Préchargé: ' + (m.prewarm_ready ? '✓' : '✗'))
+        if (m.prime_ok !== null && m.prime_ok !== undefined) parts.push('Primé: ' + (m.prime_ok ? '✓' : '✗'))
+        if (m.prime_error) parts.push('Erreur prime: ' + m.prime_error)
         if (m.player_loaded_at_trigger !== undefined) parts.push('Chargé au trigger: ' + (m.player_loaded_at_trigger ? '✓' : '✗'))
         if (m.triggered_in_background !== undefined) parts.push('Trigger arrière-plan: ' + (m.triggered_in_background ? '✓' : '✗'))
         if (m.play_started_in_background !== undefined) parts.push('Play arrière-plan: ' + (m.play_started_in_background ? '✓' : '✗'))

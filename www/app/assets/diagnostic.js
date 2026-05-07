@@ -326,6 +326,11 @@ class DiagnosticRunner extends EventEmitter {
             this.emit('metrics', m)
         })
         player.on('play', () => {
+            if (player.__isPrimingForBackground) {
+                m.prime_ok = true
+                this.emit('metrics', m)
+                return
+            }
             m.play_ok = true
             m.player_state = this._howlState(player)
             m.play_started_in_background = m.is_background === true
@@ -338,6 +343,12 @@ class DiagnosticRunner extends EventEmitter {
             this.emit('metrics', m)
         })
         player.on('playerror', (id, err) => {
+            if (player.__isPrimingForBackground) {
+                m.prime_ok = false
+                m.prime_error = String(err)
+                this.emit('metrics', m)
+                return
+            }
             m.had_error = true
             m.error = String(err)
             m.player_state = this._howlState(player)
@@ -646,6 +657,8 @@ class DiagnosticRunner extends EventEmitter {
         m.prewarm_ready = false
         m.player_loaded = false
         m.player_state = 'missing'
+        m.prime_ok = null
+        m.prime_error = null
         m.trigger_mode = options.prewarm ? 'warm' : 'cold'
         m.triggered_in_background = false
         m.play_started_in_background = false
@@ -664,7 +677,16 @@ class DiagnosticRunner extends EventEmitter {
         }
 
         if (options.prewarm) {
-            ensurePlayer()
+            let prewarmedPlayer = ensurePlayer()
+            if (typeof primeHowlForBackground === 'function') {
+                primeHowlForBackground(prewarmedPlayer, {
+                    src: BASEURL + '/images/background-ok.mp3',
+                    reason: 'diag-prewarm'
+                }).then(ok => {
+                    m.prime_ok = ok
+                    this.emit('metrics', m)
+                })
+            }
         }
 
         let onPause = () => { m.is_background = true; this.emit('metrics', m) }
