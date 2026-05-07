@@ -285,8 +285,9 @@ class Spot extends EventEmitter
 
     updatePosition(pos) 
     {
-        // Near: load if not loaded
-        if (this.player && !this.player.isLoaded() && this.near(pos)) {
+        // Near: load if not loaded — skip if player has a load error (prevents reload loop)
+        let hasError = typeof this.player.hasError === 'function' && this.player.hasError()
+        if (this.player && !this.player.isLoaded() && !hasError && this.near(pos)) {
             telemetryLog('spot_audio_prepare', {
                 spot_type: this._type,
                 step: this._type === 'steps' ? this._index : undefined,
@@ -476,9 +477,12 @@ class Step extends Spot
         // player
         this.player = new PlayerStep()
         this._done = false
+        this._active = false
+        this._skipDoneLogged = false
         this._keepLoadedForUpcomingTrigger = false
         this.player.on('done', () => {
             this._done = true
+            this._active = false
             this.emit('done', this)
         })
 
@@ -532,7 +536,11 @@ class Step extends Spot
         let inside = super.updatePosition(position)
         let borderDistance = this.distanceToBorder(position)
 
-        if (PARCOURS.currentStep() < this._index) this._done = false
+        if (PARCOURS.currentStep() < this._index) {
+            this._done = false
+            this._active = false
+            this._skipDoneLogged = false
+        }
 
         // Handle Offlimit (if media exists) before generic fire logic, so reentry resumes
         // from the paused position instead of being treated as a fresh trigger.
@@ -562,7 +570,10 @@ class Step extends Spot
 
         // Already completed in this run
         if (this._done) {
-            telemetryLog('step_skip_done', {step: this._index, name: this._spot.name})
+            if (!this._skipDoneLogged) {
+                telemetryLog('step_skip_done', {step: this._index, name: this._spot.name})
+                this._skipDoneLogged = true
+            }
             return inside
         }
 
@@ -584,8 +595,17 @@ class Step extends Spot
             return inside
         }
 
+        // If active (fire already called, step loading or playing), block re-fire
+        if (this._active && !this.player.isPlaying() && !this.player.isPaused() && this.near(position) && inside) {
+            telemetryLog('step_refire_blocked', {
+                step: this._index,
+                name: this._spot.name,
+                has_error: typeof this.player.hasError === 'function' ? this.player.hasError() : false,
+            })
+        }
+
         // If inside:
-        if ( this.player && (!this.player.isPlaying() || this.player.isPaused()) && this.near(position) && inside) 
+        if ( this.player && !this._active && (!this.player.isPlaying() || this.player.isPaused()) && this.near(position) && inside)
         {
             let wasCurrentStep = PARCOURS.currentStep() == this._index
 
@@ -647,6 +667,7 @@ class Step extends Spot
             console.log('== ETAPE:', this._index, this._spot.name)
 
             // fire event
+            this._active = true
             this.emit('fire', this)
         }
 
@@ -655,8 +676,9 @@ class Step extends Spot
 
     clear() {
         this._keepLoadedForUpcomingTrigger = false
+        this._active = false
         super.clear()
-        
+
         // Remove from allSteps
         allSteps = allSteps.filter(s => s._index !== this._index)
     }

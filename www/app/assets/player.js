@@ -972,6 +972,11 @@ class PlayerStep extends EventEmitter
         return this.voice.isLoaded() && this.music.isLoaded() && this.ambiant.isLoaded() && this.offlimit.isLoaded() && this.afterplay.isLoaded()
     }
 
+    hasError() {
+        return !!(this.voice._loadError || this.music._loadError || this.ambiant._loadError ||
+                  this.offlimit._loadError || this.afterplay._loadError)
+    }
+
     isReady() {
         return this.voice.isReady() && this.music.isReady() && this.ambiant.isReady() && this.offlimit.isReady() && this.afterplay.isReady()
     }
