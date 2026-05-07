@@ -295,6 +295,7 @@ class DiagnosticRunner extends EventEmitter {
     }
 
     _requestAudioFocus() {
+        if (PLATFORM === 'ios') return
         if (typeof requestAudioFocus === 'function') {
             requestAudioFocus().catch(e => console.warn('[DIAG] audio focus request failed:', e))
         }
