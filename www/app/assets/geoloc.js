@@ -4,6 +4,8 @@ var LAST_AUDIO_CONTEXT_STATE = null
 var AUDIO_CONTEXT_STATE_BOUND = false
 var GPS_CALLBACK_GAP_THRESHOLD = 8000
 var GPS_SLEEP_SUSPECT_THRESHOLD = 15000
+var ACTIVE_GEO_BACKGROUND_TASK = null
+var IOS_GEO_BACKGROUND_TASK_TIMEOUT = 8000
 
 function gpsAccuracyBucket(acc) {
     if (typeof acc !== 'number' || isNaN(acc)) return 'unknown'
@@ -12,6 +14,108 @@ function gpsAccuracyBucket(acc) {
     if (acc <= 40) return 'fair'
     if (acc <= 80) return 'poor'
     return 'bad'
+}
+
+function _geoTaskTelemetry(type, data) {
+    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log(type, data)
+}
+
+function _finishGeoBackgroundTask(task, status, extra) {
+    if (!task || task.ended) return
+
+    task.ended = true
+    if (task.timeoutId) {
+        clearTimeout(task.timeoutId)
+        task.timeoutId = null
+    }
+
+    let payload = Object.assign({
+        taskKey: task.taskKey,
+        reason: task.reason,
+        retained: task.retained,
+        duration_ms: Date.now() - task.startedAt,
+    }, task.meta || {}, extra || {})
+
+    _geoTaskTelemetry('ios_bg_task_end', Object.assign({ status: status }, payload))
+
+    try {
+        if (typeof BackgroundGeolocation !== 'undefined' && BackgroundGeolocation && typeof BackgroundGeolocation.endTask === 'function') {
+            BackgroundGeolocation.endTask(task.taskKey)
+        }
+    }
+    catch (e) {
+        console.warn('[BG-TASK] endTask failed', e)
+    }
+}
+
+function runWithGeoBackgroundTask(taskKey, reason, meta, work) {
+    if (PLATFORM !== 'ios') {
+        work(null)
+        return
+    }
+
+    let task = {
+        taskKey: taskKey,
+        reason: reason,
+        startedAt: Date.now(),
+        retained: false,
+        ended: false,
+        timeoutId: null,
+        meta: Object.assign({ visibility: APP_VISIBILITY }, meta || {})
+    }
+
+    ACTIVE_GEO_BACKGROUND_TASK = task
+    _geoTaskTelemetry('ios_bg_task_begin', {
+        taskKey: task.taskKey,
+        reason: task.reason,
+        visibility: task.meta.visibility,
+        acc: task.meta.acc,
+    })
+
+    try {
+        work(task)
+    }
+    finally {
+        ACTIVE_GEO_BACKGROUND_TASK = null
+        if (!task.retained) {
+            _finishGeoBackgroundTask(task, 'sync-complete')
+        }
+        else {
+            _geoTaskTelemetry('ios_bg_task_deferred', {
+                taskKey: task.taskKey,
+                reason: task.reason,
+                visibility: task.meta.visibility,
+            })
+        }
+    }
+}
+
+function claimBackgroundGeoTask(meta) {
+    if (PLATFORM !== 'ios' || !ACTIVE_GEO_BACKGROUND_TASK) return null
+
+    let task = ACTIVE_GEO_BACKGROUND_TASK
+    task.retained = true
+    task.meta = Object.assign({}, task.meta || {}, meta || {})
+
+    if (!task.timeoutId) {
+        task.timeoutId = setTimeout(() => {
+            _finishGeoBackgroundTask(task, 'timeout', { visibility: APP_VISIBILITY })
+        }, IOS_GEO_BACKGROUND_TASK_TIMEOUT)
+    }
+
+    _geoTaskTelemetry('ios_bg_task_claim', {
+        taskKey: task.taskKey,
+        reason: task.reason,
+        visibility: task.meta.visibility,
+        src: task.meta.src,
+        loaded_before_play: task.meta.loaded_before_play,
+    })
+
+    return task
+}
+
+function resolveBackgroundGeoTask(task, status, meta) {
+    _finishGeoBackgroundTask(task, status, meta)
 }
 
 function logAudioContextState(reason = 'unknown', force = false) {
@@ -692,11 +796,13 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
                     speed: location.speed,
                 }
             }
-            positionCallback(position, {source: 'bg_location', visibility: APP_VISIBILITY});
-            // execute long running task
-            // eg. ajax post location
-            // IMPORTANT: task has to be ended by endTask
-            BackgroundGeolocation.endTask(taskKey);
+            runWithGeoBackgroundTask(taskKey, 'location', {
+                acc: location.accuracy,
+                lat: location.latitude,
+                lng: location.longitude,
+            }, function() {
+                positionCallback(position, {source: 'bg_location', visibility: APP_VISIBILITY});
+            });
         });
     });
 
@@ -717,8 +823,13 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
                     speed: location.speed,
                 }
             }
-            positionCallback(position, {source: 'bg_stationary', visibility: APP_VISIBILITY});
-            BackgroundGeolocation.endTask(taskKey);
+            runWithGeoBackgroundTask(taskKey, 'stationary', {
+                acc: location.accuracy,
+                lat: location.latitude,
+                lng: location.longitude,
+            }, function() {
+                positionCallback(position, {source: 'bg_stationary', visibility: APP_VISIBILITY});
+            });
         });
     });
 
