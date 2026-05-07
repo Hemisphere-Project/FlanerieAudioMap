@@ -1093,32 +1093,35 @@ PAGES['checkaudio'] = () => {
     $('#checkaudio-accept').hide()
     $('#checkaudio-help').hide()
 
-    // Test audio player
+    // Tear down any previous instance before creating a new one
+    if (testplayer) { testplayer.stop(); testplayer.clear(); testplayer = null; }
+
     let ok = true;
-    if (testplayer) testplayer.pause();
 
-    let testpath = BASEURL+'/images/test.mp3';
-    console.log('[AUDIO] testing with ', testpath);
-
-    testplayer = new Howl({
-        src: testpath,
-        loop: true,
-        autoplay: false,
-        volume: 1,
-        html5: (PLATFORM == 'ios')
-    })
-    testplayer.on('play', () => {
-        console.log('[AUDIO] OK!');
-    })
-    testplayer.on('loaderror', (e) => {
-        console.log('[AUDIO] ERROR', e)
+    // Use PlayerSimple so the test exercises the same backend (NativeMediaPlayer on iOS,
+    // Howler on Android/browser) that will be used during the walk.
+    testplayer = new PlayerSimple(true, 0)
+    testplayer.on('loaderror', (src, error) => {
+        console.log('[AUDIO] loaderror', src, error)
         ok = false
         $('#checkaudio-accept').hide()
         $('#checkaudio-help').hide()
         $('#checkaudio-desc').text("Erreur de lecture audio. Votre appareil ne semble pas compatible...");
         $('#checkaudio-desc').css('color', 'red');
     })
-    testplayer.play()
+    testplayer.on('playerror', (src, error) => {
+        console.log('[AUDIO] playerror', src, error)
+        ok = false
+        $('#checkaudio-accept').hide()
+        $('#checkaudio-help').hide()
+        $('#checkaudio-desc').text("Erreur de lecture audio. Votre appareil ne semble pas compatible...");
+        $('#checkaudio-desc').css('color', 'red');
+    })
+    testplayer.on('play', (src) => { console.log('[AUDIO] OK!', src); })
+
+    console.log('[AUDIO] testing via PlayerSimple, basepath:', BASEURL+'/images/');
+    testplayer.load(BASEURL+'/images/', {src: 'test.mp3', master: 1}, false)
+    testplayer.play(0)
 
     TYPEWRITE('checkaudio-desc')
         .pauseFor(4000)
@@ -1128,10 +1131,10 @@ PAGES['checkaudio'] = () => {
                 $('#checkaudio-help').show()
             }
         })
-    
+
     $('#checkaudio-accept').off().on('click', () => {
         testplayer.stop();
-        testplayer.unload()
+        testplayer.clear()
         testplayer = null;
         PAGE('checkbattery')
     })
@@ -1222,7 +1225,7 @@ PAGES['parcours'] = () => {
     
     if (testplayer) {
         testplayer.stop();
-        testplayer.unload();
+        testplayer.clear();
         testplayer = null;
     }
 
@@ -1418,7 +1421,7 @@ PAGES['end'] = () => {
     PARCOURS.stopAudio();
     GPSLOST_PLAYER.stop();
     SILENT_PLAYER.stop();
-    if (testplayer) { testplayer.stop(); testplayer.unload(); testplayer = null; }
+    if (testplayer) { testplayer.stop(); testplayer.clear(); testplayer = null; }
 
     var ending = true
     function end() {

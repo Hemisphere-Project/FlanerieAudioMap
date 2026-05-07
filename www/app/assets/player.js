@@ -257,16 +257,10 @@ class NativeMediaPlayer extends EventEmitter {
         )
     }
 
-    // Fired by cordova-plugin-media when the track completes naturally (not on stop())
+    // Fired by cordova-plugin-media when the track completes naturally (not on stop()).
+    // Looped players use AVAudioPlayer.numberOfLoops = -1 (native infinite loop), so
+    // successCallback never fires for them — no JS roundtrip gap, no session deactivation window.
     _onSuccess() {
-        if (this._loop) {
-            this._positionSec = 0
-            if (this._media) {
-                this._media.seekTo(0)
-                this._media.play()
-            }
-            return
-        }
         this.emit('end', this._src)
     }
 
@@ -351,7 +345,9 @@ class NativeMediaPlayer extends EventEmitter {
         this._stoppedByCall = false
         this._playIntent = true
         this._media.setVolume(this._volume)
-        this._media.play()
+        // numberOfLoops: -1 → AVAudioPlayer.numberOfLoops = -2 (any negative = infinite loop).
+        // CDVSound subtracts 1 from the JS value before assigning to AVAudioPlayer.
+        this._media.play(this._loop ? { numberOfLoops: -1 } : undefined)
     }
 
     pause() {

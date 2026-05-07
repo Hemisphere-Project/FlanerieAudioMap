@@ -305,6 +305,19 @@ class DiagnosticRunner extends EventEmitter {
         return this._trackPlayer(h)
     }
 
+    // On iOS, returns a NativeMediaPlayer (file:// path, no WebKit user-gesture restriction).
+    // Falls back to Howl on Android/browser or when native path cannot be resolved.
+    _makeTestPlayer(src, loop) {
+        if (PLATFORM === 'ios' && typeof NativeMediaPlayer !== 'undefined') {
+            let httpSrc = BASEURL + '/images/' + src
+            let nativeSrc = typeof httpToNativePath === 'function' ? httpToNativePath(httpSrc) : null
+            if (nativeSrc) {
+                return this._trackPlayer(new NativeMediaPlayer(nativeSrc, { loop: !!loop }))
+            }
+        }
+        return this._makeTestHowl(src, loop)
+    }
+
     _howlState(howl) {
         if (!howl) return 'missing'
         try {
@@ -522,7 +535,7 @@ class DiagnosticRunner extends EventEmitter {
 
         this._requestAudioFocus()
 
-        let player = this._makeTestHowl('test.mp3', true)
+        let player = this._makeTestPlayer('test.mp3', true)
         player.on('play', () => { m.play_ok = true; this.emit('metrics', m) })
         player.on('loaderror', (id, err) => { m.had_error = true; this.emit('metrics', m) })
         player.on('playerror', (id, err) => { m.had_error = true; this.emit('metrics', m) })
@@ -586,7 +599,7 @@ class DiagnosticRunner extends EventEmitter {
         m.waiting_for_accuracy = true
         m.distance_from_start = 0
 
-        let player = this._makeTestHowl('background-ok.mp3', false)
+        let player = this._makeTestPlayer('background-ok.mp3', false)
         let originLat = null, originLon = null
         let triggerRadius = 15
 
@@ -676,7 +689,7 @@ class DiagnosticRunner extends EventEmitter {
 
         let ensurePlayer = () => {
             if (player) return player
-            player = this._makeTestHowl('background-ok.mp3', false)
+            player = this._makeTestPlayer('background-ok.mp3', false)
             this._bindDiagAudioPlayer(ctx, player, { mode: m.trigger_mode })
             m.player_state = this._howlState(player)
             this.emit('metrics', m)
@@ -685,7 +698,11 @@ class DiagnosticRunner extends EventEmitter {
 
         if (options.prewarm) {
             let prewarmedPlayer = ensurePlayer()
-            if (typeof primeHowlForBackground === 'function') {
+            if (PLATFORM === 'ios') {
+                // NativeMediaPlayer plays from background natively — no priming needed.
+                m.prime_ok = true
+                this.emit('metrics', m)
+            } else if (typeof primeHowlForBackground === 'function') {
                 primeHowlForBackground(prewarmedPlayer, {
                     src: BASEURL + '/images/background-ok.mp3',
                     reason: 'diag-prewarm'
@@ -761,7 +778,7 @@ class DiagnosticRunner extends EventEmitter {
         m.audio_interrupted = false
 
         this._requestAudioFocus()
-        let player = this._makeTestHowl('test.mp3', true)
+        let player = this._makeTestPlayer('test.mp3', true)
         player.on('play', () => {
             m.play_ok = true
             this.emit('metrics', m)
