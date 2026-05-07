@@ -236,6 +236,7 @@
         <div class="toolbar-row">
             <div id="results-meta" class="results-meta mb-0"></div>
             <div class="d-flex gap-2">
+                <button id="refresh-sessions" class="btn btn-outline-info btn-sm">Refresh</button>
                 <button id="export-summary-csv" class="btn btn-outline-secondary btn-sm">Export CSV</button>
                 <button id="export-summary-json" class="btn btn-outline-secondary btn-sm">Export JSON</button>
             </div>
@@ -273,6 +274,8 @@
     var hydrationCycleToken = 0;
     var groupMapEnabled = false;
     var groupMapRenderToken = 0;
+    var detailEventsVisible = false;
+    var refreshInFlight = false;
 
     function esc(str) {
         var d = document.createElement('div');
@@ -505,6 +508,10 @@
         anchor.click();
         anchor.remove();
         setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
+    }
+
+    function cacheBustUrl(url) {
+        return url + (url.indexOf('?') === -1 ? '?' : '&') + '_=' + Date.now();
     }
 
     function exportFilteredSessionsAsJson() {
@@ -780,6 +787,60 @@
         });
         currentDetailRow = null;
         expandedSessionId = null;
+        detailEventsVisible = false;
+    }
+
+    function clearCurrentDetailRow(preserveExpandedSession) {
+        destroyDetailMap();
+        if (currentDetailRow && currentDetailRow.parentNode) {
+            currentDetailRow.parentNode.removeChild(currentDetailRow);
+        }
+        currentDetailRow = null;
+        if (!preserveExpandedSession) {
+            expandedSessionId = null;
+            detailEventsVisible = false;
+        }
+    }
+
+    function findSessionRow(sessionId) {
+        return Array.prototype.find.call(document.querySelectorAll('#session-list tr[data-session-id]'), function(row) {
+            return row.dataset.sessionId === sessionId;
+        }) || null;
+    }
+
+    function openSessionDetail(sessionId, options) {
+        var opts = options || {};
+        var row = findSessionRow(sessionId);
+        var session = allSessions.find(function(item) { return item.sessionId === sessionId; });
+        if (!row || !session) {
+            if (expandedSessionId === sessionId) {
+                expandedSessionId = null;
+                detailEventsVisible = false;
+            }
+            return;
+        }
+
+        collapseCurrentDetail();
+        expandedSessionId = session.sessionId;
+        detailEventsVisible = !!opts.openEvents;
+        row.classList.add('session-row-active');
+
+        var button = row.querySelector('button');
+        if (button) button.textContent = 'Collapse';
+
+        currentDetailRow = document.createElement('tr');
+        currentDetailRow.innerHTML = '<td colspan="9" class="text-muted">Loading detail...</td>';
+        row.parentNode.insertBefore(currentDetailRow, row.nextSibling);
+
+        loadDetail(session.sessionId, { forceReload: !!opts.forceReload })
+            .then(function(detailData) {
+                if (expandedSessionId !== session.sessionId || !currentDetailRow) return;
+                renderDetailRow(session, detailData, currentDetailRow, { openEvents: !!opts.openEvents });
+            })
+            .catch(function(error) {
+                if (!currentDetailRow) return;
+                currentDetailRow.innerHTML = '<td colspan="9" class="text-danger">Failed to load detail: ' + esc(String(error)) + '</td>';
+            });
     }
 
     function toggleSessionDetail(session, row, button) {
@@ -787,30 +848,15 @@
             collapseCurrentDetail();
             return;
         }
-
-        collapseCurrentDetail();
-        expandedSessionId = session.sessionId;
-        row.classList.add('session-row-active');
-        button.textContent = 'Collapse';
-
-        currentDetailRow = document.createElement('tr');
-        currentDetailRow.innerHTML = '<td colspan="9" class="text-muted">Loading detail...</td>';
-        row.parentNode.insertBefore(currentDetailRow, row.nextSibling);
-
-        loadDetail(session.sessionId)
-            .then(function(detailData) {
-                if (expandedSessionId !== session.sessionId) return;
-                renderDetailRow(session, detailData, currentDetailRow);
-            })
-            .catch(function(error) {
-                currentDetailRow.innerHTML = '<td colspan="9" class="text-danger">Failed to load detail: ' + esc(String(error)) + '</td>';
-            });
+        openSessionDetail(session.sessionId, { openEvents: false });
     }
 
-    function loadDetail(sessionId) {
+    function loadDetail(sessionId, options) {
+        var opts = options || {};
+        if (opts.forceReload) detailCache.delete(sessionId);
         if (detailCache.has(sessionId)) return Promise.resolve(detailCache.get(sessionId));
 
-        return fetch('/telemetry/session/' + encodeURIComponent(sessionId))
+        return fetch(cacheBustUrl('/telemetry/session/' + encodeURIComponent(sessionId)))
             .then(function(response) {
                 if (!response.ok) throw new Error('HTTP ' + response.status);
                 return response.json();
@@ -915,7 +961,8 @@
         }).join('');
     }
 
-    function renderDetailRow(session, data, detailRow) {
+    function renderDetailRow(session, data, detailRow, options) {
+        var opts = options || {};
         var metrics = computeMetrics(data);
         var mapId = 'telemetry-map-' + esc(data.sessionId).replace(/[^a-zA-Z0-9_-]/g, '_');
         var eventPanelId = 'event-panel-' + esc(data.sessionId).replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -965,11 +1012,20 @@
         detailRow.querySelector('[data-action="toggle-events"]').addEventListener('click', function() {
             var panel = document.getElementById(eventPanelId);
             panel.classList.toggle('active');
+            detailEventsVisible = panel.classList.contains('active');
             if (!panel.dataset.rendered) {
                 setupEventPanel(data, filtersId, eventTableId);
                 panel.dataset.rendered = '1';
             }
         });
+
+        if (opts.openEvents) {
+            var panel = document.getElementById(eventPanelId);
+            panel.classList.add('active');
+            setupEventPanel(data, filtersId, eventTableId);
+            panel.dataset.rendered = '1';
+            detailEventsVisible = true;
+        }
 
         detailRow.querySelector('[data-action="delete-session"]').addEventListener('click', function() {
             if (!confirm('Delete session ' + data.sessionId + '?')) return;
@@ -1147,9 +1203,28 @@
         setTimeout(function() { map.invalidateSize(); }, 80);
     }
 
-    function loadSessions() {
+    function setRefreshButtonState(isRefreshing) {
+        var button = document.getElementById('refresh-sessions');
+        if (!button) return;
+        button.disabled = isRefreshing;
+        button.textContent = isRefreshing ? 'Refreshing...' : 'Refresh';
+    }
+
+    function reloadSessions(options) {
+        var opts = options || {};
+        var restoreExpandedSessionId = opts.preserveView ? expandedSessionId : null;
+        var restoreEventsVisible = opts.preserveView ? detailEventsVisible : false;
+
+        hydrationCycleToken += 1;
+        groupMapRenderToken += 1;
+        sessionHydrationPromises.clear();
+        detailCache.clear();
+
+        if (opts.preserveView) clearCurrentDetailRow(true);
+        else clearCurrentDetailRow(false);
+
         document.getElementById('session-list').innerHTML = '<tr><td colspan="9" class="text-muted">Loading...</td></tr>';
-        fetch('/telemetry/sessions')
+        return fetch(cacheBustUrl('/telemetry/sessions'))
             .then(function(response) {
                 if (!response.ok) throw new Error('HTTP ' + response.status);
                 return response.json();
@@ -1158,10 +1233,36 @@
                 allSessions = data;
                 updateParcoursOptions();
                 renderSessions();
+
+                if (restoreExpandedSessionId) {
+                    openSessionDetail(restoreExpandedSessionId, {
+                        forceReload: true,
+                        openEvents: restoreEventsVisible
+                    });
+                }
             })
             .catch(function(error) {
                 document.getElementById('session-list').innerHTML = '<tr><td colspan="9" class="text-danger">Failed to load sessions: ' + esc(String(error)) + '</td></tr>';
             });
+    }
+
+    function refreshSessions() {
+        if (refreshInFlight) return;
+        refreshInFlight = true;
+        setRefreshButtonState(true);
+
+        Promise.resolve()
+            .then(function() {
+                return reloadSessions({ preserveView: true });
+            })
+            .finally(function() {
+                refreshInFlight = false;
+                setRefreshButtonState(false);
+            });
+    }
+
+    function loadSessions() {
+        reloadSessions({ preserveView: false });
     }
 
     document.getElementById('apply-filters').addEventListener('click', function() {
@@ -1169,6 +1270,7 @@
         renderSessions();
     });
 
+    document.getElementById('refresh-sessions').addEventListener('click', refreshSessions);
     document.getElementById('export-summary-json').addEventListener('click', exportFilteredSessionsAsJson);
     document.getElementById('export-summary-csv').addEventListener('click', exportFilteredSessionsAsCsv);
 
