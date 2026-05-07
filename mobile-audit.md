@@ -354,7 +354,7 @@ v1.3.0: new `AudioFocusService.java` starts a `mediaPlayback` foreground service
 
 Requires plugin reinstall: `cordova plugin remove com.maigre.cordova.plugins.audiofocus && cordova plugin add /path/to/fork`
 
-#### C2 Upgrade candidates ✅ CONFIGURED (2026-05-05) — rebuild pending
+#### C2 Upgrade candidates ✅ DONE (2026-05-07) — built and deployed
 
 | Dependency | Was | Now | Relevant impact |
 |---|---|---|---|
@@ -495,6 +495,10 @@ Brief record of closed bugs for reference.
 - **P1.14 Completed-step refire** — `_done` guard in `Step`. (`spot.js`)
 - **P1.16 PlayerStep double `done`** — `_doneFired` in `startAfterplay()`. (`player.js`)
 - **P1.17 Offlimit reentry restarted step** — detect current+paused and resume instead of re-firing. (`spot.js`, `player.js`, `parcours.js`)
+- **Audio loaderror infinite re-fire loop** — `PlayerStep.hasError()` + near-reload guard in `Spot.updatePosition()` blocks reload after loaderror, preventing state reset that triggered 1Hz re-fire. (`player.js`, `spot.js`)
+- **GPS drift re-fire during loading** — `_active` flag in `Step`: set on fire, cleared on done/clear; `!_active` added to fire condition. `step_refire_blocked` telemetry added. (`spot.js`)
+- **`step_skip_done` spam** — `_skipDoneLogged` flag limits emission to once per step completion. (`spot.js`)
+- **`allSteps` global leak on parcours rebuild** — `allSteps = []` added to `Parcours.clear()` as definitive reset after per-step `clear()` calls. (`parcours.js`)
 
 ---
 

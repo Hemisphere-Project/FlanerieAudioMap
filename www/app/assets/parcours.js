@@ -25,6 +25,7 @@ class Parcours extends EventEmitter {
         // Clear internals
         this.spots = {};
         this.coords = null;
+        allSteps = [];
         
         // Clear info
         this.pID = null;
