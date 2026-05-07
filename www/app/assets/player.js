@@ -4,6 +4,11 @@ var DUCKED_PLAYERS = new Map()
 var AUDIOFOCUS = -1  // Audio focus state, -1 means not available, 0 means no focus, 1 means focus gained
 var AUDIOFOCUS_DUCK_FACTOR = 0.25
 
+function showResumeOverlayIfNeeded(pausedCount) {
+    if (pausedCount > 0) $('#resume-overlay').css('display', 'flex');
+    else $('#resume-overlay').hide();
+}
+
 Howler.autoUnlock = true; // Enable automatic context unlocking
 Howler.autoSuspend = false; // Prevent automatic context suspension
 
@@ -18,9 +23,9 @@ document.addEventListener('deviceready', function() {
         if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audiofocus_change', {state: focusState});
         if (focusState === "AUDIOFOCUS_LOSS" || focusState === "AUDIOFOCUS_LOSS_TRANSIENT") {
             if (navigator.vibrate) navigator.vibrate([300]);
-            pauseAllPlayers();
+            let pausedCount = pauseAllPlayers();
             AUDIOFOCUS = 0;
-            $('#resume-overlay').css('display', 'flex');
+            showResumeOverlayIfNeeded(pausedCount);
         } else if (focusState === "AUDIOFOCUS_GAIN") {
             if (navigator.vibrate) navigator.vibrate([100]);
             restoreDuckedPlayers();
@@ -49,13 +54,16 @@ function pauseAllPlayers() {
     // Additive: do not reset PAUSED_PLAYERS — a second call (e.g. document.pause
     // then AUDIOFOCUS_LOSS for the same phone call) must not wipe the list that
     // the first call already built, or resumeAllPlayers() will have nothing to restore.
+    let pausedCount = 0;
     ALL_PLAYERS.forEach(player => {
         if (player.isPlaying() && !PAUSED_PLAYERS.includes(player)) {
             player.pause();
             PAUSED_PLAYERS.push(player);
+            pausedCount++;
             console.log('Paused player:', player._src);
         }
     });
+    return pausedCount;
 }
 
 function resumeAllPlayers() {
@@ -104,9 +112,9 @@ function requestAudioFocus() {
             },
             function(error) {
                 console.error('[AudioFocus] failed to request:', error);
-                pauseAllPlayers();
+                let pausedCount = pauseAllPlayers();
                 AUDIOFOCUS = 0;  // No focus
-                $('#resume-overlay').css('display', 'flex');
+                showResumeOverlayIfNeeded(pausedCount);
                 reject(error);
             }
         );
