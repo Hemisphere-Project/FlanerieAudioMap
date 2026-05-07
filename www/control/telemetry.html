@@ -276,6 +276,10 @@
     var groupMapRenderToken = 0;
     var detailEventsVisible = false;
     var refreshInFlight = false;
+    var detailMapViewState = null;
+    var groupMapViewState = null;
+    var preserveDetailMapViewOnNextRender = false;
+    var preserveGroupMapViewOnNextRender = false;
 
     function esc(str) {
         var d = document.createElement('div');
@@ -414,6 +418,7 @@
 
     function destroyDetailMap() {
         if (detailMap) {
+            detailMapViewState = captureMapView(detailMap, { sessionId: expandedSessionId || null });
             detailMap.remove();
             detailMap = null;
         }
@@ -421,9 +426,28 @@
 
     function destroyGroupMap() {
         if (groupMap) {
+            groupMapViewState = captureMapView(groupMap, { enabled: groupMapEnabled });
             groupMap.remove();
             groupMap = null;
         }
+    }
+
+    function captureMapView(map, extra) {
+        if (!map) return null;
+        var center = map.getCenter();
+        return Object.assign({
+            center: [center.lat, center.lng],
+            zoom: map.getZoom()
+        }, extra || {});
+    }
+
+    function bindMapViewPersistence(map, onUpdate) {
+        if (!map) return;
+        var update = function() {
+            onUpdate(captureMapView(map));
+        };
+        map.on('moveend zoomend', update);
+        update();
     }
 
     function getTrackColor(index) {
@@ -692,7 +716,16 @@
             }).bindTooltip('End ' + item.session.sessionId).addTo(map);
         });
 
-        if (featureGroup.getLayers().length > 0) map.fitBounds(featureGroup.getBounds().pad(0.08));
+        if (preserveGroupMapViewOnNextRender && groupMapViewState) {
+            map.setView(groupMapViewState.center, groupMapViewState.zoom, { animate: false });
+        } else if (featureGroup.getLayers().length > 0) {
+            map.fitBounds(featureGroup.getBounds().pad(0.08));
+        }
+
+        preserveGroupMapViewOnNextRender = false;
+        bindMapViewPersistence(map, function(state) {
+            groupMapViewState = Object.assign({}, state, { enabled: groupMapEnabled });
+        });
         setTimeout(function() { map.invalidateSize(); }, 80);
     }
 
@@ -1196,9 +1229,16 @@
             }).bindTooltip((event.data && event.data.name) || ('Step ' + event.data.step)).addTo(map);
         });
 
-        if (featureGroup.getLayers().length > 0) {
+        if (preserveDetailMapViewOnNextRender && detailMapViewState && detailMapViewState.sessionId === data.sessionId) {
+            map.setView(detailMapViewState.center, detailMapViewState.zoom, { animate: false });
+        } else if (featureGroup.getLayers().length > 0) {
             map.fitBounds(featureGroup.getBounds().pad(0.08));
         }
+
+        preserveDetailMapViewOnNextRender = false;
+        bindMapViewPersistence(map, function(state) {
+            detailMapViewState = Object.assign({}, state, { sessionId: data.sessionId });
+        });
 
         setTimeout(function() { map.invalidateSize(); }, 80);
     }
@@ -1250,6 +1290,8 @@
         if (refreshInFlight) return;
         refreshInFlight = true;
         setRefreshButtonState(true);
+        preserveDetailMapViewOnNextRender = !!(expandedSessionId && detailMap);
+        preserveGroupMapViewOnNextRender = !!(groupMapEnabled && groupMap);
 
         Promise.resolve()
             .then(function() {
