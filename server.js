@@ -310,6 +310,97 @@ app.post('/telemetry-push', (req, res, next) => {
   res.status(200).send('OK');
 });
 
+function normalizeTelemetryKey(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .toLowerCase();
+}
+
+function findParcoursByTelemetryId(parcoursId) {
+  const normalizedTarget = normalizeTelemetryKey(parcoursId);
+  if (!normalizedTarget) return null;
+
+  const parcoursDir = path.join(__dirname, 'parcours');
+  if (!fs.existsSync(parcoursDir)) return null;
+
+  const files = fs.readdirSync(parcoursDir).filter(file => file.endsWith('.json'));
+  for (const file of files) {
+    const fileName = file.replace(/\.json$/i, '');
+    const filePath = path.join(parcoursDir, file);
+    const raw = fs.readFileSync(filePath, 'utf8');
+    const data = JSON.parse(raw);
+    const candidates = [
+      fileName,
+      data && data.info ? data.info.name : '',
+      data && data.pID ? data.pID : ''
+    ].map(normalizeTelemetryKey);
+
+    if (candidates.includes(normalizedTarget)) {
+      return { fileName, data };
+    }
+  }
+
+  return null;
+}
+
+function summarizeTelemetrySessionData(data) {
+  const events = Array.isArray(data.events) ? data.events : [];
+  const gpsEvents = events.filter(event => event.type === 'gps' && event.data && typeof event.data.acc === 'number');
+  const gpsQualitySummaries = events.filter(event => event.type === 'gps_quality_summary');
+  const stepFires = events.filter(event => event.type === 'step_fire');
+  const uniqueSteps = new Set(stepFires
+    .map(event => event.data && event.data.step)
+    .filter(step => Number.isInteger(step)));
+
+  let finalStep = null;
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event.type === 'route_probe' && event.data && Number.isInteger(event.data.currentStep)) {
+      finalStep = event.data.currentStep;
+      break;
+    }
+  }
+
+  const gpsAccuracies = gpsEvents
+    .map(event => Number(event.data.acc))
+    .filter(value => !Number.isNaN(value));
+
+  const gapMaxFromSummary = gpsQualitySummaries.reduce((maxGap, event) => {
+    const value = Number(event.data && event.data.maxGapMs);
+    return Number.isFinite(value) ? Math.max(maxGap, value) : maxGap;
+  }, 0);
+
+  const gapMaxFromEvents = events.reduce((maxGap, event) => {
+    if (event.type !== 'gps_callback_gap') return maxGap;
+    const value = Number(event.data && event.data.gapMs);
+    return Number.isFinite(value) ? Math.max(maxGap, value) : maxGap;
+  }, 0);
+
+  const rejectedFromSummary = gpsQualitySummaries.reduce((sum, event) => {
+    const value = Number(event.data && event.data.rejectedSamples);
+    return Number.isFinite(value) ? sum + value : sum;
+  }, 0);
+
+  return {
+    finalStep,
+    uniqueStepCount: uniqueSteps.size,
+    gpsCount: gpsEvents.length,
+    avgAccuracy: gpsAccuracies.length > 0
+      ? gpsAccuracies.reduce((sum, value) => sum + value, 0) / gpsAccuracies.length
+      : null,
+    maxGapMs: Math.max(gapMaxFromSummary, gapMaxFromEvents) || null,
+    sleepSuspects: events.filter(event => event.type === 'gps_sleep_suspect').length,
+    staleCallbacks: events.filter(event => event.type === 'gps_stale_callback').length,
+    rejectedFixes: rejectedFromSummary || events.filter(event => event.type === 'gps_trigger_rejected').length,
+    heartbeatRecoveries: events.filter(event => event.type === 'gps_heartbeat_ok').length,
+    gpsLostCount: events.filter(event => event.type === 'gps_state' && event.data && event.data.state === 'lost').length,
+    audioErrors: events.filter(event => event.type === 'audio_loaderror' || event.type === 'audio_playerror').length
+  };
+}
+
 // Telemetry: list sessions
 app.get('/telemetry/sessions', requireAdmin, (req, res) => {
   const telemetryDir = path.join(__dirname, 'telemetry');
@@ -320,13 +411,27 @@ app.get('/telemetry/sessions', requireAdmin, (req, res) => {
     if (!file.endsWith('.json')) return;
     try {
       const data = JSON.parse(fs.readFileSync(path.join(telemetryDir, file), 'utf8'));
+      const events = Array.isArray(data.events) ? data.events : [];
+      const summary = summarizeTelemetrySessionData(data);
       sessions.push({
         sessionId: data.sessionId,
         parcoursId: data.parcoursId,
         parcoursName: data.parcoursName,
+        deviceModel: data.client && data.client.deviceModel ? data.client.deviceModel : '',
         startTime: data.startTime,
-        eventCount: data.events.length,
-        lastEvent: data.events.length > 0 ? data.events[data.events.length - 1].t : null
+        eventCount: events.length,
+        lastEvent: events.length > 0 ? events[events.length - 1].t : null,
+        finalStep: summary.finalStep,
+        uniqueStepCount: summary.uniqueStepCount,
+        gpsCount: summary.gpsCount,
+        avgAccuracy: summary.avgAccuracy,
+        maxGapMs: summary.maxGapMs,
+        sleepSuspects: summary.sleepSuspects,
+        staleCallbacks: summary.staleCallbacks,
+        rejectedFixes: summary.rejectedFixes,
+        heartbeatRecoveries: summary.heartbeatRecoveries,
+        gpsLostCount: summary.gpsLostCount,
+        audioErrors: summary.audioErrors
       });
     } catch(e) { /* skip corrupt files */ }
   });
@@ -343,6 +448,12 @@ app.get('/telemetry/session/:id', requireAdmin, (req, res) => {
 
   const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
   res.json(data);
+});
+
+app.get('/telemetry/parcours/:id', requireAdmin, (req, res) => {
+  const match = findParcoursByTelemetryId(req.params.id);
+  if (!match) return res.status(404).json({ error: 'Parcours not found' });
+  res.json({ fileName: match.fileName, data: match.data });
 });
 
 // Telemetry: delete session
