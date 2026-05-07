@@ -401,6 +401,23 @@ function summarizeTelemetrySessionData(data) {
   };
 }
 
+function getTelemetryDeviceLabel(client) {
+  if (!client || typeof client !== 'object') return '';
+
+  const manufacturer = client.deviceManufacturer || client.manufacturer || '';
+  const model = client.deviceModel || client.model || '';
+  const platform = client.devicePlatform || client.platform || '';
+  const parts = [];
+
+  if (manufacturer && model && !String(model).toLowerCase().includes(String(manufacturer).toLowerCase())) {
+    parts.push(manufacturer);
+  }
+  if (model) parts.push(model);
+  if (!parts.length && platform) parts.push(platform);
+
+  return parts.join(' ');
+}
+
 // Telemetry: list sessions
 app.get('/telemetry/sessions', requireAdmin, (req, res) => {
   const telemetryDir = path.join(__dirname, 'telemetry');
@@ -417,7 +434,9 @@ app.get('/telemetry/sessions', requireAdmin, (req, res) => {
         sessionId: data.sessionId,
         parcoursId: data.parcoursId,
         parcoursName: data.parcoursName,
-        deviceModel: data.client && data.client.deviceModel ? data.client.deviceModel : '',
+        deviceModel: getTelemetryDeviceLabel(data.client),
+        devicePlatform: data.client && (data.client.devicePlatform || data.client.platform) ? (data.client.devicePlatform || data.client.platform) : '',
+        deviceManufacturer: data.client && (data.client.deviceManufacturer || data.client.manufacturer) ? (data.client.deviceManufacturer || data.client.manufacturer) : '',
         startTime: data.startTime,
         eventCount: events.length,
         lastEvent: events.length > 0 ? events[events.length - 1].t : null,

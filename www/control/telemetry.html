@@ -62,6 +62,34 @@
             border-radius: 10px;
             border: 1px solid rgba(255,255,255,0.06);
         }
+        .comparison-map {
+            height: 360px;
+            border-radius: 12px;
+            overflow: hidden;
+            margin-top: 12px;
+        }
+        .comparison-legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 10px;
+        }
+        .comparison-legend-item {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 8px;
+            border-radius: 999px;
+            background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(255,255,255,0.06);
+            font-size: 0.82rem;
+        }
+        .comparison-legend-color {
+            width: 10px;
+            height: 10px;
+            border-radius: 999px;
+            display: inline-block;
+        }
         .gps-badges {
             display: flex;
             flex-wrap: wrap;
@@ -235,11 +263,16 @@
 
     <script>
     var allSessions = [];
-    var currentMap = null;
+    var detailMap = null;
+    var groupMap = null;
     var currentDetailRow = null;
     var expandedSessionId = null;
     var detailCache = new Map();
     var parcoursCache = new Map();
+    var sessionHydrationPromises = new Map();
+    var hydrationCycleToken = 0;
+    var groupMapEnabled = false;
+    var groupMapRenderToken = 0;
 
     function esc(str) {
         var d = document.createElement('div');
@@ -278,6 +311,123 @@
         return value + 'ms';
     }
 
+    function hasOwn(obj, key) {
+        return Object.prototype.hasOwnProperty.call(obj, key);
+    }
+
+    function coalesceMetric(target, key, fallback) {
+        if (!hasOwn(target, key) || target[key] == null) target[key] = fallback;
+    }
+
+    function extractDeviceLabel(client) {
+        if (!client || typeof client !== 'object') return '';
+        var manufacturer = client.deviceManufacturer || client.manufacturer || '';
+        var model = client.deviceModel || client.model || '';
+        var platform = client.devicePlatform || client.platform || '';
+        var parts = [];
+
+        if (manufacturer && model && String(model).toLowerCase().indexOf(String(manufacturer).toLowerCase()) === -1) {
+            parts.push(manufacturer);
+        }
+        if (model) parts.push(model);
+        if (!parts.length && platform) parts.push(platform);
+        return parts.join(' ');
+    }
+
+    function getSessionDeviceLabel(session) {
+        return session.deviceModel || extractDeviceLabel(session.client || null) || '-';
+    }
+
+    function needsSessionHydration(session) {
+        if (session._hydrationComplete || session._hydrationFailed) return false;
+        return !session.deviceModel
+            || !hasOwn(session, 'gpsCount')
+            || !hasOwn(session, 'avgAccuracy')
+            || !hasOwn(session, 'maxGapMs')
+            || !hasOwn(session, 'sleepSuspects')
+            || !hasOwn(session, 'staleCallbacks')
+            || !hasOwn(session, 'rejectedFixes')
+            || !hasOwn(session, 'heartbeatRecoveries')
+            || !hasOwn(session, 'gpsLostCount')
+            || !hasOwn(session, 'audioErrors')
+            || !hasOwn(session, 'uniqueStepCount');
+    }
+
+    function mergeSessionSummaryFromDetail(session, data) {
+        var metrics = computeMetrics(data);
+        var client = data.client || {};
+
+        session.deviceModel = session.deviceModel || extractDeviceLabel(client);
+        session.devicePlatform = session.devicePlatform || client.devicePlatform || client.platform || '';
+        session.deviceManufacturer = session.deviceManufacturer || client.deviceManufacturer || client.manufacturer || '';
+        session.client = session.client || client;
+
+        coalesceMetric(session, 'finalStep', metrics.finalStep);
+        coalesceMetric(session, 'uniqueStepCount', metrics.uniqueSteps);
+        coalesceMetric(session, 'gpsCount', metrics.gpsCount);
+        coalesceMetric(session, 'avgAccuracy', metrics.avgAccuracy);
+        coalesceMetric(session, 'maxGapMs', metrics.maxGapMs);
+        coalesceMetric(session, 'sleepSuspects', metrics.sleepSuspects);
+        coalesceMetric(session, 'staleCallbacks', metrics.staleCallbacks);
+        coalesceMetric(session, 'rejectedFixes', metrics.rejectedFixes);
+        coalesceMetric(session, 'heartbeatRecoveries', metrics.heartbeatRecoveries);
+        coalesceMetric(session, 'gpsLostCount', metrics.gpsLost);
+        coalesceMetric(session, 'audioErrors', metrics.audioErrors);
+
+        session._hydrationComplete = true;
+    }
+
+    function hydrateSession(session) {
+        if (!session || !session.sessionId) return Promise.resolve(false);
+        if (!needsSessionHydration(session)) return Promise.resolve(false);
+        if (sessionHydrationPromises.has(session.sessionId)) return sessionHydrationPromises.get(session.sessionId);
+
+        var promise = loadDetail(session.sessionId)
+            .then(function(data) {
+                mergeSessionSummaryFromDetail(session, data);
+                sessionHydrationPromises.delete(session.sessionId);
+                return true;
+            })
+            .catch(function() {
+                session._hydrationFailed = true;
+                sessionHydrationPromises.delete(session.sessionId);
+                return false;
+            });
+
+        sessionHydrationPromises.set(session.sessionId, promise);
+        return promise;
+    }
+
+    function hydrateFilteredSessions(filtered) {
+        var pending = filtered.filter(needsSessionHydration).slice(0, 12);
+        if (!pending.length) return;
+
+        var token = ++hydrationCycleToken;
+        Promise.all(pending.map(hydrateSession)).then(function(results) {
+            if (token !== hydrationCycleToken) return;
+            if (results.some(Boolean)) renderSessions();
+        });
+    }
+
+    function destroyDetailMap() {
+        if (detailMap) {
+            detailMap.remove();
+            detailMap = null;
+        }
+    }
+
+    function destroyGroupMap() {
+        if (groupMap) {
+            groupMap.remove();
+            groupMap = null;
+        }
+    }
+
+    function getTrackColor(index) {
+        var palette = ['#0dcaf0', '#ffc107', '#20c997', '#fd7e14', '#ff6b6b', '#6f42c1', '#adb5bd', '#7ae582'];
+        return palette[index % palette.length];
+    }
+
     function precisionBadge(session) {
         var accuracy = Number(session.avgAccuracy);
         if (!Number.isFinite(accuracy)) return '<span class="badge text-bg-secondary">gps ?</span>';
@@ -311,7 +461,7 @@
         return {
             sessionId: session.sessionId,
             parcours: session.parcoursName || session.parcoursId || '',
-            device: session.deviceModel || '',
+            device: getSessionDeviceLabel(session),
             startTime: session.startTime,
             durationMs: getSessionDuration(session),
             eventCount: session.eventCount,
@@ -370,10 +520,13 @@
     function renderComparisonPanel(filtered) {
         var panel = document.getElementById('comparison-panel');
         if (filtered.length === 0) {
+            destroyGroupMap();
             panel.className = 'comparison-panel empty';
             panel.innerHTML = '';
             return;
         }
+
+        destroyGroupMap();
 
         var sorted = filtered.slice().sort(function(left, right) {
             return new Date(left.startTime).getTime() - new Date(right.startTime).getTime();
@@ -400,7 +553,7 @@
         var rows = sorted.map(function(session) {
             return '<tr>' +
                 '<td><code>' + esc(session.sessionId) + '</code></td>' +
-                '<td>' + esc(session.deviceModel || '-') + '</td>' +
+                '<td>' + esc(getSessionDeviceLabel(session)) + '</td>' +
                 '<td>' + esc(formatDuration(Math.max(0, new Date(session.startTime).getTime() - firstStart))) + '</td>' +
                 '<td>' + (session.finalStep == null ? '-' : esc(session.finalStep)) + '</td>' +
                 '<td>' + esc(session.gpsCount == null ? '-' : session.gpsCount) + '</td>' +
@@ -416,9 +569,124 @@
         panel.innerHTML =
             '<div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">' +
                 '<div><strong>Filtered comparison</strong><div class="text-secondary small">Side-by-side view of the currently filtered sessions.</div></div>' +
+                '<button class="btn btn-outline-secondary btn-sm" data-action="toggle-group-map">' + (groupMapEnabled ? 'Hide map' : 'Show map') + '</button>' +
             '</div>' +
             '<div class="comparison-grid">' + cards + '</div>' +
-            '<div class="comparison-table-wrap"><table class="table table-sm mb-0"><thead><tr><th>Session</th><th>Device</th><th>Offset</th><th>Step</th><th>GPS</th><th>Avg acc</th><th>Max gap</th><th>Sleep</th><th>Stale</th><th>Audio</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+            '<div class="comparison-table-wrap"><table class="table table-sm mb-0"><thead><tr><th>Session</th><th>Device</th><th>Offset</th><th>Step</th><th>GPS</th><th>Avg acc</th><th>Max gap</th><th>Sleep</th><th>Stale</th><th>Audio</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+            (groupMapEnabled ? '<div class="mt-3"><div id="group-map-status" class="text-secondary small">Loading filtered tracks...</div><div id="group-map" class="comparison-map"></div><div id="group-map-legend" class="comparison-legend"></div></div>' : '');
+
+        panel.querySelector('[data-action="toggle-group-map"]').addEventListener('click', function() {
+            groupMapEnabled = !groupMapEnabled;
+            renderSessions();
+        });
+
+        if (groupMapEnabled) renderGroupMap(sorted);
+    }
+
+    function renderGroupMap(filtered) {
+        var mapEl = document.getElementById('group-map');
+        var statusEl = document.getElementById('group-map-status');
+        var legendEl = document.getElementById('group-map-legend');
+        if (!groupMapEnabled || !mapEl || !statusEl || !legendEl) return;
+
+        var sessions = filtered.slice(0, 8);
+        var omittedCount = Math.max(0, filtered.length - sessions.length);
+        var token = ++groupMapRenderToken;
+
+        statusEl.textContent = 'Loading filtered tracks...';
+        legendEl.innerHTML = '';
+
+        Promise.all(sessions.map(function(session) {
+            return loadDetail(session.sessionId).then(function(data) {
+                mergeSessionSummaryFromDetail(session, data);
+                return { session: session, data: data };
+            });
+        }))
+            .then(function(items) {
+                if (token !== groupMapRenderToken || !groupMapEnabled) return null;
+                var parcoursIds = [...new Set(items.map(function(item) {
+                    return item.data.parcoursId || item.data.parcoursName || '';
+                }).filter(Boolean))];
+                if (parcoursIds.length === 1) {
+                    return loadParcoursOverlay(parcoursIds[0]).then(function(overlay) {
+                        return { items: items, overlay: overlay, parcoursIds: parcoursIds };
+                    });
+                }
+                return { items: items, overlay: null, parcoursIds: parcoursIds };
+            })
+            .then(function(payload) {
+                if (!payload || token !== groupMapRenderToken || !groupMapEnabled) return;
+                drawGroupMap(mapEl.id, payload.items, payload.overlay);
+                var statusParts = [payload.items.length + ' track' + (payload.items.length > 1 ? 's' : '')];
+                if (omittedCount > 0) statusParts.push('+' + omittedCount + ' omitted');
+                if (payload.parcoursIds.length > 1) statusParts.push('zones hidden for mixed parcours');
+                statusEl.textContent = statusParts.join(' · ');
+                legendEl.innerHTML = payload.items.map(function(item, index) {
+                    var color = getTrackColor(index);
+                    return '<div class="comparison-legend-item"><span class="comparison-legend-color" style="background:' + esc(color) + '"></span><code>' + esc(item.session.sessionId) + '</code><span>' + esc(getSessionDeviceLabel(item.session)) + '</span></div>';
+                }).join('');
+            })
+            .catch(function(error) {
+                if (token !== groupMapRenderToken || !groupMapEnabled) return;
+                destroyGroupMap();
+                statusEl.textContent = 'Failed to load group map: ' + String(error);
+            });
+    }
+
+    function drawGroupMap(mapId, items, overlay) {
+        destroyGroupMap();
+
+        var map = L.map(mapId).setView([45.75, 4.85], 15);
+        groupMap = map;
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '&copy; OpenStreetMap'
+        }).addTo(map);
+
+        var featureGroup = L.featureGroup().addTo(map);
+
+        if (overlay && overlay.data && overlay.data.spots) {
+            var spots = overlay.data.spots;
+            (spots.steps || []).forEach(function(step, index) {
+                addSpotGeometry(map, featureGroup, step, '#ffc107', 0.07, 'Step ' + index + ':');
+            });
+            (spots.offlimits || []).forEach(function(spot, index) {
+                addSpotGeometry(map, featureGroup, spot, '#dc3545', 0.08, 'Offlimit ' + index + ':');
+            });
+        }
+
+        items.forEach(function(item, index) {
+            var color = getTrackColor(index);
+            var gpsEvents = getGpsEvents(item.data.events || []);
+            if (!gpsEvents.length) return;
+
+            var latlngs = gpsEvents.map(function(event) { return [event.data.lat, event.data.lng]; });
+            var track = L.polyline(latlngs, {
+                color: color,
+                weight: 3,
+                opacity: 0.92
+            }).bindTooltip(item.session.sessionId + ' · ' + getSessionDeviceLabel(item.session)).addTo(map);
+            featureGroup.addLayer(track);
+
+            L.circleMarker(latlngs[0], {
+                radius: 5,
+                color: color,
+                fillColor: color,
+                fillOpacity: 0.7,
+                weight: 1
+            }).bindTooltip('Start ' + item.session.sessionId).addTo(map);
+
+            L.circleMarker(latlngs[latlngs.length - 1], {
+                radius: 5,
+                color: '#ffffff',
+                fillColor: color,
+                fillOpacity: 0.95,
+                weight: 1
+            }).bindTooltip('End ' + item.session.sessionId).addTo(map);
+        });
+
+        if (featureGroup.getLayers().length > 0) map.fitBounds(featureGroup.getBounds().pad(0.08));
+        setTimeout(function() { map.invalidateSize(); }, 80);
     }
 
     function updateParcoursOptions() {
@@ -479,7 +747,7 @@
             row.innerHTML =
                 '<td><code>' + esc(session.sessionId) + '</code></td>' +
                 '<td>' + esc(session.parcoursName || session.parcoursId || '-') + '</td>' +
-                '<td>' + esc(session.deviceModel || '-') + '</td>' +
+                '<td>' + esc(getSessionDeviceLabel(session)) + '</td>' +
                 '<td>' + esc(new Date(session.startTime).toLocaleString('fr-FR')) + '</td>' +
                 '<td>' + formatDuration(getSessionDuration(session)) + '</td>' +
                 '<td>' + esc(session.eventCount) + '</td>' +
@@ -496,13 +764,12 @@
                 list.appendChild(currentDetailRow);
             }
         });
+
+        hydrateFilteredSessions(filtered);
     }
 
     function collapseCurrentDetail() {
-        if (currentMap) {
-            currentMap.remove();
-            currentMap = null;
-        }
+        destroyDetailMap();
         if (currentDetailRow && currentDetailRow.parentNode) {
             currentDetailRow.parentNode.removeChild(currentDetailRow);
         }
@@ -826,13 +1093,10 @@
     }
 
     function renderMap(mapId, data, overlay) {
-        if (currentMap) {
-            currentMap.remove();
-            currentMap = null;
-        }
+        destroyDetailMap();
 
         var map = L.map(mapId).setView([45.75, 4.85], 15);
-        currentMap = map;
+        detailMap = map;
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             maxZoom: 19,
             attribution: '&copy; OpenStreetMap'
