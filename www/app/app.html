@@ -95,6 +95,15 @@
             <button id="checkbackground-force" class="btn btn-primary btn-page">Passer cette étape</button>
         </div>
 
+        <div id="checkbatteryopt" class="page">
+            <h3 id="checkbatteryopt-title">Batterie</h3>
+            <p id="checkbatteryopt-desc">Pour que le parcours fonctionne correctement en arrière-plan, l'optimisation de batterie doit être désactivée pour Flanerie.</p>
+            <p id="checkbatteryopt-oem" style="display:none;"></p>
+            <button id="checkbatteryopt-settings" class="btn btn-primary btn-page" style="display:none;">Paramètres batterie</button>
+            <button id="checkbatteryopt-oem-btn" class="btn btn-primary btn-page" style="display:none;">Paramètres fabricant</button>
+            <button id="checkbatteryopt-retry" class="btn btn-primary btn-page" style="display:none;">J'ai désactivé</button>
+        </div>
+
         <div id="nodata" class="page">
             <div class="content">
                 <p>Aucun parcours n'est chargé sur votre appareil.</p>
@@ -125,6 +134,7 @@
             <div class="content">
                 <p>Choisissez un parcours:</p>
                 <ul id="select-parcours"></ul>
+                <button id="select-diagnostic" class="dev btn btn-primary btn-page" style="margin-top:30px;">Diagnostic appareil</button>
             </div>
         </div>
 
@@ -211,6 +221,29 @@
             </div>
         </div>
 
+        <div id="diagnostic" class="page">
+            <h2 id="diag-title">Diagnostic</h2>
+            <div id="diag-progress"></div>
+            <div id="diag-progress-detail"></div>
+            <div id="diag-progress-bar"><div id="diag-progress-fill"></div></div>
+            <div id="diag-instructions"></div>
+            <div id="diag-metrics"></div>
+            <div id="diag-question" style="display:none;">
+                <p id="diag-question-text"></p>
+                <button id="diag-yes" class="btn btn-primary">Oui</button>
+                <button id="diag-no" class="btn btn-primary">Non</button>
+            </div>
+            <div id="diag-result" style="display:none;">
+                <span id="diag-result-badge"></span>
+            </div>
+            <div id="diag-report" style="display:none;"></div>
+            <div id="diag-actions">
+                <button id="diag-start" class="btn btn-primary btn-page">Démarrer</button>
+                <button id="diag-next" class="btn btn-primary btn-page">Suivant</button>
+                <button id="diag-skip" class="btn btn-primary">Passer</button>
+            </div>
+        </div>
+
         <div id="sidepanel" class="dev">
             <h4 id="logs-title">LOGS</h4>
             <div id="logs"></div>
@@ -218,6 +251,11 @@
 
         <div id="resume-overlay">
             <button id="resume-button" class="btn btn-primary">Reprendre l'écoute</button>
+        </div>
+
+        <div id="gpslost-overlay" style="display:none;">
+            <p id="gpslost-overlay-desc">Signal GPS perdu.<br/><br/>Déplacez-vous vers un espace dégagé.<br/>La progression reprend automatiquement dès le retour du signal.</p>
+            <button id="gpslost-resume" class="btn btn-primary">Continuer l'écoute sans GPS</button>
         </div>
 
     </div>
@@ -229,6 +267,7 @@
     <script src="$BASEPATH$/assets/geoloc.js"></script>
     <script src="$BASEPATH$/assets/player.js"></script>
     <script src="$BASEPATH$/assets/spot.js"></script>
+    <script src="$BASEPATH$/assets/diagnostic.js"></script>
     <script src="$BASEPATH$/pages.js"></script>
 </body>
 </html>

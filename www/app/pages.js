@@ -6,11 +6,6 @@ var COLOR_CURRENT = '#43FAF2';
 
 var DEVMODE = localStorage.getItem('devmode') == 'true' || false;
 
-var PLATFORM = 'browser';
-try {
-    if (cordova.platformId) PLATFORM = cordova.platformId;
-} catch (e) {}
-
 // GLOBALS
 //
 var noSleep = null;
@@ -31,12 +26,17 @@ PARCOURS.restore(); // Restore parcours from localStorage
 // PAGE SELECT
 //
 var PAGES = {}
+var PAGES_CLEANUP = {}
 var currentPage = '';
 var NOTIF_TIMER = null;
 var NOTIF_PERMISSION_TIMER = null;
 var NOTIF_PERMISSION_ATTEMPTS = 0;
 const NOTIF_PERMISSION_POLL_MS = 1000;
 const NOTIF_PERMISSION_MAX_ATTEMPTS = 15;
+var BATTOPT_TIMER = null;
+var BATTOPT_ATTEMPTS = 0;
+const BATTOPT_POLL_MS = 1500;
+const BATTOPT_MAX_ATTEMPTS = 10;
 
 function clearWakeupNotification(clearPending = true)
 {
@@ -63,12 +63,28 @@ function clearNotificationPermissionCheck()
     NOTIF_PERMISSION_ATTEMPTS = 0;
 }
 
-function PAGE(name, ...args) 
+function clearBatteryOptCheck()
+{
+    if (BATTOPT_TIMER) {
+        clearTimeout(BATTOPT_TIMER);
+        BATTOPT_TIMER = null;
+    }
+    BATTOPT_ATTEMPTS = 0;
+}
+
+PAGES_CLEANUP['parcours']           = () => {
+    clearWakeupNotification();
+    GPSLOST_PLAYER.stop();
+    $('#gpslost-overlay').hide();
+};
+PAGES_CLEANUP['checknotifications'] = () => clearNotificationPermissionCheck();
+PAGES_CLEANUP['checkbatteryopt']    = () => clearBatteryOptCheck();
+
+function PAGE(name, ...args)
 {
     if (currentPage === name) return;
     console.log('PAGE', name, args);
-    if (currentPage === 'parcours' && name !== 'parcours') clearWakeupNotification();
-    if (currentPage === 'checknotifications' && name !== 'checknotifications') clearNotificationPermissionCheck();
+    if (PAGES_CLEANUP[currentPage]) PAGES_CLEANUP[currentPage]();
     document.querySelectorAll('.page').forEach(page => page.style.display = 'none');
     try { document.getElementById(name).style.display = 'block'; } catch (e) {}
     currentPage = name;
@@ -189,6 +205,513 @@ PAGES['select'] = (list) => {
 
     // Only one parcours => click it
     if (list.length == 1) select.querySelector('li').click();
+
+    // DEV: diagnostic button
+    $('#select-diagnostic').off().on('click', () => PAGE('diagnostic'));
+}
+
+//
+// DIAGNOSTIC
+//
+PAGES['diagnostic'] = () => {
+    var runner = DIAGNOSTIC
+    var $title = $('#diag-title')
+    var $progress = $('#diag-progress')
+    var $progressDetail = $('#diag-progress-detail')
+    var $progressFill = $('#diag-progress-fill')
+    var $instructions = $('#diag-instructions')
+    var $metrics = $('#diag-metrics')
+    var $question = $('#diag-question')
+    var $qtext = $('#diag-question-text')
+    var $result = $('#diag-result')
+    var $badge = $('#diag-result-badge')
+    var $report = $('#diag-report')
+    var $start = $('#diag-start')
+    var $next = $('#diag-next')
+    var $skip = $('#diag-skip')
+    var liveMetrics = {}
+    var progressTimer = null
+    var answerAdvanceTimer = null
+    var reportUploadPromise = null
+
+    // Start a telemetry session for diagnostics
+    TELEMETRY.start('__diagnostic__', 'Diagnostic')
+
+    function stopProgressTimer() {
+        if (progressTimer) clearInterval(progressTimer)
+        progressTimer = null
+    }
+
+    function clearAnswerAdvanceTimer() {
+        if (answerAdvanceTimer) clearTimeout(answerAdvanceTimer)
+        answerAdvanceTimer = null
+    }
+
+    function formatRemaining(ms) {
+        return Math.max(0, Math.ceil(ms / 1000)) + 's restantes'
+    }
+
+    function setProgressState(ratio, detail) {
+        var bounded = Math.max(0, Math.min(1, ratio || 0))
+        $progressFill.css('width', Math.round(bounded * 100) + '%')
+        $progressDetail.text(detail || '')
+    }
+
+    function showResultBadge(result) {
+        $result.show()
+        if (result.result === 'pass') $badge.attr('class', 'badge-pass').text('✓ PASS')
+        else if (result.result === 'fail') $badge.attr('class', 'badge-fail').text('✗ FAIL')
+        else $badge.attr('class', 'badge-skip').text('— SKIP')
+    }
+
+    function logDiagnosticResult(result) {
+        TELEMETRY.log('diag_result', { test_id: result.test_id, result: result.result, metrics: result.metrics, user_answer: result.user_answer })
+    }
+
+    function timedProgress(test, result) {
+        if (!test || !test.duration || !result || result.ended_at || !result.started_at) return null
+        var elapsed = Date.now() - result.started_at
+        var ratio = Math.max(0, Math.min(1, elapsed / test.duration))
+        return {
+            ratio: ratio,
+            detail: Math.round(ratio * 100) + '% • ' + formatRemaining(test.duration - elapsed)
+        }
+    }
+
+    function displayNumber(index) {
+        return index + 1
+    }
+
+    function displayLabel(index) {
+        return 'Test ' + displayNumber(index)
+    }
+
+    function actualProgress(test, metrics) {
+        if (!test || !metrics) return null
+
+        if (test.id === 'T0') {
+            var startupRatio = (metrics.gps_started ? 0.5 : 0) + (metrics.first_callback ? 0.5 : 0)
+            if (!startupRatio) return null
+            return {
+                ratio: startupRatio,
+                detail: metrics.first_callback ? 'Premier callback GPS reçu' : 'GPS démarré, attente du premier callback'
+            }
+        }
+
+        if (test.id === 'T1') {
+            if (metrics.fix_obtained && metrics.accuracy_min < 20) {
+                return { ratio: 1, detail: 'Fix obtenu, précision < 20m' }
+            }
+            if (metrics.fix_obtained) {
+                var accuracyRatio = 0.6
+                if (metrics.accuracy_min !== undefined && metrics.accuracy_min < 999) {
+                    accuracyRatio = Math.max(0.6, Math.min(0.95, 1 - ((metrics.accuracy_min - 20) / 25)))
+                }
+                return {
+                    ratio: accuracyRatio,
+                    detail: metrics.accuracy_min !== undefined && metrics.accuracy_min < 999
+                        ? 'Fix obtenu, meilleure précision: ' + Math.round(metrics.accuracy_min) + 'm'
+                        : 'Fix obtenu, amélioration de la précision…'
+                }
+            }
+            if (metrics.raw_callbacks !== undefined && metrics.raw_callbacks > 0) {
+                return {
+                    ratio: 0.25,
+                    detail: metrics.raw_callbacks + ' callback(s) GPS reçus, attente d\'un fix utile'
+                }
+            }
+        }
+
+        if (test.id === 'T5' && metrics.positions !== undefined) {
+            return null
+        }
+
+        if (test.id === 'T6') {
+            if (metrics.triggered) return { ratio: 1, detail: 'Zone atteinte, son déclenché' }
+            if (metrics.waiting_for_accuracy) return { ratio: 0.1, detail: 'Attente d\'une précision GPS < 15m' }
+            if (metrics.distance_from_start !== undefined) {
+                return {
+                    ratio: Math.min(metrics.distance_from_start / 15, 1),
+                    detail: 'Rayon depuis le depart: ' + metrics.distance_from_start + '/15m'
+                }
+            }
+        }
+
+        if (test.id === 'T7' && metrics.bg_positions !== undefined) {
+            return {
+                ratio: Math.min(metrics.bg_positions / 3, 1),
+                detail: Math.min(metrics.bg_positions, 3) + '/3 positions GPS en arrière-plan'
+            }
+        }
+
+        if (test.id === 'T10' && metrics.heartbeat_count !== undefined) {
+            var expectedHeartbeats = Math.max(1, Math.round(test.duration / 15000))
+            return {
+                ratio: Math.min(metrics.heartbeat_count / expectedHeartbeats, 1),
+                detail: metrics.heartbeat_count + '/' + expectedHeartbeats + ' heartbeats keepalive'
+            }
+        }
+
+        if (test.id === 'T9') {
+            if (metrics.triggered) return { ratio: 1, detail: 'Zone atteinte, son déclenché' }
+            if (metrics.waiting_for_accuracy) return { ratio: 0.1, detail: 'Attente d\'une précision GPS < 15m' }
+            if (metrics.distance_from_start !== undefined) {
+                return {
+                    ratio: Math.min(metrics.distance_from_start / 10, 0.85),
+                    detail: 'Rayon depuis le depart: ' + metrics.distance_from_start + '/10m'
+                }
+            }
+            if (metrics.bg_positions !== undefined && metrics.bg_positions > 0) {
+                return {
+                    ratio: Math.min(metrics.bg_positions / 3, 0.35),
+                    detail: metrics.bg_positions + ' positions reçues téléphone verrouillé'
+                }
+            }
+        }
+
+        return null
+    }
+
+    function renderProgress() {
+        var test = runner.current()
+        var result = runner.currentResult()
+        var metrics = result && result.ended_at ? result.metrics : liveMetrics
+
+        if (!test || !result) {
+            setProgressState(0, '')
+            return
+        }
+
+        if (test.id === 'T11') {
+            setProgressState(1, 'Rapport final')
+            return
+        }
+
+        if (!result.started_at) {
+            setProgressState(0, 'Appuyez sur Demarrer quand vous etes pret')
+            return
+        }
+
+        if (result.result === 'skip') {
+            setProgressState(1, 'Test passé')
+            return
+        }
+
+        if (result.ended_at) {
+            setProgressState(1, test.userQuestion && result.result !== 'skip' ? 'Réponse requise' : 'Test terminé')
+            return
+        }
+
+        if (test.id === 'T5') {
+            var elapsed = Date.now() - result.started_at
+            var seconds = Math.min(Math.ceil(elapsed / 1000), Math.ceil(test.duration / 1000))
+            var usefulPositions = metrics.positions || 0
+            var distance = metrics.total_distance !== undefined ? Math.round(metrics.total_distance) + 'm' : '0m'
+            setProgressState(
+                Math.max(0, Math.min(1, elapsed / test.duration)),
+                'Minimum: ' + Math.min(usefulPositions, 5) + '/5 positions utiles • Duree: ' + seconds + '/' + Math.ceil(test.duration / 1000) + 's • Distance: ' + distance
+            )
+            return
+        }
+
+        var timed = timedProgress(test, result)
+        var actual = actualProgress(test, metrics)
+        var preferActual = test.id === 'T0' || test.id === 'T1'
+        var chosen = timed || { ratio: 0, detail: '' }
+        if (preferActual && actual) chosen = actual
+        else if (actual && actual.ratio >= chosen.ratio) chosen = actual
+        setProgressState(chosen.ratio, chosen.detail)
+    }
+
+    function startProgressTimer() {
+        stopProgressTimer()
+        renderProgress()
+        var test = runner.current()
+        if (!test || test.id === 'T11' || !test.duration) return
+        progressTimer = setInterval(renderProgress, 500)
+    }
+
+    function scheduleAnswerAdvance(result) {
+        clearAnswerAdvanceTimer()
+        setProgressState(1, 'Réponse enregistrée, suite…')
+        $next.hide()
+        $skip.hide()
+        answerAdvanceTimer = setTimeout(() => {
+            if (runner.currentResult() === result) runner.next()
+        }, 700)
+    }
+
+    function shouldAutoAdvance(test, result) {
+        return !!(test && result && test.auto && !test.userQuestion && result.result === 'pass')
+    }
+
+    function setActionState(test, options) {
+        var started = !!options.started
+        var showResult = !!options.showResult
+        var isReport = test.id === 'T11'
+
+        if (isReport) {
+            $start.hide()
+            $next.text('Fermer').show()
+            $skip.hide()
+            return
+        }
+
+        if (!started) {
+            $start.show()
+            $next.hide()
+            $skip.show()
+            return
+        }
+
+        $start.hide()
+        if (showResult) {
+            return
+        }
+
+        if (test.auto) {
+            $next.hide()
+            $skip.show()
+        } else {
+            $next.text('Terminer le test').show()
+            $skip.show()
+        }
+    }
+
+    function showTest(test, index) {
+        var total = runner.tests.length - 1 // exclude report test from count
+        var isReport = test.id === 'T11'
+        liveMetrics = {}
+        reportUploadPromise = null
+        clearAnswerAdvanceTimer()
+        $title.text(test.name)
+        $progress.text(isReport ? 'Terminé' : 'Phase ' + test.phase + ' — ' + displayLabel(index) + '/' + total)
+        $instructions.text(test.instructions)
+        $metrics.text('')
+        $question.hide()
+        $result.hide()
+        $report.hide()
+        setActionState(test, { started: false, showResult: false })
+
+        if (isReport) {
+            showReport()
+        }
+
+        startProgressTimer()
+    }
+
+    function showMetrics(m) {
+        liveMetrics = { ...m }
+        var parts = []
+        // T0: GPS startup
+        if (m.plugin_available !== undefined) parts.push('Plugin: ' + (m.plugin_available ? 'OK' : 'absent'))
+        if (m.gps_started !== undefined) parts.push('GPS: ' + (m.gps_started ? 'démarré ✓' : 'erreur ✗'))
+        if (m.first_callback) parts.push('1er callback ✓')
+        if (m.accuracy_on_start !== undefined && m.accuracy_on_start !== null) parts.push('Précision init: ' + m.accuracy_on_start + 'm')
+        if (m.error) parts.push('Erreur: ' + m.error)
+        // T1: GPS acquisition + accuracy
+        if (m.accuracy_min !== undefined && m.accuracy_min < 999) parts.push('Précision: ' + Math.round(m.accuracy_min) + 'm')
+        if (m.raw_accuracy !== undefined) parts.push('Brut: ' + m.raw_accuracy + 'm')
+        if (m.raw_callbacks !== undefined && m.raw_callbacks > 0) parts.push('Callbacks bruts: ' + m.raw_callbacks)
+        if (m.positions !== undefined) parts.push('Positions utiles: ' + m.positions)
+        if (m.first_fix_ms !== undefined && m.first_fix_ms !== null) parts.push('1er fix: ' + (m.first_fix_ms / 1000).toFixed(1) + 's')
+        // T3/T4: Audio
+        if (m.play_ok) parts.push('Audio: OK ✓')
+        if (m.had_error) parts.push('Audio: ERREUR ✗')
+        if (m.audio_interrupted) parts.push('Audio interrompu ✗')
+        if (m.ctx_state !== undefined) parts.push('Ctx: ' + m.ctx_state)
+        if (m.ctx_state_on_unlock !== undefined) parts.push('Ctx@unlock: ' + m.ctx_state_on_unlock)
+        if (m.ctx_resumed !== undefined) parts.push('Ctx reprise: ' + m.ctx_resumed)
+        if (m.ctx_alive !== undefined) parts.push('Ctx vivant: ' + (m.ctx_alive ? '✓' : '✗'))
+        // T5/T6/T7/T9: movement
+        if (m.total_distance !== undefined) parts.push('Distance parcourue: ' + Math.round(m.total_distance) + 'm')
+        if (m.max_gap_ms !== undefined && m.max_gap_ms > 0) parts.push('Gap max: ' + (m.max_gap_ms / 1000).toFixed(1) + 's')
+        if (m.gps_gap_max_ms !== undefined && m.gps_gap_max_ms > 0) parts.push('Gap GPS: ' + (m.gps_gap_max_ms / 1000).toFixed(1) + 's')
+        if (m.waiting_for_accuracy) parts.push('Attente précision…')
+        if (m.distance_from_start !== undefined) parts.push('Rayon depuis depart: ' + m.distance_from_start + 'm')
+        if (m.triggered) parts.push('Déclenché ✓')
+        if (m.fg_positions !== undefined) parts.push('Pos. avant-plan: ' + m.fg_positions)
+        if (m.bg_positions !== undefined) parts.push('Pos. arrière-plan: ' + m.bg_positions)
+        // T10: keepalive + motion
+        if (m.heartbeat_count !== undefined) parts.push('Heartbeats: ' + m.heartbeat_count)
+        if (m.gps_lost_events !== undefined && m.gps_lost_events > 0) parts.push('GPS perdus: ' + m.gps_lost_events)
+        if (m.gps_recovered !== undefined && m.gps_recovered > 0) parts.push('GPS récupérés: ' + m.gps_recovered)
+        if (m.motion_stationary !== undefined) parts.push('Immobile détecté: ' + (m.motion_stationary ? '✓' : '—'))
+        $metrics.text(parts.join(' | '))
+        renderProgress()
+    }
+
+    function showResult(result) {
+        var test = runner.tests[runner.currentIndex]
+        stopProgressTimer()
+        $start.hide()
+        $result.hide()
+
+        // If there's a user question, show it
+        if (test.userQuestion && result.result !== 'skip') {
+            askQuestion(test.userQuestion)
+        } else if (shouldAutoAdvance(test, result)) {
+            showResultBadge(result)
+            logDiagnosticResult(result)
+            $next.hide()
+            $skip.hide()
+        } else {
+            showResultBadge(result)
+            logDiagnosticResult(result)
+            $next.text('Test suivant →').show()
+            $skip.hide()
+        }
+
+        renderProgress()
+    }
+
+    function askQuestion(text) {
+        $qtext.text(text)
+        $question.show()
+        $next.hide()
+        $skip.hide()
+    }
+
+    function showReport() {
+        stopProgressTimer()
+        var report = runner.getReport()
+        var reportResult = runner.currentResult()
+        $instructions.text('Résultats du diagnostic :')
+        $metrics.text('')
+        $skip.hide()
+        $question.hide()
+        $result.hide()
+        setProgressState(0.95, 'Envoi du rapport de télémétrie…')
+
+        if (reportResult && !reportResult.started_at) {
+            reportResult.started_at = Date.now()
+            reportResult.result = 'running'
+        }
+
+        var lines = []
+        report.tests.forEach((r, reportIndex) => {
+            var icon = r.result === 'pass' ? '✓' : r.result === 'fail' ? '✗' : '—'
+            var userNote = ''
+            if (r.user_answer === true) userNote = ' [utilisateur: oui]'
+            if (r.user_answer === false) userNote = ' [utilisateur: non]'
+            lines.push(icon + ' ' + displayLabel(reportIndex) + ' ' + r.test_name + ': ' + r.result.toUpperCase() + userNote)
+        })
+        lines.push('')
+        lines.push('Plateforme: ' + report.platform)
+        lines.push('Appareil: ' + report.device)
+        lines.push('Batterie: ' + (report.battery || '?') + '%')
+        $report.text(lines.join('\n')).show()
+
+        // Upload report via telemetry
+        TELEMETRY.log('diag_report', report)
+        reportUploadPromise = Promise.resolve(TELEMETRY.flush()).then((flushResult) => {
+            var ok = !!(flushResult && flushResult.ok)
+            if (reportResult) {
+                reportResult.ended_at = Date.now()
+                reportResult.result = ok ? 'pass' : 'fail'
+                reportResult.metrics = {
+                    telemetry_flush: ok ? 'ok' : ((flushResult && flushResult.skipped) ? 'skipped' : 'failed')
+                }
+            }
+            showResultBadge({ result: ok ? 'pass' : 'fail' })
+            setProgressState(1, ok ? 'Rapport télémétrique envoyé' : 'Échec envoi télémétrique')
+            return flushResult
+        })
+
+        $next.text('Fermer').show()
+    }
+
+    // Wire events
+    runner.clearAllListeners()  // clear previous listeners
+
+    runner.on('test', (test, index) => showTest(test, index))
+    runner.on('started', (test) => {
+        setActionState(test, { started: true, showResult: false })
+        renderProgress()
+    })
+    runner.on('metrics', (m) => showMetrics(m))
+    runner.on('autoFinish', () => {
+        runner.finishCurrent()
+        // Auto tests without a user question that passed: advance automatically after a brief pause.
+        // Identity check prevents double-advance if user clicks "Test suivant" before timeout fires.
+        var test = runner.current()
+        var result = runner.currentResult()
+        if (shouldAutoAdvance(test, result)) {
+            setTimeout(() => {
+                if (runner.currentResult() === result) runner.next()
+            }, 1500)
+        }
+    })
+    runner.on('result', (result) => {
+        showResult(result)
+    })
+    runner.on('complete', () => {
+        stopProgressTimer()
+        clearAnswerAdvanceTimer()
+        PAGE('select')
+    })
+
+    // Button handlers
+    $next.off().on('click', () => {
+        var test = runner.current()
+        if (!test) { PAGE('select'); return }
+        var result = runner.currentResult()
+
+        // On report page, close
+        if (test.id === 'T11') {
+            PAGE('select')
+            return
+        }
+
+        if (result && !result.started_at) {
+            runner.startCurrent()
+            return
+        }
+
+        // If result already shown, advance
+        if (result && result.ended_at) {
+            runner.next()
+        } else {
+            // Manual test: finish it
+            runner.finishCurrent()
+        }
+    })
+
+    $start.off().on('click', () => {
+        runner.startCurrent()
+    })
+
+    $skip.off().on('click', () => {
+        runner.skip()
+    })
+
+    // User question buttons
+    $('#diag-yes').off().on('click', () => {
+        var result = runner.currentResult()
+        if (!result) return
+        if (result) result.user_answer = true
+        TELEMETRY.log('diag_user_answer', { test_id: result.test_id, answer: true })
+        showResultBadge(result)
+        logDiagnosticResult(result)
+        $question.hide()
+        scheduleAnswerAdvance(result)
+    })
+
+    $('#diag-no').off().on('click', () => {
+        var result = runner.currentResult()
+        if (!result) return
+        result.user_answer = false
+        // Override result to fail if user says no
+        result.result = 'fail'
+        TELEMETRY.log('diag_user_answer', { test_id: result.test_id, answer: false })
+        showResultBadge(result)
+        logDiagnosticResult(result)
+        $question.hide()
+        scheduleAnswerAdvance(result)
+    })
+
+    // Start the runner
+    runner.start()
 }
 
 //
@@ -332,9 +855,15 @@ PAGES['confirmgeo'] = () => {
                 PAGE('startgeo')
             })
             .catch((e) => {
-                console.log('GEO NOT AUTHORIZED');
+                console.log('GEO NOT AUTHORIZED', e);
+                if (e === 'gps-error-authorization' && PLATFORM === 'ios') {
+                    // User picked "While Using App" — iOS initial dialog has no "Always" option.
+                    // Show guidance immediately instead of silently polling.
+                    $('#confirmgeo-desc').html(`Vous avez autorisé la localisation <u>"Pendant l'utilisation"</u>. Pour fonctionner lorsque le téléphone est en poche écran éteint, l'application a besoin de l'autorisation <u>"Toujours"</u>.<br><br>Réglages > Confidentialité > Services de localisation > Flanerie > <u>"Toujours"</u>`);
+                    $('#confirmgeo-settings').show().text('Réglages');
+                    $('#confirmgeo-accept').hide();
+                }
                 recheck = setTimeout(() => checkAuth(), 1000);
-                onError()
             })
     }
     checkAuth()
@@ -375,16 +904,17 @@ PAGES['checknotifications'] = () => {
     $('#checknotifications-desc').html(defaultMessage);
     $('#checknotifications-retry').hide().off();
 
-    // Not Android or no permissions plugin: skip
-    if (PLATFORM != 'android' || cordova.plugins.permissions == undefined) 
-        return PAGE('rdv');
+    // Not Android or no permissions plugin: skip notifications, still check battery opt
+    if (PLATFORM != 'android' || cordova.plugins.permissions == undefined)
+        return PAGE('checkbatteryopt');
 
-    // Check Android version >= 13
-    var apiLevel = parseInt(device.version.split('.')[0], 10); // "13" for Android 13
-    if (apiLevel < 13) return PAGE('rdv');
+    // Check Android version >= 13 (POST_NOTIFICATIONS required since API 33)
+    var apiLevel = parseInt(device.version.split('.')[0], 10);
+    if (apiLevel < 13) return PAGE('checkbatteryopt');
 
     $('#checknotifications-settings').show().off().on('click', () => GEO.showAppSettings());
     let permissionRequested = false;
+    var notifStartTime = Date.now();
 
     function queueCheck() {
         NOTIF_PERMISSION_TIMER = setTimeout(checkNotif, NOTIF_PERMISSION_POLL_MS);
@@ -409,8 +939,12 @@ PAGES['checknotifications'] = () => {
         permissions.checkPermission(permissions.POST_NOTIFICATIONS, function(status) {
             console.log('Notification permission status:', status.hasPermission);
             if (status.hasPermission) {
-                if (APP_VISIBILITY == 'foreground') PAGE('rdv');
-                else queueCheck();
+                if (APP_VISIBILITY == 'foreground') {
+                    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('notif_permission', {granted: true, elapsed: Date.now() - notifStartTime});
+                    PAGE('checkbatteryopt');
+                } else {
+                    queueCheck();
+                }
                 return;
             }
 
@@ -429,13 +963,85 @@ PAGES['checknotifications'] = () => {
             }
 
             queueCheck();
-            }, function(e) {
-                // Error handling
-                console.error('Error checking notification permission', e);
-                return PAGE('rdv');
-            });
+        }, function(e) {
+            console.error('Error checking notification permission', e);
+            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('notif_permission', {granted: false, reason: 'error', error: String(e)});
+            return PAGE('rdv');
+        });
     }
     checkNotif();
+}
+
+//
+// CHECK BATTERY OPTIMIZATION (Android 6+ / API 23+)
+// Requires: snt1017/cordova-plugin-power-optimization
+// Hard-blocks startup until the app is whitelisted from Android battery optimization.
+// OEM-specific restrictions are detected via HaveProtectedAppsCheck() — no hardcoded list.
+//
+PAGES['checkbatteryopt'] = () => {
+    if (DEVMODE) return PAGE('rdv');
+
+    const plugin = (typeof cordova !== 'undefined' && cordova.plugins && cordova.plugins.PowerOptimization)
+        ? cordova.plugins.PowerOptimization : null;
+
+    if (!plugin || PLATFORM !== 'android' || typeof device === 'undefined') return PAGE('rdv');
+
+    var apiLevel = parseInt(device.version.split('.')[0], 10);
+    if (apiLevel < 23) return PAGE('rdv');
+
+    clearBatteryOptCheck();
+
+    $('#checkbatteryopt-settings').hide().off().on('click', () => plugin.RequestOptimizationsMenu());
+    $('#checkbatteryopt-oem-btn').hide().off().on('click', () => plugin.ProtectedAppCheck(true));
+    $('#checkbatteryopt-retry').hide().off().on('click', () => { clearBatteryOptCheck(); check(); });
+    $('#checkbatteryopt-oem').hide();
+
+    // Detect OEM-specific battery restriction layers (Samsung, Xiaomi, Huawei, etc.)
+    plugin.HaveProtectedAppsCheck()
+        .then(hasOEM => {
+            if (hasOEM && currentPage === 'checkbatteryopt') {
+                $('#checkbatteryopt-oem').show().text(
+                    'Votre téléphone a des réglages de batterie spécifiques. Ouvrez les paramètres fabricant et autorisez Flanerie en arrière-plan.'
+                );
+                $('#checkbatteryopt-oem-btn').show();
+            }
+        })
+        .catch(() => {});
+
+    var dialogShown = false;
+    function check() {
+        BATTOPT_TIMER = null;
+        if (currentPage !== 'checkbatteryopt') return;
+
+        plugin.IsIgnoringBatteryOptimizations()
+            .then(isIgnoring => {
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('battery_opt', { ignoring: isIgnoring, manufacturer: device.manufacturer, apiLevel });
+                if (isIgnoring) { PAGE('rdv'); return; }
+
+                // First failure: trigger native dialog (ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                if (!dialogShown) {
+                    dialogShown = true;
+                    plugin.RequestOptimizations()
+                        .catch(() => $('#checkbatteryopt-settings').show()); // fallback if dialog unavailable
+                }
+
+                BATTOPT_ATTEMPTS++;
+                if (BATTOPT_ATTEMPTS >= BATTOPT_MAX_ATTEMPTS) {
+                    $('#checkbatteryopt-retry').show();
+                    $('#checkbatteryopt-settings').show();
+                    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('battery_opt', { blocked: true, manufacturer: device.manufacturer });
+                    return;
+                }
+                BATTOPT_TIMER = setTimeout(check, BATTOPT_POLL_MS);
+            })
+            .catch(error => {
+                console.error('[BATTOPT] check error:', error);
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('battery_opt', { error: String(error) });
+                PAGE('rdv');
+            });
+    }
+
+    check();
 }
 
 //
@@ -600,24 +1206,23 @@ PAGES['sas'] = () => {
 // PARCOURS
 //
 var SILENT_PLAYER = new PlayerSimple(true, 0);
-SILENT_PLAYER.load(BASEURL+'/images/', 'flanerie.mp3', false);
+SILENT_PLAYER.load(BASEURL+'/images/', {src: 'flanerie.mp3', master: 1}, false);
 
 PAGES['parcours'] = () => {
 
-    SILENT_PLAYER.play(); // Play silent track
+    SILENT_PLAYER.play(); // Play silent track to keep audio session alive
     scheduleWakeupNotification();
     
-    // Reuse the check-audio player slot, but keep only one silent keepalive player.
     if (testplayer) {
         testplayer.stop();
-        testplayer.unload()
+        testplayer.unload();
         testplayer = null;
     }
 
     console.log('PARCOURS', PARCOURS);
     // if (!PARCOURS.valid()) return PAGE('select')
 
-    if (Howler.ctx) Howler.ctx.resume();
+    resumeAudioContext('parcours');
 
     var isResume = PARCOURS.valid() && PARCOURS.currentStep() >= 0;
 
@@ -712,8 +1317,33 @@ PAGES['parcours'] = () => {
         if (s._index + 1 == PARCOURS.spots.steps.length) {
             console.log('END OF PARCOURS')
             TELEMETRY.end();
+            if (walkEndTimeout) clearTimeout(walkEndTimeout);
             if (!DEVMODE) PAGE('end')
         }
+    })
+
+    // Safety: if last step fires but done never comes (audio load failure), end after 5 minutes
+    var walkEndTimeout = null;
+    PARCOURS.on('fire', function onLastStepFire(s) {
+        if (s._type != 'steps') return
+        if (s._index + 1 == PARCOURS.spots.steps.length) {
+            walkEndTimeout = setTimeout(() => {
+                if (currentPage === 'parcours' && PARCOURS.currentStep() + 1 == PARCOURS.spots.steps.length) {
+                    console.warn('Walk end timeout: last step done event never received, ending parcours');
+                    TELEMETRY.log('walk_end_timeout', {step: s._index, name: s._spot.name});
+                    TELEMETRY.end();
+                    if (!DEVMODE) PAGE('end');
+                }
+            }, 5 * 60 * 1000); // 5 minutes
+        }
+    })
+
+    // Offlimit telemetry
+    PARCOURS.on('enter', (s) => {
+        if (s._type === 'offlimits') TELEMETRY.log('offlimit_enter', {name: s._spot.name, step: PARCOURS.currentStep()});
+    })
+    PARCOURS.on('leave', (s) => {
+        if (s._type === 'offlimits') TELEMETRY.log('offlimit_leave', {name: s._spot.name, step: PARCOURS.currentStep()});
     })
 
     // INIT PARCOURS
@@ -776,6 +1406,12 @@ PAGES['parcours'] = () => {
 // END
 //
 PAGES['end'] = () => {
+
+    // Cleanup: stop all background audio
+    PARCOURS.stopAudio();
+    GPSLOST_PLAYER.stop();
+    SILENT_PLAYER.stop();
+    if (testplayer) { testplayer.stop(); testplayer.unload(); testplayer = null; }
 
     var ending = true
     function end() {
@@ -880,62 +1516,75 @@ $('#logs-title').on('click', (e) => {
 });
 
 // GPS LOST
-var GPSLOST_PLAYER = new Howl({
-        src: BASEURL+'/images/gpslost.mp3',
-        loop: true,
-        autoplay: false,
-        volume: 1,
-        html5: (PLATFORM == 'ios')
-    })
+var GPSLOST_PLAYER = new PlayerSimple(true, 0);
+GPSLOST_PLAYER.load(BASEURL+'/images/', {src: 'gpslost.mp3', master: 1}, false);
 
-GEO.stateUpdateTimeout = (PLATFORM == 'android') ? 10 * 1000 : 5 * 60 * 1000; // 10s on Android, 5 min on iOS
+GEO.stateUpdateTimeout = (PLATFORM == 'android') ? 10 * 1000 : 30 * 1000; // 10s on Android, 30s on iOS
 GEO.on('stateUpdate', (state) => {
     if (state == 'lost') {
-        if (currentPage != 'parcours') return;                                  // only if on parcours paged
+        if (currentPage != 'parcours') return;                                  // only if on parcours page
         if (GEO.mode() == 'simulate') return;                                   // not in simulate mode
         if (PARCOURS.currentStep() == PARCOURS.spots.steps.length - 1) return;  // not if last step
-        if (AUDIOFOCUS == 0) return
+        if (AUDIOFOCUS == 0) return;
+        if (GEO.motionIsStationary) return;                                     // standing still — gap is expected, keepalive handles it
         console.warn('GEO lost position');
-        pauseAllPlayers()
+        TELEMETRY.log('gps_lost', {step: PARCOURS.currentStep()});
+        if (navigator.vibrate) navigator.vibrate([500, 200, 500]);
+        pauseAllPlayers();
         GPSLOST_PLAYER.play();
+        $('#gpslost-overlay').css('display', 'flex');
     }
     if (state == 'ok') {
         if (currentPage != 'parcours') return; // only if on parcours page
-        if (AUDIOFOCUS == 0) return
+        if (AUDIOFOCUS == 0) return;
         console.log('GEO position ok');
+        TELEMETRY.log('gps_recovered', {step: PARCOURS.currentStep()});
+        if (navigator.vibrate) navigator.vibrate([200]);
         GPSLOST_PLAYER.stop();
         resumeAllPlayers();
+        $('#gpslost-overlay').hide();
     }
     console.log('GEO stateUpdate', state, currentPage, AUDIOFOCUS);
+})
+
+$('#gpslost-resume').on('click', () => {
+    TELEMETRY.log('gps_force_resume', {step: PARCOURS.currentStep()});
+    GPSLOST_PLAYER.stop();
+    resumeAllPlayers();
+    $('#gpslost-overlay').hide();
 })
 
 
 /// NOTIFICATIONS TRIGGER
 // Trigger a silent notification
+// DISABLED: silent:true makes getBuilder() return null on Android so fireEvent("trigger") is never
+// reached; on iOS trigger only fires in foreground. The chain delivers zero keepalive on either
+// platform. Android keepalive = BackgroundGeolocation foreground service. iOS = UIBackgroundModes
+// location. Set to true only to re-enable for debugging.
+const NOTIF_CHAIN_ENABLED = false;
 const NOTIF_REPEAT = 1 * 59 * 1000; // 59 seconds
 var NOTIF_COUNTER = 37;
 function scheduleWakeupNotification() {
+    if (PLATFORM == 'ios') return  // iOS keepalive is location-based; notifications accumulate silently
+    if (!NOTIF_CHAIN_ENABLED) return
     clearWakeupNotification(false)
     if (currentPage !== 'parcours') {
         clearWakeupNotification()
         return
     }
-    if (PLATFORM != 'android' && PLATFORM != 'ios') return
+    if (PLATFORM != 'android') return
     if (typeof cordova === 'undefined' || !cordova.plugins || !cordova.plugins.notification || !cordova.plugins.notification.local) {
         console.warn('NOTIF: cordova.plugins.notification.local not available, notifications will not work');
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('notif_schedule', {ok: false, reason: 'plugin_missing'});
         return
     }
-
-    // cordova.plugins.notification.local.clear(999, () => {
-    //     console.log('NOTIF: cleared wakeup notification');
-    // });
 
     cordova.plugins.notification.local.schedule({
         id: NOTIF_COUNTER,
         text: 'Flanerie en cours..',
         trigger: { at: new Date(Date.now() + NOTIF_REPEAT) },
         sound: null,
-        silent: false,
+        silent: true,
         launch: false,
         foreground: false
     });
@@ -943,8 +1592,8 @@ function scheduleWakeupNotification() {
     NOTIF_TIMER = setTimeout(() => {
         NOTIF_TIMER = null;
         scheduleWakeupNotification()
-    }, NOTIF_REPEAT); // Clear after 59 seconds
-    console.log('NOTIF: Prepare next wakeup notification');
+    }, NOTIF_REPEAT);
+    console.log('NOTIF: Scheduled next wakeup notification');
 }
 
 document.addEventListener('deviceready', () => {
@@ -966,8 +1615,10 @@ document.addEventListener('deviceready', () => {
                     console.log('NOTIF: cleared wakeup notification', notification.id);
                 });
                 
-                // Refresh coordination logic if on parcours page
-                // if (currentPage === 'parcours') scheduleWakeupNotification()
+                resumeAudioContext('notif_wakeup');
+
+                // Schedule next notification directly (setTimeout is unreliable in background)
+                if (currentPage === 'parcours') scheduleWakeupNotification();
             }
         });
     }

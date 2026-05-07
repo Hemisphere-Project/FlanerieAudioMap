@@ -1,6 +1,13 @@
 var ALL_PLAYERS = []
 var PAUSED_PLAYERS = []  // Interrupted players that are paused and can be resumed later
+var DUCKED_PLAYERS = new Map()
 var AUDIOFOCUS = -1  // Audio focus state, -1 means not available, 0 means no focus, 1 means focus gained
+var AUDIOFOCUS_DUCK_FACTOR = 0.25
+
+function showResumeOverlayIfNeeded(pausedCount) {
+    if (pausedCount > 0) $('#resume-overlay').css('display', 'flex');
+    else $('#resume-overlay').hide();
+}
 
 Howler.autoUnlock = true; // Enable automatic context unlocking
 Howler.autoSuspend = false; // Prevent automatic context suspension
@@ -11,24 +18,26 @@ document.addEventListener('deviceready', function() {
         console.warn('[AudioFocus] plugin not available. Audio focus will not be handled.');
         return;
     }
-    cordova.plugins.audiofocus.onFocusChange( function(focusState) {
-            console.log('[AudioFocus] change:', focusState);
-            if (focusState === "AUDIOFOCUS_LOSS" || focusState === "AUDIOFOCUS_LOSS_TRANSIENT") {
-                // Pause your audio playback here
-                pauseAllPlayers();
-                AUDIOFOCUS = 0;  // No focus
-                $('#resume-overlay').show();
-            } else if (focusState === "AUDIOFOCUS_GAIN") {
-                // Resume your audio playback here
-                resumeAllPlayers();
-                AUDIOFOCUS = 1;  // Focus gained
-                $('#resume-overlay').hide();
-            } else if (focusState === "AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK") {
-                // Optionally lower your audio volume ("duck")
-            }
-        });
+    cordova.plugins.audiofocus.onFocusChange(function(focusState) {
+        console.log('[AudioFocus] change:', focusState);
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audiofocus_change', {state: focusState});
+        if (focusState === "AUDIOFOCUS_LOSS" || focusState === "AUDIOFOCUS_LOSS_TRANSIENT") {
+            if (navigator.vibrate) navigator.vibrate([300]);
+            let pausedCount = pauseAllPlayers();
+            AUDIOFOCUS = 0;
+            showResumeOverlayIfNeeded(pausedCount);
+        } else if (focusState === "AUDIOFOCUS_GAIN") {
+            if (navigator.vibrate) navigator.vibrate([100]);
+            restoreDuckedPlayers();
+            resumeAllPlayers();
+            AUDIOFOCUS = 1;
+            $('#resume-overlay').hide();
+        } else if (focusState === "AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK") {
+            duckPlayingPlayers();
+        }
+    });
     console.log('[AudioFocus] plugin available. Audio focus will be handled.');
-    requestAudioFocus()
+    requestAudioFocus();
 });
 
 // setInterval(() => {
@@ -42,15 +51,19 @@ document.addEventListener('deviceready', function() {
 // }, 5000);
 
 function pauseAllPlayers() {
-    // Pause your audio playback here
-    PAUSED_PLAYERS = [];
+    // Additive: do not reset PAUSED_PLAYERS — a second call (e.g. document.pause
+    // then AUDIOFOCUS_LOSS for the same phone call) must not wipe the list that
+    // the first call already built, or resumeAllPlayers() will have nothing to restore.
+    let pausedCount = 0;
     ALL_PLAYERS.forEach(player => {
-        if (player.isPlaying()) {
+        if (player.isPlaying() && !PAUSED_PLAYERS.includes(player)) {
             player.pause();
             PAUSED_PLAYERS.push(player);
+            pausedCount++;
             console.log('Paused player:', player._src);
         }
     });
+    return pausedCount;
 }
 
 function resumeAllPlayers() {
@@ -59,6 +72,25 @@ function resumeAllPlayers() {
         console.log('Resumed player:', player._src);
     });
     PAUSED_PLAYERS = [];
+}
+
+function duckPlayingPlayers() {
+    ALL_PLAYERS.forEach(player => {
+        if (!player.isPlaying() || DUCKED_PLAYERS.has(player)) return;
+        let volume = player.volume();
+        DUCKED_PLAYERS.set(player, volume);
+        player.volume(volume * AUDIOFOCUS_DUCK_FACTOR);
+        console.log('Ducked player:', player._src);
+    });
+}
+
+function restoreDuckedPlayers() {
+    DUCKED_PLAYERS.forEach((volume, player) => {
+        if (!ALL_PLAYERS.includes(player)) return;
+        player.volume(volume);
+        console.log('Restored player volume:', player._src);
+    });
+    DUCKED_PLAYERS.clear();
 }
 
 function requestAudioFocus() {
@@ -72,6 +104,7 @@ function requestAudioFocus() {
         cordova.plugins.audiofocus.requestFocus(
             function() {
                 console.log('[AudioFocus] requested successfully.');
+                restoreDuckedPlayers();
                 resumeAllPlayers();
                 AUDIOFOCUS = 1;  // Focus gained
                 $('#resume-overlay').hide();
@@ -79,9 +112,9 @@ function requestAudioFocus() {
             },
             function(error) {
                 console.error('[AudioFocus] failed to request:', error);
-                pauseAllPlayers();
+                let pausedCount = pauseAllPlayers();
                 AUDIOFOCUS = 0;  // No focus
-                $('#resume-overlay').show();
+                showResumeOverlayIfNeeded(pausedCount);
                 reject(error);
             }
         );
@@ -101,8 +134,10 @@ class PlayerSimple extends EventEmitter
         this._player = null
         this.isGoingOut = null
         this._playRequested = false
+        this._playRequestedTimeout = null
         this._volume = 0
         this._media = null
+        this._loadError = false
     }
 
     load(basepath, media, usemediapath = true) {
@@ -178,24 +213,44 @@ class PlayerSimple extends EventEmitter
         })
         this._player.on('load', () => {
             if (this._player) {
+                this._loadError = false
                 this.emit('load', this._player._src)
                 // console.log('PlayerSimple ready:', this._player._src)
             }
+        })
+        this._player.on('loaderror', (id, error) => {
+            console.error('PlayerSimple loaderror:', this._player ? this._player._src : '?', error)
+            this._loadError = true
+            this._playRequested = false
+            clearTimeout(this._playRequestedTimeout)
+            this.emit('loaderror', this._player ? this._player._src : null, error)
+            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_loaderror', {src: this._player ? this._player._src : null, error: String(error)});
+        })
+        this._player.on('playerror', (id, error) => {
+            console.error('PlayerSimple playerror:', this._player ? this._player._src : '?', error)
+            this._loadError = true
+            this._playRequested = false
+            clearTimeout(this._playRequestedTimeout)
+            this.emit('playerror', this._player ? this._player._src : null, error)
+            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_playerror', {src: this._player ? this._player._src : null, error: String(error)});
         })
 
         this.master(media.master)
         // console.log('PlayerSimple load:', media.src)
     }
 
-    clear() {  
+    clear() {
         if (this._player !== null) {
             // remove from global ALL_PLAYERS array
             ALL_PLAYERS = ALL_PLAYERS.filter(player => player !== this)
             PAUSED_PLAYERS = PAUSED_PLAYERS.filter(player => player !== this)
+            DUCKED_PLAYERS.delete(this)
             this._player.stop()
             this._player.unload()
             this._player = null
             this._playRequested = false
+            clearTimeout(this._playRequestedTimeout)
+            this._loadError = false
         }
     }
 
@@ -229,9 +284,19 @@ class PlayerSimple extends EventEmitter
 
         if (seek >= 0) this._player.seek(seek)
         this._playRequested = true
+        clearTimeout(this._playRequestedTimeout)
+        this._playRequestedTimeout = setTimeout(() => {
+            if (this._playRequested) {
+                console.warn('PlayerSimple play timeout: resetting stuck _playRequested', this._player ? this._player._src : '?')
+                this._playRequested = false
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_play_timeout', {src: this._player ? this._player._src : null})
+            }
+        }, 5000)
         console.log('PlayerSimple play requested:', this._player._src, 'seek:', seek, 'volume:', volume)
 
-        if (PLATFORM == 'ios' || AUDIOFOCUS < 1) {
+        // Only re-request native focus when it was explicitly lost.
+        // Unknown/unavailable focus state (-1) should not block playback.
+        if (PLATFORM == 'ios' || AUDIOFOCUS !== 0) {
             if (!this._player) return
             this._player.play()
 
@@ -292,9 +357,8 @@ class PlayerSimple extends EventEmitter
     volume(value) {
         if (value !== undefined) {
             this._volume = value
-            if (this._player)
+            if (this._player && this._media)
                 this._player.volume(this._volume * this._media.master)
-            // this._player.fade(this._volume * this._media.master, this._volume * this._media.master, 0)  // cancel other fade
         }
         return this._volume
     }
@@ -330,7 +394,7 @@ class PlayerSimple extends EventEmitter
     }
 
     isLoaded() {
-        return this._player !== null || (this._media && this._media.src == '-')
+        return (this._player !== null && !this._loadError) || (this._media && this._media.src == '-')
     }
 
     rewindOnPause(value = -1) {

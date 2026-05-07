@@ -201,9 +201,13 @@ var TELEMETRY = (function() {
 
     function flush() {
         try {
+            if (typeof PLATFORM !== 'undefined' && PLATFORM === 'browser') {
+                console.log('[TELEMETRY] flush skipped: browser mode');
+                return Promise.resolve({ ok: false, skipped: true, reason: 'browser-mode' });
+            }
             if (!sessionId || buffer.length === 0) {
                 console.log('[TELEMETRY] flush skipped: sessionId=' + sessionId + ' buffer=' + buffer.length);
-                return;
+                return Promise.resolve({ ok: false, skipped: true, reason: 'empty-buffer' });
             }
             var events = buffer.splice(0, buffer.length);
             var url = (typeof prep === 'function') ? prep('/telemetry-push') : '/telemetry-push';
@@ -216,7 +220,7 @@ var TELEMETRY = (function() {
                 client: sessionMeta,
                 events: events
             };
-            _postTelemetry(url, payload).then(function(response) {
+            return _postTelemetry(url, payload).then(function(response) {
                 console.log('[TELEMETRY] response:', response.status, response.url);
                 if (response.status !== 200) {
                     return response.text().then(function(body) {
@@ -228,12 +232,17 @@ var TELEMETRY = (function() {
                 sessionHasFlushed = true;
                 _writeStored();
                 console.log('[TELEMETRY] flush OK:', r);
+                return { ok: true, responseText: r };
             }).catch(function(e) {
                 buffer = events.concat(buffer);
                 if (buffer.length > BUFFER_CAP) buffer = buffer.slice(-BUFFER_CAP);
                 console.warn('[TELEMETRY] flush FAILED:', (e && e.message) ? e.message : String(e));
+                return { ok: false, skipped: false, error: (e && e.message) ? e.message : String(e) };
             });
-        } catch(e) { console.warn('[TELEMETRY] flush error', e); }
+        } catch(e) {
+            console.warn('[TELEMETRY] flush error', e);
+            return Promise.resolve({ ok: false, skipped: false, error: String(e) });
+        }
     }
 
     function end() {
@@ -250,6 +259,7 @@ var TELEMETRY = (function() {
 
     // Best-effort flush for page unload / session end
     function _flushFinal() {
+        if (typeof PLATFORM !== 'undefined' && PLATFORM === 'browser') return;
         if (!sessionId || buffer.length === 0) return;
         var payload = JSON.stringify({
             sessionId: sessionId,

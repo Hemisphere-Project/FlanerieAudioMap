@@ -4,6 +4,7 @@ parcours/
 _tmp/
 telemetry/
 guest_password.json
+.claude/*
 
 # Logs
 logs

@@ -137,7 +137,7 @@ x En DEV: afficher les sorties de route sur la carte
 - APP: MAP offline !
 - APP: Store progress time in media in steps => restore jumps to that point
 
-*******************************
+**********************
 
 VISIO 29 avril 2026
 
@@ -156,3 +156,4 @@ don't trigger offlimits to allow reenter the Parcours, wait for next step
 Couleur Current / Next zone
 
 => GPS state dans la page je suis perdu
+
