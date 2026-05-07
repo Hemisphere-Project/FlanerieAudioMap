@@ -3,6 +3,7 @@
 Date: 2026-04-27 (merged with full code review of www/app/)
 Cordova cross-reference: 2026-05-05 (FlanerieCordova workspace added)
 Container upgrades: 2026-05-05 (C2 version bumps applied, audiofocus v1.2.0, README rewritten)
+iOS locked-screen audio investigation: 2026-05-07 (T8 warm/preprimed pass, T9 cold-start still fails, selective prewarm applied)
 Telemetry analysis: 2026-04-27 (78 sessions across 5 parcours, Apr 2026)
 Previous: 2026-03-14 (initial code audit merge)
 Scope: Cordova launcher + downloaded local webapp, GPS-triggered audio walk, locked-screen pocket usage, published parcours FLANERIE_ELYSEE
@@ -777,7 +778,14 @@ Goal:
 Current implementation status:
 - ✅ Implemented: telemetry client (`telemetry.js`), local buffering/flush/retry, session resume, server ingestion (`/telemetry-push`), session storage, admin listing endpoints.
 - ✅ Implemented events: session start/resume/end, GPS stream, GPS state (`ok/lost/off`), step fire, step done.
-- ⚠️ Missing/partial: permission-state snapshots, notification scheduling/permission diagnostics, background/foreground transition logs, explicit media preload success/failure telemetry, audio failure/focus lifecycle telemetry, offlimit enter/exit telemetry, iOS background-task timing, and warm-start vs cold-start audio trigger state.
+- ✅ Extended on 2026-05-07 for the iOS locked-screen investigation:
+    - `audiofocus_change`, `audiofocus_request_ok`, `audiofocus_request_fail`
+    - `audio_play_gate`, `audio_play_requested`, `audio_play_started`, `audio_play_timeout`, `audio_load_ready`, `audio_loaderror`, `audio_playerror`
+    - `ios_bg_task_begin`, `ios_bg_task_claim`, `ios_bg_task_deferred`, `ios_bg_task_end`
+    - `spot_audio_prepare`, `step_audio_trigger`, `step_prewarm_next`
+    - explicit warm/cold trigger context via `prepared_before_play`, `loaded_before_play`, `load_state_before_play`
+    - iOS HTML5 priming telemetry: `audio_prime_attempt`, `audio_prime_ok`, `audio_prime_fail`
+- ⚠️ Still missing/partial: permission-state snapshots, notification scheduling/permission diagnostics, native AVAudioSession category/route-change/media-services-reset snapshots, and explicit media preload success/failure telemetry at the parcours-pack level.
 
 Recommended telemetry scope:
 - app start
@@ -804,6 +812,12 @@ Implemented/extended on 2026-04-27:
 - Added explicit restart markers: `session_restart_click`, `session_restart`, and `session_restart_target`.
 - `REARM` now forces a fresh telemetry session instead of appending to the previous one.
 - `RESTART` now logs and cleanly ends the current session before reload, making the latest relevant test easy to locate.
+
+Implemented/extended on 2026-05-07:
+- Added the production-path telemetry needed to distinguish iOS locked-screen warm-start vs cold-start failures instead of inferring them from generic play errors.
+- Added background-task lifetime telemetry around GPS callbacks so iOS can be inspected as: callback arrived, task claimed, audio start settled, task ended.
+- Added diagnostic visibility for `trigger_mode`, `Préchargé`, `Primé`, `Chargé au trigger`, `Trigger arrière-plan`, and `Play arrière-plan`, so staff can tell whether a failing test was warm, cold, primed, or retriggered on unlock.
+- Added `duplicate_foreground_replay` in diagnostics to separate the original locked-screen start from any later replay on unlock.
 
 Recommended design:
 - separate crash/error logs from behavioral telemetry
@@ -902,24 +916,29 @@ Both the manifest permission and the service declaration are already in place at
 
 Regression risk: **NONE** — already handled.
 
-#### P3.4 iOS locked-screen GPS-triggered audio start 🆕 [TEST-FIRST] ⏳ ACTIVE
+#### P3.4 iOS locked-screen GPS-triggered audio start 🆕 [TEST-FIRST] 🟨 PARTIAL
 
-Retested 2026-05-07. The bug still reproduces on iOS after the initial lifecycle fixes.
+Retested repeatedly on 2026-05-07. The original problem split into two distinct cases:
+
+- **T8 warm/preprimed locked-screen trigger:** now passes on iOS. Audio can start while the phone is locked in the pocket when the player was created, loaded, and gesture-primed before lock.
+- **T9 cold-start locked-screen trigger:** still fails on iOS. A player first created/started from the background GPS callback remains unreliable in the current HTML5 Howler path.
 
 Current understanding:
 - The failure is not the general ability to keep audio alive while locked; it is the ability to start the next GPS-triggered audio while the phone is already locked.
 - This concerns the real visitor path, not just diagnostic UX. The diagnostic suite must reflect the production path rather than adding a special-case workaround.
 - The current iOS playback path is still HTML5 Howler. Keep that as the primary engine for now.
+- The latest field result shows that **warm + primed** is viable on iOS, while **cold background start** is still the remaining failure mode.
 
 Likely causes:
-- `geoloc.js` opens an iOS background task for each location callback but ends it immediately after synchronous JS dispatch. A GPS-triggered HTML5 audio start may still be pending asynchronously when the task is already over.
-- Step audio can still be a cold start when the phone is locked. Full parcours preload is not viable for a 45-minute walk; selective prewarm is only a mitigation.
+- The original background-task hypothesis was real enough to fix: `geoloc.js` now keeps the iOS background task alive until the triggered audio start settles (`play`, `error`, or timeout) instead of always ending it immediately after synchronous JS dispatch.
+- The decisive remaining limit is cold-start HTML5 playback under lock: even with background-task retention and explicit focus/session reacquisition, a player created on the background GPS callback can still fail with the classic iOS "user interaction" restriction.
+- Step audio can still be a cold start when the phone is locked. Full parcours preload is not viable for a 45-minute walk; selective prewarm is the practical mitigation for the real walk path.
 - The `cordova-plugin-audiofocus` fork currently covers interruptions, but not the full AVAudioSession lifecycle needed for a long locked-screen GPS-triggered walk.
 
 Decision:
 - Do not build diagnostic-only cheats that make the test pass without matching the real walk behavior.
 - Do not switch to a separate foreground-only playback path.
-- Keep native playback as a later fallback if task/session fixes still do not make HTML5 reliable.
+- Keep native playback as a later fallback if selective prewarm + task/session fixes still do not make the real walk path reliable enough.
 
 Action plan:
 1. **Phase 1 — real-path diagnostics + telemetry**
@@ -934,15 +953,18 @@ Action plan:
       - play request, play success, play timeout, loaderror, playerror
       - app visibility / lock-resume markers
       - native AVAudioSession state snapshots from the iOS audiofocus fork
+    - **Status 2026-05-07:** largely implemented in both diagnostics and production path. Warm/cold, primed/unprimed, background-task begin/end, and play lifecycle are now observable.
 
 2. **Phase 2 — hold background execution until audio start settles**
     - On iOS, stop ending the BackgroundGeolocation background task immediately after `positionCallback(position)` returns.
     - Hold it until the triggered audio start reaches one of: success, failure, or timeout.
     - This is the first production fix to test because it directly matches the most likely failure mode.
+    - **Status 2026-05-07:** implemented in `geoloc.js` + `player.js`. Necessary, but not sufficient for cold-start.
 
 3. **Phase 2b — selective prewarm, not full preload**
-    - Consider keeping the next likely step warm on iOS so the lock-screen trigger is more often a warm-start than a cold-start.
+    - Keep the next likely step warm on iOS so the lock-screen trigger is more often a warm-start than a cold-start.
     - Treat this as a mitigation only. It does not remove the need to make cold-start reliable enough for skipped or distant steps.
+    - **Status 2026-05-07:** implemented in the production route path. `Parcours.currentStep()` now prewarms the next likely step while foregrounded, and `Step` can be kept loaded specifically for the upcoming locked trigger.
 
 4. **Phase 3 — make the audiofocus fork the AVAudioSession owner**
     - Expand the iOS audiofocus fork from interruption handling to full walk-session ownership:
@@ -957,14 +979,17 @@ Action plan:
     - If locked-screen GPS-triggered cold-start still cannot be made reliable enough with HTML5 + better task/session handling, move the real playback path itself to native on iOS.
     - This is explicitly deferred until after the task/session path is proven insufficient.
 
-What to start with now:
-- Start with **Phase 1 instrumentation + diagnostic update**, then immediately do **Phase 2 background-task lifetime**.
-- These two steps have the highest information value and the best chance of fixing the real user path without a larger architecture switch.
+Operational conclusion after the 2026-05-07 field retests:
+- The viable iOS path today is **warm + primed before lock**, not true cold-start while locked.
+- The production code should therefore bias heavily toward prewarming the next likely step while the app is still foregrounded.
+- T9 remains a valid regression/limit test. It should stay in diagnostics specifically because it still demonstrates the unresolved cold-start limitation.
+- If real parcours walks still miss locked-screen starts after the new next-step prewarm, the next effort should move to Phase 3 or Phase 4 rather than more JS-only tweaks.
 
 Acceptance:
 - Telemetry can distinguish warm-start vs cold-start failures on iOS locked-screen triggers.
 - The diagnostic suite reproduces the real locked-screen next-step start problem instead of a simplified proxy.
-- GPS-triggered next-step audio starts reliably on iOS while locked when a valid background GPS callback arrives.
+- GPS-triggered next-step audio starts reliably on iOS while locked when the step has been prewarmed before lock.
+- The remaining cold-start limitation is explicit and testable instead of hidden inside generic play errors.
 
 ### C: Cordova container findings (cross-reference, 2026-05-05)
 

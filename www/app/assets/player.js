@@ -12,6 +12,21 @@ function showResumeOverlayIfNeeded(pausedCount) {
 Howler.autoUnlock = true; // Enable automatic context unlocking
 Howler.autoSuspend = false; // Prevent automatic context suspension
 
+// Converts a WKWebView http://localhost/... URL back to a file:// native path
+// needed by cordova-plugin-media, which bypasses the WKWebView HTTP server.
+function httpToNativePath(httpPath) {
+    if (!httpPath) return null
+    if (document.LOCALMEDIA_PATH && document.LOCALMEDIA_PATH_NATIVE &&
+        httpPath.startsWith(document.LOCALMEDIA_PATH)) {
+        return document.LOCALMEDIA_PATH_NATIVE + httpPath.slice(document.LOCALMEDIA_PATH.length)
+    }
+    if (document.LOCALAPP_PATH && document.LOCALAPP_PATH_NATIVE &&
+        httpPath.startsWith(document.LOCALAPP_PATH)) {
+        return document.LOCALAPP_PATH_NATIVE + httpPath.slice(document.LOCALAPP_PATH.length)
+    }
+    return null
+}
+
 // Watch for audio focus changes
 document.addEventListener('deviceready', function() {
     if (typeof cordova.plugins.audiofocus === 'undefined') {
@@ -132,10 +147,9 @@ function requestAudioFocus() {
 
 function shouldRequestAudioFocusForPlay() {
     if (typeof cordova === 'undefined' || typeof cordova.plugins.audiofocus === 'undefined') return false
-    if (PLATFORM !== 'ios') return AUDIOFOCUS === 0
-
-    // iOS background starts need AVAudioSession active at the moment play() is issued.
-    return typeof APP_VISIBILITY !== 'undefined' && APP_VISIBILITY === 'background'
+    // NativeMediaPlayer activates AVAudioSession itself on play(); no pre-request needed.
+    // Request focus only when it was explicitly lost (phone call, other app).
+    return AUDIOFOCUS === 0
 }
 
 function primeHowlForBackground(howl, options) {
@@ -216,6 +230,208 @@ $('#resume-button').on('click', function() { requestAudioFocus() })
 $('#resume-overlay').hide();
 
 
+// Wraps cordova-plugin-media for iOS background audio.
+// AVAudioPlayer is not subject to the WebKit user-gesture restriction that
+// blocks HTML5 audio initiated from GPS callbacks while the screen is locked.
+class NativeMediaPlayer extends EventEmitter {
+    constructor(src, options) {
+        super()
+        this._src = src
+        this._loop = (options && options.loop) || false
+        this._nativeState = 0   // mirrors Media.MEDIA_* (NONE=0 STARTING=1 RUNNING=2 PAUSED=3 STOPPED=4)
+        this._volume = 1
+        this._positionSec = 0
+        this._positionPollInterval = null
+        this._pendingSeekSec = null     // seek queued before media is prepared
+        this._fadeInterval = null
+        this._loaded = false            // true once first MEDIA_RUNNING received (file prepared)
+        this._playIntent = false        // true while waiting for RUNNING after play() call
+        this._stoppedByCall = false     // distinguishes stop() from natural track end
+        this.__isPrimingForBackground = false  // keeps PlayerSimple event handler compat
+
+        this._media = new Media(
+            src,
+            () => this._onSuccess(),
+            (err) => this._onError(err),
+            (status) => this._onStatus(status)
+        )
+    }
+
+    // Fired by cordova-plugin-media when the track completes naturally (not on stop())
+    _onSuccess() {
+        if (this._loop) {
+            this._positionSec = 0
+            if (this._media) {
+                this._media.seekTo(0)
+                this._media.play()
+            }
+            return
+        }
+        this.emit('end', this._src)
+    }
+
+    _onError(err) {
+        this._stopPositionPoll()
+        this._stopFade()
+        this._playIntent = false
+        this.emit('playerror', this._src, err)
+    }
+
+    _onStatus(status) {
+        this._nativeState = status
+
+        if (status === 2) {  // MEDIA_RUNNING
+            if (!this._loaded) {
+                this._loaded = true
+                this.emit('load', this._src)
+                if (this._pendingSeekSec !== null) {
+                    this._media.seekTo(this._pendingSeekSec * 1000)
+                    this._pendingSeekSec = null
+                }
+            }
+            this._startPositionPoll()
+            if (this._playIntent) {
+                this._playIntent = false
+                this.emit('play', this._src)
+            }
+        }
+        else if (status === 3) {  // MEDIA_PAUSED
+            this._stopPositionPoll()
+            this.emit('pause', this._src)
+        }
+        else if (status === 4) {  // MEDIA_STOPPED
+            this._stopPositionPoll()
+            if (this._stoppedByCall) {
+                this._stoppedByCall = false
+                this.emit('stop', this._src)
+            }
+            // natural end: _onSuccess() handles the event, not here
+        }
+    }
+
+    _startPositionPoll() {
+        this._stopPositionPoll()
+        this._positionPollInterval = setInterval(() => {
+            if (!this._media) return
+            this._media.getCurrentPosition(
+                (pos) => { if (pos >= 0) this._positionSec = pos },
+                () => {}
+            )
+        }, 250)
+    }
+
+    _stopPositionPoll() {
+        if (this._positionPollInterval) {
+            clearInterval(this._positionPollInterval)
+            this._positionPollInterval = null
+        }
+    }
+
+    _stopFade() {
+        if (this._fadeInterval) {
+            clearInterval(this._fadeInterval)
+            this._fadeInterval = null
+        }
+    }
+
+    // Howler-compatible API
+
+    state() {
+        if (this._nativeState === 0) return 'unloaded'
+        if (this._nativeState === 1) return 'loading'
+        return 'loaded'  // RUNNING(2), PAUSED(3), STOPPED(4) — all prepared
+    }
+
+    playing() { return this._nativeState === 2 }
+    paused()  { return this._nativeState === 3 }
+
+    play() {
+        if (!this._media) return
+        this._stopFade()
+        this._stoppedByCall = false
+        this._playIntent = true
+        this._media.setVolume(this._volume)
+        this._media.play()
+    }
+
+    pause() {
+        // Only valid when RUNNING; mirrors Howler which ignores pause() on stopped sounds.
+        // Prevents spurious 'pause' events (and rewindOnPause seeks) from PlayerSimple's
+        // stabilization call to pause() before every play().
+        if (!this._media || this._nativeState !== 2) return
+        this._stopFade()
+        this._media.pause()
+    }
+
+    stop() {
+        if (!this._media) return
+        this._stopFade()
+        this._stopPositionPoll()
+        this._playIntent = false
+        this._stoppedByCall = true
+        this._positionSec = 0
+        this._media.stop()
+    }
+
+    // seek(seconds)  getter/setter in seconds, matching Howler's API
+    seek(seconds) {
+        if (seconds === undefined) return this._positionSec
+        if (seconds < 0) return
+        if (this._loaded) {
+            this._media.seekTo(seconds * 1000)
+        } else {
+            this._pendingSeekSec = seconds
+        }
+    }
+
+    volume(v) {
+        if (v === undefined) return this._volume
+        this._volume = Math.max(0, Math.min(1, v))
+        if (this._media) this._media.setVolume(this._volume)
+        return this._volume
+    }
+
+    fade(from, to, duration) {
+        this._stopFade()
+        this.volume(from)
+        const totalSteps = Math.max(1, Math.round(duration / 50))
+        const stepVol = (to - from) / totalSteps
+        const stepMs = duration / totalSteps
+        let step = 0
+        this._fadeInterval = setInterval(() => {
+            step++
+            const v = step >= totalSteps ? to : from + stepVol * step
+            this.volume(v)
+            if (step >= totalSteps) {
+                clearInterval(this._fadeInterval)
+                this._fadeInterval = null
+            }
+        }, stepMs)
+    }
+
+    loop(value) {
+        if (value !== undefined) this._loop = value
+        return this._loop
+    }
+
+    unload() {
+        this._stopFade()
+        this._stopPositionPoll()
+        this._playIntent = false
+        this._stoppedByCall = false
+        if (this._media) {
+            this._media.stop()
+            this._media.release()
+            this._media = null
+        }
+        this._nativeState = 0
+        this._loaded = false
+        this._positionSec = 0
+        this._pendingSeekSec = null
+    }
+}
+
+
 class PlayerSimple extends EventEmitter
 {
     constructor(loop = false, fadetime = 1500) {
@@ -287,19 +503,22 @@ class PlayerSimple extends EventEmitter
                 basepath = document.LOCALMEDIA_PATH + basepath
         }
         
-        console.log('PlayerSimple load:', basepath + media.src)
-
-        let html5enabled = false
-        try { html5enabled = (cordova.platformId == 'ios') } catch (e) {}
+        let fullSrc = basepath + media.src
+        console.log('PlayerSimple load:', fullSrc)
 
         this.clear()
-        this._player = new Howl({
-            src: basepath + media.src,
-            loop: this._loop,
-            autoplay: false,
-            volume: 1,
-            html5: html5enabled
-        })
+
+        if (PLATFORM === 'ios') {
+            let nativeSrc = httpToNativePath(fullSrc)
+            if (nativeSrc) {
+                this._player = new NativeMediaPlayer(nativeSrc, { loop: this._loop })
+            } else {
+                console.warn('[NativeMedia] Cannot resolve native path for:', fullSrc, '— using Howler fallback')
+                this._player = new Howl({ src: fullSrc, loop: this._loop, autoplay: false, volume: 1, html5: true })
+            }
+        } else {
+            this._player = new Howl({ src: fullSrc, loop: this._loop, autoplay: false, volume: 1, html5: false })
+        }
 
         // Register the player in the global ALL_PLAYERS array
         ALL_PLAYERS.push(this)
@@ -367,13 +586,8 @@ class PlayerSimple extends EventEmitter
                     visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
                     load_state: this.loadState(),
                 })
-                if (PLATFORM === 'ios' && APP_VISIBILITY === 'foreground') {
-                    primeHowlForBackground(this._player, {
-                        src: this._src(),
-                        reason: 'player-load'
-                    })
-                }
-                // console.log('PlayerSimple ready:', this._player._src)
+                // primeHowlForBackground removed: iOS now uses NativeMediaPlayer which
+                // activates AVAudioSession natively on play() without requiring prior priming.
             }
         })
         this._player.on('loaderror', (id, error) => {
