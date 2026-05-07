@@ -11,18 +11,193 @@
     <script src="/app/libs/leaflet-1.9.4.js"></script>
     <link rel="icon" type="image/png" href="/app/images/flanerie-96.png" sizes="96x96">
     <style>
-        #detail { display: none; }
-        #telemetry-map { height: 400px; margin-bottom: 1em; border-radius: 8px; }
-        .event-row td { font-size: 0.85em; }
+        .filters-bar {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+            gap: 12px;
+            margin-bottom: 16px;
+            padding: 14px;
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 12px;
+            background: rgba(255,255,255,0.03);
+        }
+        .filters-bar label {
+            display: block;
+            font-size: 0.82rem;
+            color: rgba(255,255,255,0.7);
+            margin-bottom: 4px;
+        }
+        .results-meta {
+            margin-bottom: 10px;
+            color: rgba(255,255,255,0.75);
+            font-size: 0.92rem;
+        }
+        .toolbar-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin-bottom: 12px;
+        }
+        .comparison-panel {
+            margin-bottom: 18px;
+            padding: 14px;
+            border-radius: 12px;
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.08);
+        }
+        .comparison-panel.empty {
+            display: none;
+        }
+        .comparison-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 10px;
+            margin-bottom: 12px;
+        }
+        .comparison-table-wrap {
+            max-height: 220px;
+            overflow: auto;
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,0.06);
+        }
+        .comparison-map {
+            height: 360px;
+            border-radius: 12px;
+            overflow: hidden;
+            margin-top: 12px;
+        }
+        .comparison-legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 10px;
+        }
+        .comparison-legend-item {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 8px;
+            border-radius: 999px;
+            background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(255,255,255,0.06);
+            font-size: 0.82rem;
+        }
+        .comparison-legend-color {
+            width: 10px;
+            height: 10px;
+            border-radius: 999px;
+            display: inline-block;
+        }
+        .gps-badges {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+        }
+        .gps-badges .badge {
+            font-weight: 500;
+        }
+        .session-row-active {
+            background: rgba(13, 202, 240, 0.08);
+        }
+        .detail-panel {
+            padding: 16px;
+            border-radius: 14px;
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.08);
+        }
+        .detail-grid {
+            display: grid;
+            grid-template-columns: minmax(0, 1.3fr) minmax(300px, 0.7fr);
+            gap: 16px;
+        }
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+            gap: 10px;
+            margin-bottom: 16px;
+        }
+        .metric-card {
+            padding: 10px 12px;
+            border-radius: 10px;
+            background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(255,255,255,0.06);
+        }
+        .metric-card .label {
+            display: block;
+            font-size: 0.72rem;
+            color: rgba(255,255,255,0.65);
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+        .metric-card .value {
+            display: block;
+            font-size: 1.1rem;
+            font-weight: 600;
+        }
+        .detail-map {
+            height: 440px;
+            border-radius: 12px;
+            overflow: hidden;
+        }
+        .detail-sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .detail-meta {
+            padding: 12px;
+            border-radius: 10px;
+            background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(255,255,255,0.06);
+            font-size: 0.92rem;
+        }
+        .detail-meta code {
+            color: #8bd3ff;
+        }
+        .event-panel {
+            margin-top: 16px;
+            display: none;
+        }
+        .event-panel.active {
+            display: block;
+        }
+        .event-table-wrap {
+            max-height: 320px;
+            overflow: auto;
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,0.06);
+        }
+        .event-row td {
+            font-size: 0.82rem;
+            vertical-align: top;
+        }
         .event-gps { color: #6c757d; }
         .event-step_fire { color: #0dcaf0; font-weight: bold; }
         .event-step_done { color: #198754; }
         .event-session_start, .event-session_resume { color: #ffc107; }
         .event-session_end { color: #dc3545; }
-        .event-gps_state { color: #fd7e14; }
-        .badge-filter { cursor: pointer; margin-right: 4px; }
+        .event-gps_state, .event-gps_sleep_suspect { color: #fd7e14; }
+        .badge-filter {
+            cursor: pointer;
+            margin-right: 4px;
+            margin-bottom: 4px;
+        }
         .badge-filter.active { opacity: 1; }
-        .badge-filter:not(.active) { opacity: 0.4; }
+        .badge-filter:not(.active) { opacity: 0.38; }
+        .zones-hint {
+            color: rgba(255,255,255,0.65);
+            font-size: 0.86rem;
+        }
+        @media (max-width: 992px) {
+            .detail-grid {
+                grid-template-columns: 1fr;
+            }
+            .detail-map {
+                height: 320px;
+            }
+        }
     </style>
 </head>
 <body>
@@ -33,187 +208,854 @@
     <div id="main">
         <a href="/control" class="btn btn-outline-secondary btn-sm mb-3">&larr; Parcours list</a>
 
-        <!-- Session list -->
-        <div id="sessions">
-            <h4>Sessions</h4>
-            <div id="filter-parcours" class="mb-2"></div>
-            <table class="table table-sm">
-                <thead>
-                    <tr>
-                        <th>Session</th>
-                        <th>Parcours</th>
-                        <th>Start</th>
-                        <th>Events</th>
-                        <th>Duration</th>
-                        <th></th>
-                    </tr>
-                </thead>
-                <tbody id="session-list"></tbody>
-            </table>
-        </div>
-
-        <!-- Session detail -->
-        <div id="detail">
-            <button id="back-btn" class="btn btn-outline-secondary btn-sm mb-3">&larr; Back to list</button>
-            <button id="delete-btn" class="btn btn-danger btn-sm mb-3 ms-2">Delete session</button>
-            <h4 id="detail-title"></h4>
-            <div id="telemetry-map"></div>
-
-            <div class="mb-2">
-                <strong>Filter: </strong>
-                <span id="event-filters"></span>
+        <div class="filters-bar">
+            <div>
+                <label for="parcours-filter">Parcours</label>
+                <select id="parcours-filter" class="form-select form-select-sm">
+                    <option value="">Tous</option>
+                </select>
             </div>
-
-            <table class="table table-sm">
-                <thead>
-                    <tr>
-                        <th>Time</th>
-                        <th>+sec</th>
-                        <th>Type</th>
-                        <th>Data</th>
-                    </tr>
-                </thead>
-                <tbody id="event-list"></tbody>
-            </table>
+            <div>
+                <label for="date-from">Date from</label>
+                <input id="date-from" type="date" class="form-control form-control-sm">
+            </div>
+            <div>
+                <label for="date-to">Date to</label>
+                <input id="date-to" type="date" class="form-control form-control-sm">
+            </div>
+            <div>
+                <label for="session-search">Session contains</label>
+                <input id="session-search" type="text" class="form-control form-control-sm" placeholder="20260507_1331">
+            </div>
+            <div class="d-flex align-items-end gap-2">
+                <button id="apply-filters" class="btn btn-primary btn-sm w-100">Apply</button>
+                <button id="reset-filters" class="btn btn-outline-secondary btn-sm w-100">Reset</button>
+            </div>
         </div>
+
+        <div class="toolbar-row">
+            <div id="results-meta" class="results-meta mb-0"></div>
+            <div class="d-flex gap-2">
+                <button id="refresh-sessions" class="btn btn-outline-info btn-sm">Refresh</button>
+                <button id="export-summary-csv" class="btn btn-outline-secondary btn-sm">Export CSV</button>
+                <button id="export-summary-json" class="btn btn-outline-secondary btn-sm">Export JSON</button>
+            </div>
+        </div>
+
+        <div id="comparison-panel" class="comparison-panel empty"></div>
+
+        <table class="table table-sm align-middle">
+            <thead>
+                <tr>
+                    <th>Session</th>
+                    <th>Parcours</th>
+                    <th>Device</th>
+                    <th>Start</th>
+                    <th>Duration</th>
+                    <th>Events</th>
+                    <th>GPS</th>
+                    <th>Last step</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody id="session-list"></tbody>
+        </table>
     </div>
 
     <script>
     var allSessions = [];
-    var currentFilter = null;
-    var currentMap = null;
+    var detailMap = null;
+    var groupMap = null;
+    var currentDetailRow = null;
+    var expandedSessionId = null;
+    var detailCache = new Map();
+    var parcoursCache = new Map();
+    var sessionHydrationPromises = new Map();
+    var hydrationCycleToken = 0;
+    var groupMapEnabled = false;
+    var groupMapRenderToken = 0;
+    var detailEventsVisible = false;
+    var refreshInFlight = false;
 
     function esc(str) {
         var d = document.createElement('div');
-        d.appendChild(document.createTextNode(str));
+        d.appendChild(document.createTextNode(str == null ? '' : String(str)));
         return d.innerHTML;
     }
 
     function formatDuration(ms) {
         if (!ms || ms <= 0) return '-';
-        var s = Math.floor(ms / 1000);
-        var m = Math.floor(s / 60); s = s % 60;
-        var h = Math.floor(m / 60); m = m % 60;
-        if (h > 0) return h + 'h' + String(m).padStart(2,'0') + 'm';
-        return m + 'm' + String(s).padStart(2,'0') + 's';
+        var totalSeconds = Math.floor(ms / 1000);
+        var hours = Math.floor(totalSeconds / 3600);
+        var minutes = Math.floor((totalSeconds % 3600) / 60);
+        var seconds = totalSeconds % 60;
+        if (hours > 0) return hours + 'h' + String(minutes).padStart(2, '0') + 'm';
+        return minutes + 'm' + String(seconds).padStart(2, '0') + 's';
     }
 
-    function loadSessions() {
-        document.getElementById('session-list').innerHTML = '<tr><td colspan="6" class="text-muted">Loading...</td></tr>';
-        fetch('/telemetry/sessions')
-            .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
-            .then(data => {
-                allSessions = data;
-                renderSessions(data);
+    function formatNumber(value, digits) {
+        if (value == null || Number.isNaN(value)) return '-';
+        return Number(value).toFixed(digits == null ? 0 : digits);
+    }
+
+    function dateOnly(value) {
+        if (!value) return '';
+        return new Date(value).toISOString().slice(0, 10);
+    }
+
+    function getSessionDuration(session) {
+        if (!session.lastEvent || !session.startTime) return 0;
+        return session.lastEvent - new Date(session.startTime).getTime();
+    }
+
+    function formatGap(value) {
+        if (value == null || Number.isNaN(value)) return '-';
+        if (value >= 1000) return (value / 1000).toFixed(value >= 10000 ? 0 : 1) + 's';
+        return value + 'ms';
+    }
+
+    function hasOwn(obj, key) {
+        return Object.prototype.hasOwnProperty.call(obj, key);
+    }
+
+    function coalesceMetric(target, key, fallback) {
+        if (!hasOwn(target, key) || target[key] == null) target[key] = fallback;
+    }
+
+    function extractDeviceLabel(client) {
+        if (!client || typeof client !== 'object') return '';
+        var manufacturer = client.deviceManufacturer || client.manufacturer || '';
+        var model = client.deviceModel || client.model || '';
+        var platform = client.devicePlatform || client.platform || '';
+        var parts = [];
+
+        if (manufacturer && model && String(model).toLowerCase().indexOf(String(manufacturer).toLowerCase()) === -1) {
+            parts.push(manufacturer);
+        }
+        if (model) parts.push(model);
+        if (!parts.length && platform) parts.push(platform);
+        return parts.join(' ');
+    }
+
+    function getSessionDeviceLabel(session) {
+        return session.deviceModel || extractDeviceLabel(session.client || null) || '-';
+    }
+
+    function needsSessionHydration(session) {
+        if (session._hydrationComplete || session._hydrationFailed) return false;
+        return !session.deviceModel
+            || !hasOwn(session, 'gpsCount')
+            || !hasOwn(session, 'avgAccuracy')
+            || !hasOwn(session, 'maxGapMs')
+            || !hasOwn(session, 'sleepSuspects')
+            || !hasOwn(session, 'staleCallbacks')
+            || !hasOwn(session, 'rejectedFixes')
+            || !hasOwn(session, 'heartbeatRecoveries')
+            || !hasOwn(session, 'gpsLostCount')
+            || !hasOwn(session, 'audioErrors')
+            || !hasOwn(session, 'uniqueStepCount');
+    }
+
+    function mergeSessionSummaryFromDetail(session, data) {
+        var metrics = computeMetrics(data);
+        var client = data.client || {};
+
+        session.deviceModel = session.deviceModel || extractDeviceLabel(client);
+        session.devicePlatform = session.devicePlatform || client.devicePlatform || client.platform || '';
+        session.deviceManufacturer = session.deviceManufacturer || client.deviceManufacturer || client.manufacturer || '';
+        session.client = session.client || client;
+
+        coalesceMetric(session, 'finalStep', metrics.finalStep);
+        coalesceMetric(session, 'uniqueStepCount', metrics.uniqueSteps);
+        coalesceMetric(session, 'gpsCount', metrics.gpsCount);
+        coalesceMetric(session, 'avgAccuracy', metrics.avgAccuracy);
+        coalesceMetric(session, 'maxGapMs', metrics.maxGapMs);
+        coalesceMetric(session, 'sleepSuspects', metrics.sleepSuspects);
+        coalesceMetric(session, 'staleCallbacks', metrics.staleCallbacks);
+        coalesceMetric(session, 'rejectedFixes', metrics.rejectedFixes);
+        coalesceMetric(session, 'heartbeatRecoveries', metrics.heartbeatRecoveries);
+        coalesceMetric(session, 'gpsLostCount', metrics.gpsLost);
+        coalesceMetric(session, 'audioErrors', metrics.audioErrors);
+
+        session._hydrationComplete = true;
+    }
+
+    function hydrateSession(session) {
+        if (!session || !session.sessionId) return Promise.resolve(false);
+        if (!needsSessionHydration(session)) return Promise.resolve(false);
+        if (sessionHydrationPromises.has(session.sessionId)) return sessionHydrationPromises.get(session.sessionId);
+
+        var promise = loadDetail(session.sessionId)
+            .then(function(data) {
+                mergeSessionSummaryFromDetail(session, data);
+                sessionHydrationPromises.delete(session.sessionId);
+                return true;
             })
-            .catch(e => {
-                document.getElementById('session-list').innerHTML = '<tr><td colspan="6" class="text-danger">Failed to load sessions: ' + esc(String(e)) + '</td></tr>';
+            .catch(function() {
+                session._hydrationFailed = true;
+                sessionHydrationPromises.delete(session.sessionId);
+                return false;
             });
+
+        sessionHydrationPromises.set(session.sessionId, promise);
+        return promise;
     }
 
-    function renderSessions(data) {
-        var list = document.getElementById('session-list');
-        list.innerHTML = '';
+    function hydrateFilteredSessions(filtered) {
+        var pending = filtered.filter(needsSessionHydration).slice(0, 12);
+        if (!pending.length) return;
 
-        // Parcours filter buttons
-        var parcoursList = [...new Set(data.map(s => s.parcoursName || s.parcoursId))];
-        var filterDiv = document.getElementById('filter-parcours');
-        filterDiv.innerHTML = '<strong>Filter: </strong>';
-        parcoursList.forEach(p => {
-            var btn = document.createElement('span');
-            btn.className = 'badge bg-primary badge-filter active';
-            btn.textContent = p;
-            btn.addEventListener('click', function() {
-                if (currentFilter === p) { currentFilter = null; btn.classList.add('active'); }
-                else { currentFilter = p; }
-                document.querySelectorAll('#filter-parcours .badge-filter').forEach(b => {
-                    b.classList.toggle('active', currentFilter === null || b.textContent === currentFilter);
-                });
-                renderSessions(allSessions);
-            });
-            filterDiv.appendChild(btn);
+        var token = ++hydrationCycleToken;
+        Promise.all(pending.map(hydrateSession)).then(function(results) {
+            if (token !== hydrationCycleToken) return;
+            if (results.some(Boolean)) renderSessions();
         });
+    }
 
-        var filtered = currentFilter ? data.filter(s => (s.parcoursName || s.parcoursId) === currentFilter) : data;
+    function destroyDetailMap() {
+        if (detailMap) {
+            detailMap.remove();
+            detailMap = null;
+        }
+    }
 
+    function destroyGroupMap() {
+        if (groupMap) {
+            groupMap.remove();
+            groupMap = null;
+        }
+    }
+
+    function getTrackColor(index) {
+        var palette = ['#0dcaf0', '#ffc107', '#20c997', '#fd7e14', '#ff6b6b', '#6f42c1', '#adb5bd', '#7ae582'];
+        return palette[index % palette.length];
+    }
+
+    function precisionBadge(session) {
+        var accuracy = Number(session.avgAccuracy);
+        if (!Number.isFinite(accuracy)) return '<span class="badge text-bg-secondary">gps ?</span>';
+        if (accuracy <= 5) return '<span class="badge text-bg-success">tight ' + esc(formatNumber(accuracy, 1)) + 'm</span>';
+        if (accuracy <= 10) return '<span class="badge text-bg-info">good ' + esc(formatNumber(accuracy, 1)) + 'm</span>';
+        if (accuracy <= 20) return '<span class="badge text-bg-warning">fair ' + esc(formatNumber(accuracy, 1)) + 'm</span>';
+        return '<span class="badge text-bg-danger">coarse ' + esc(formatNumber(accuracy, 1)) + 'm</span>';
+    }
+
+    function renderGpsBadges(session) {
+        var badges = [precisionBadge(session)];
+        if (session.maxGapMs != null && Number(session.maxGapMs) >= 8000) {
+            badges.push('<span class="badge text-bg-warning">gap ' + esc(formatGap(Number(session.maxGapMs))) + '</span>');
+        }
+        if (Number(session.sleepSuspects) > 0) {
+            badges.push('<span class="badge text-bg-danger">sleep x' + esc(session.sleepSuspects) + '</span>');
+        }
+        if (Number(session.staleCallbacks) > 0) {
+            badges.push('<span class="badge text-bg-warning">stale x' + esc(session.staleCallbacks) + '</span>');
+        }
+        if (Number(session.rejectedFixes) > 0) {
+            badges.push('<span class="badge text-bg-warning">reject x' + esc(session.rejectedFixes) + '</span>');
+        }
+        if (Number(session.audioErrors) > 0) {
+            badges.push('<span class="badge text-bg-secondary">audio x' + esc(session.audioErrors) + '</span>');
+        }
+        return '<div class="gps-badges">' + badges.join('') + '</div>';
+    }
+
+    function buildSummaryRow(session) {
+        return {
+            sessionId: session.sessionId,
+            parcours: session.parcoursName || session.parcoursId || '',
+            device: getSessionDeviceLabel(session),
+            startTime: session.startTime,
+            durationMs: getSessionDuration(session),
+            eventCount: session.eventCount,
+            lastStep: session.finalStep,
+            uniqueSteps: session.uniqueStepCount,
+            gpsCount: session.gpsCount,
+            avgAccuracy: session.avgAccuracy,
+            maxGapMs: session.maxGapMs,
+            sleepSuspects: session.sleepSuspects,
+            staleCallbacks: session.staleCallbacks,
+            rejectedFixes: session.rejectedFixes,
+            heartbeatRecoveries: session.heartbeatRecoveries,
+            gpsLostCount: session.gpsLostCount,
+            audioErrors: session.audioErrors
+        };
+    }
+
+    function csvEscape(value) {
+        var text = value == null ? '' : String(value);
+        if (/[",\n]/.test(text)) return '"' + text.replace(/"/g, '""') + '"';
+        return text;
+    }
+
+    function toCsv(rows) {
+        if (!rows.length) return '';
+        var headers = Object.keys(rows[0]);
+        var lines = [headers.join(',')];
+        rows.forEach(function(row) {
+            lines.push(headers.map(function(header) { return csvEscape(row[header]); }).join(','));
+        });
+        return lines.join('\n');
+    }
+
+    function downloadText(filename, content, mimeType) {
+        var blob = new Blob([content], { type: mimeType });
+        var url = URL.createObjectURL(blob);
+        var anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = filename;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
+    }
+
+    function cacheBustUrl(url) {
+        return url + (url.indexOf('?') === -1 ? '?' : '&') + '_=' + Date.now();
+    }
+
+    function exportFilteredSessionsAsJson() {
+        var rows = getFilteredSessions().map(buildSummaryRow);
+        downloadText('telemetry-summary.json', JSON.stringify(rows, null, 2), 'application/json');
+    }
+
+    function exportFilteredSessionsAsCsv() {
+        var rows = getFilteredSessions().map(buildSummaryRow);
+        downloadText('telemetry-summary.csv', toCsv(rows), 'text/csv;charset=utf-8');
+    }
+
+    function renderComparisonPanel(filtered) {
+        var panel = document.getElementById('comparison-panel');
         if (filtered.length === 0) {
-            list.innerHTML = '<tr><td colspan="6" class="text-muted">No sessions recorded yet.</td></tr>';
+            destroyGroupMap();
+            panel.className = 'comparison-panel empty';
+            panel.innerHTML = '';
             return;
         }
 
-        filtered.forEach(s => {
-            var tr = document.createElement('tr');
-            var duration = (s.lastEvent && s.startTime) ?
-                s.lastEvent - new Date(s.startTime).getTime() : 0;
+        destroyGroupMap();
 
-            tr.innerHTML =
-                '<td><code>' + esc(s.sessionId) + '</code></td>' +
-                '<td>' + esc(s.parcoursName || s.parcoursId || '-') + '</td>' +
-                '<td>' + esc(new Date(s.startTime).toLocaleString('fr-FR')) + '</td>' +
-                '<td>' + s.eventCount + '</td>' +
-                '<td>' + formatDuration(duration) + '</td>' +
-                '<td><button class="btn btn-sm btn-outline-info">Detail</button></td>';
-
-            tr.querySelector('button').addEventListener('click', function() {
-                showDetail(s.sessionId);
-            });
-            list.appendChild(tr);
+        var sorted = filtered.slice().sort(function(left, right) {
+            return new Date(left.startTime).getTime() - new Date(right.startTime).getTime();
         });
+        var startMs = sorted.map(function(session) { return new Date(session.startTime).getTime(); });
+        var firstStart = startMs[0];
+        var lastStart = startMs[startMs.length - 1];
+        var avgAccValues = sorted.map(function(session) { return Number(session.avgAccuracy); }).filter(function(value) { return Number.isFinite(value); });
+        var gapValues = sorted.map(function(session) { return Number(session.maxGapMs); }).filter(function(value) { return Number.isFinite(value); });
+        var sleepCount = sorted.filter(function(session) { return Number(session.sleepSuspects) > 0; }).length;
+        var precisionAlerts = sorted.filter(function(session) { return Number.isFinite(Number(session.avgAccuracy)) && Number(session.avgAccuracy) > 10; }).length;
+
+        var cards = [
+            ['Sessions', sorted.length],
+            ['Start span', formatDuration(Math.max(0, lastStart - firstStart))],
+            ['Mean accuracy', avgAccValues.length ? formatNumber(avgAccValues.reduce(function(sum, value) { return sum + value; }, 0) / avgAccValues.length, 1) + 'm' : '-'],
+            ['Worst gap', gapValues.length ? formatGap(Math.max.apply(null, gapValues)) : '-'],
+            ['Sleep alerts', sleepCount],
+            ['Coarse devices', precisionAlerts]
+        ].map(function(item) {
+            return '<div class="metric-card"><span class="label">' + esc(item[0]) + '</span><span class="value">' + esc(item[1]) + '</span></div>';
+        }).join('');
+
+        var rows = sorted.map(function(session) {
+            return '<tr>' +
+                '<td><code>' + esc(session.sessionId) + '</code></td>' +
+                '<td>' + esc(getSessionDeviceLabel(session)) + '</td>' +
+                '<td>' + esc(formatDuration(Math.max(0, new Date(session.startTime).getTime() - firstStart))) + '</td>' +
+                '<td>' + (session.finalStep == null ? '-' : esc(session.finalStep)) + '</td>' +
+                '<td>' + esc(session.gpsCount == null ? '-' : session.gpsCount) + '</td>' +
+                '<td>' + (session.avgAccuracy == null ? '-' : esc(formatNumber(session.avgAccuracy, 1)) + 'm') + '</td>' +
+                '<td>' + esc(formatGap(session.maxGapMs)) + '</td>' +
+                '<td>' + esc(session.sleepSuspects || 0) + '</td>' +
+                '<td>' + esc(session.staleCallbacks || 0) + '</td>' +
+                '<td>' + esc(session.audioErrors || 0) + '</td>' +
+            '</tr>';
+        }).join('');
+
+        panel.className = 'comparison-panel';
+        panel.innerHTML =
+            '<div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">' +
+                '<div><strong>Filtered comparison</strong><div class="text-secondary small">Side-by-side view of the currently filtered sessions.</div></div>' +
+                '<button class="btn btn-outline-secondary btn-sm" data-action="toggle-group-map">' + (groupMapEnabled ? 'Hide map' : 'Show map') + '</button>' +
+            '</div>' +
+            '<div class="comparison-grid">' + cards + '</div>' +
+            '<div class="comparison-table-wrap"><table class="table table-sm mb-0"><thead><tr><th>Session</th><th>Device</th><th>Offset</th><th>Step</th><th>GPS</th><th>Avg acc</th><th>Max gap</th><th>Sleep</th><th>Stale</th><th>Audio</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+            (groupMapEnabled ? '<div class="mt-3"><div id="group-map-status" class="text-secondary small">Loading filtered tracks...</div><div id="group-map" class="comparison-map"></div><div id="group-map-legend" class="comparison-legend"></div></div>' : '');
+
+        panel.querySelector('[data-action="toggle-group-map"]').addEventListener('click', function() {
+            groupMapEnabled = !groupMapEnabled;
+            renderSessions();
+        });
+
+        if (groupMapEnabled) renderGroupMap(sorted);
     }
 
-    function showDetail(sessionId) {
-        fetch('/telemetry/session/' + encodeURIComponent(sessionId))
-            .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
-            .then(data => renderDetail(data))
-            .catch(e => alert('Failed to load session: ' + e));
+    function renderGroupMap(filtered) {
+        var mapEl = document.getElementById('group-map');
+        var statusEl = document.getElementById('group-map-status');
+        var legendEl = document.getElementById('group-map-legend');
+        if (!groupMapEnabled || !mapEl || !statusEl || !legendEl) return;
+
+        var sessions = filtered.slice(0, 8);
+        var omittedCount = Math.max(0, filtered.length - sessions.length);
+        var token = ++groupMapRenderToken;
+
+        statusEl.textContent = 'Loading filtered tracks...';
+        legendEl.innerHTML = '';
+
+        Promise.all(sessions.map(function(session) {
+            return loadDetail(session.sessionId).then(function(data) {
+                mergeSessionSummaryFromDetail(session, data);
+                return { session: session, data: data };
+            });
+        }))
+            .then(function(items) {
+                if (token !== groupMapRenderToken || !groupMapEnabled) return null;
+                var parcoursIds = [...new Set(items.map(function(item) {
+                    return item.data.parcoursId || item.data.parcoursName || '';
+                }).filter(Boolean))];
+                if (parcoursIds.length === 1) {
+                    return loadParcoursOverlay(parcoursIds[0]).then(function(overlay) {
+                        return { items: items, overlay: overlay, parcoursIds: parcoursIds };
+                    });
+                }
+                return { items: items, overlay: null, parcoursIds: parcoursIds };
+            })
+            .then(function(payload) {
+                if (!payload || token !== groupMapRenderToken || !groupMapEnabled) return;
+                drawGroupMap(mapEl.id, payload.items, payload.overlay);
+                var statusParts = [payload.items.length + ' track' + (payload.items.length > 1 ? 's' : '')];
+                if (omittedCount > 0) statusParts.push('+' + omittedCount + ' omitted');
+                if (payload.parcoursIds.length > 1) statusParts.push('zones hidden for mixed parcours');
+                statusEl.textContent = statusParts.join(' · ');
+                legendEl.innerHTML = payload.items.map(function(item, index) {
+                    var color = getTrackColor(index);
+                    return '<div class="comparison-legend-item"><span class="comparison-legend-color" style="background:' + esc(color) + '"></span><code>' + esc(item.session.sessionId) + '</code><span>' + esc(getSessionDeviceLabel(item.session)) + '</span></div>';
+                }).join('');
+            })
+            .catch(function(error) {
+                if (token !== groupMapRenderToken || !groupMapEnabled) return;
+                destroyGroupMap();
+                statusEl.textContent = 'Failed to load group map: ' + String(error);
+            });
     }
 
-    function renderDetail(data) {
-        document.getElementById('sessions').style.display = 'none';
-        document.getElementById('detail').style.display = 'block';
-        document.getElementById('detail-title').textContent =
-            (data.parcoursName || data.parcoursId) + ' — ' + new Date(data.startTime).toLocaleString('fr-FR');
+    function drawGroupMap(mapId, items, overlay) {
+        destroyGroupMap();
 
-        // Map — destroy previous instance to avoid memory leak
-        if (currentMap) { currentMap.remove(); currentMap = null; }
-        var map = L.map('telemetry-map').setView([45.75, 4.85], 15);
-        currentMap = map;
+        var map = L.map(mapId).setView([45.75, 4.85], 15);
+        groupMap = map;
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             maxZoom: 19,
             attribution: '&copy; OpenStreetMap'
         }).addTo(map);
 
-        // GPS track
-        var gpsEvents = data.events.filter(e => e.type === 'gps');
-        if (gpsEvents.length > 0) {
-            var latlngs = gpsEvents.map(e => [e.data.lat, e.data.lng]);
-            var polyline = L.polyline(latlngs, {color: '#0dcaf0', weight: 3}).addTo(map);
-            map.fitBounds(polyline.getBounds().pad(0.1));
+        var featureGroup = L.featureGroup().addTo(map);
 
-            // Start/end markers
-            L.circleMarker(latlngs[0], {radius: 8, color: '#198754', fillOpacity: 0.8})
-                .bindTooltip('Start').addTo(map);
-            L.circleMarker(latlngs[latlngs.length-1], {radius: 8, color: '#dc3545', fillOpacity: 0.8})
-                .bindTooltip('End').addTo(map);
+        if (overlay && overlay.data && overlay.data.spots) {
+            var spots = overlay.data.spots;
+            (spots.steps || []).forEach(function(step, index) {
+                addSpotGeometry(map, featureGroup, step, '#ffc107', 0.07, 'Step ' + index + ':');
+            });
+            (spots.offlimits || []).forEach(function(spot, index) {
+                addSpotGeometry(map, featureGroup, spot, '#dc3545', 0.08, 'Offlimit ' + index + ':');
+            });
         }
 
-        // Step fire markers
-        var stepEvents = data.events.filter(e => e.type === 'step_fire');
-        stepEvents.forEach(e => {
-            var gpsAtTime = gpsEvents.filter(g => g.t <= e.t);
-            if (gpsAtTime.length > 0) {
-                var g = gpsAtTime[gpsAtTime.length - 1];
-                L.circleMarker([g.data.lat, g.data.lng], {radius: 6, color: '#ffc107', fillOpacity: 0.9})
-                    .bindTooltip(e.data.name || ('Step ' + e.data.step)).addTo(map);
+        items.forEach(function(item, index) {
+            var color = getTrackColor(index);
+            var gpsEvents = getGpsEvents(item.data.events || []);
+            if (!gpsEvents.length) return;
+
+            var latlngs = gpsEvents.map(function(event) { return [event.data.lat, event.data.lng]; });
+            var track = L.polyline(latlngs, {
+                color: color,
+                weight: 3,
+                opacity: 0.92
+            }).bindTooltip(item.session.sessionId + ' · ' + getSessionDeviceLabel(item.session)).addTo(map);
+            featureGroup.addLayer(track);
+
+            L.circleMarker(latlngs[0], {
+                radius: 5,
+                color: color,
+                fillColor: color,
+                fillOpacity: 0.7,
+                weight: 1
+            }).bindTooltip('Start ' + item.session.sessionId).addTo(map);
+
+            L.circleMarker(latlngs[latlngs.length - 1], {
+                radius: 5,
+                color: '#ffffff',
+                fillColor: color,
+                fillOpacity: 0.95,
+                weight: 1
+            }).bindTooltip('End ' + item.session.sessionId).addTo(map);
+        });
+
+        if (featureGroup.getLayers().length > 0) map.fitBounds(featureGroup.getBounds().pad(0.08));
+        setTimeout(function() { map.invalidateSize(); }, 80);
+    }
+
+    function updateParcoursOptions() {
+        var select = document.getElementById('parcours-filter');
+        var currentValue = select.value;
+        var values = [...new Set(allSessions.map(function(session) {
+            return session.parcoursName || session.parcoursId || '';
+        }).filter(Boolean))].sort();
+
+        select.innerHTML = '<option value="">Tous</option>';
+        values.forEach(function(value) {
+            var option = document.createElement('option');
+            option.value = value;
+            option.textContent = value;
+            if (value === currentValue) option.selected = true;
+            select.appendChild(option);
+        });
+    }
+
+    function getFilteredSessions() {
+        var parcoursValue = document.getElementById('parcours-filter').value;
+        var dateFrom = document.getElementById('date-from').value;
+        var dateTo = document.getElementById('date-to').value;
+        var sessionSearch = document.getElementById('session-search').value.trim().toLowerCase();
+
+        return allSessions.filter(function(session) {
+            var sessionDate = dateOnly(session.startTime);
+            var parcoursLabel = (session.parcoursName || session.parcoursId || '');
+
+            if (parcoursValue && parcoursLabel !== parcoursValue) return false;
+            if (dateFrom && sessionDate < dateFrom) return false;
+            if (dateTo && sessionDate > dateTo) return false;
+            if (sessionSearch && !String(session.sessionId || '').toLowerCase().includes(sessionSearch)) return false;
+            return true;
+        });
+    }
+
+    function renderSessions() {
+        var filtered = getFilteredSessions();
+        var list = document.getElementById('session-list');
+        var meta = document.getElementById('results-meta');
+        list.innerHTML = '';
+
+        meta.textContent = filtered.length + ' session' + (filtered.length > 1 ? 's' : '') + ' match current filters.';
+        renderComparisonPanel(filtered);
+
+        if (filtered.length === 0) {
+            list.innerHTML = '<tr><td colspan="9" class="text-muted">No sessions match the current filters.</td></tr>';
+            collapseCurrentDetail();
+            return;
+        }
+
+        filtered.forEach(function(session) {
+            var row = document.createElement('tr');
+            row.dataset.sessionId = session.sessionId;
+            if (expandedSessionId === session.sessionId) row.classList.add('session-row-active');
+
+            row.innerHTML =
+                '<td><code>' + esc(session.sessionId) + '</code></td>' +
+                '<td>' + esc(session.parcoursName || session.parcoursId || '-') + '</td>' +
+                '<td>' + esc(getSessionDeviceLabel(session)) + '</td>' +
+                '<td>' + esc(new Date(session.startTime).toLocaleString('fr-FR')) + '</td>' +
+                '<td>' + formatDuration(getSessionDuration(session)) + '</td>' +
+                '<td>' + esc(session.eventCount) + '</td>' +
+                '<td>' + renderGpsBadges(session) + '</td>' +
+                '<td>' + (session.finalStep == null ? '-' : esc(session.finalStep)) + '</td>' +
+                '<td><button class="btn btn-sm btn-outline-info">' + (expandedSessionId === session.sessionId ? 'Collapse' : 'Expand') + '</button></td>';
+
+            row.querySelector('button').addEventListener('click', function() {
+                toggleSessionDetail(session, row, this);
+            });
+            list.appendChild(row);
+
+            if (expandedSessionId === session.sessionId && currentDetailRow) {
+                list.appendChild(currentDetailRow);
             }
         });
 
-        // Event type filters
-        var types = [...new Set(data.events.map(e => e.type))];
-        var hiddenTypes = new Set(['gps']); // hide GPS by default
-        var filtersEl = document.getElementById('event-filters');
+        hydrateFilteredSessions(filtered);
+    }
+
+    function collapseCurrentDetail() {
+        destroyDetailMap();
+        if (currentDetailRow && currentDetailRow.parentNode) {
+            currentDetailRow.parentNode.removeChild(currentDetailRow);
+        }
+        document.querySelectorAll('#session-list tr').forEach(function(row) {
+            row.classList.remove('session-row-active');
+            var button = row.querySelector('button');
+            if (button) button.textContent = 'Expand';
+        });
+        currentDetailRow = null;
+        expandedSessionId = null;
+        detailEventsVisible = false;
+    }
+
+    function clearCurrentDetailRow(preserveExpandedSession) {
+        destroyDetailMap();
+        if (currentDetailRow && currentDetailRow.parentNode) {
+            currentDetailRow.parentNode.removeChild(currentDetailRow);
+        }
+        currentDetailRow = null;
+        if (!preserveExpandedSession) {
+            expandedSessionId = null;
+            detailEventsVisible = false;
+        }
+    }
+
+    function findSessionRow(sessionId) {
+        return Array.prototype.find.call(document.querySelectorAll('#session-list tr[data-session-id]'), function(row) {
+            return row.dataset.sessionId === sessionId;
+        }) || null;
+    }
+
+    function openSessionDetail(sessionId, options) {
+        var opts = options || {};
+        var row = findSessionRow(sessionId);
+        var session = allSessions.find(function(item) { return item.sessionId === sessionId; });
+        if (!row || !session) {
+            if (expandedSessionId === sessionId) {
+                expandedSessionId = null;
+                detailEventsVisible = false;
+            }
+            return;
+        }
+
+        collapseCurrentDetail();
+        expandedSessionId = session.sessionId;
+        detailEventsVisible = !!opts.openEvents;
+        row.classList.add('session-row-active');
+
+        var button = row.querySelector('button');
+        if (button) button.textContent = 'Collapse';
+
+        currentDetailRow = document.createElement('tr');
+        currentDetailRow.innerHTML = '<td colspan="9" class="text-muted">Loading detail...</td>';
+        row.parentNode.insertBefore(currentDetailRow, row.nextSibling);
+
+        loadDetail(session.sessionId, { forceReload: !!opts.forceReload })
+            .then(function(detailData) {
+                if (expandedSessionId !== session.sessionId || !currentDetailRow) return;
+                renderDetailRow(session, detailData, currentDetailRow, { openEvents: !!opts.openEvents });
+            })
+            .catch(function(error) {
+                if (!currentDetailRow) return;
+                currentDetailRow.innerHTML = '<td colspan="9" class="text-danger">Failed to load detail: ' + esc(String(error)) + '</td>';
+            });
+    }
+
+    function toggleSessionDetail(session, row, button) {
+        if (expandedSessionId === session.sessionId) {
+            collapseCurrentDetail();
+            return;
+        }
+        openSessionDetail(session.sessionId, { openEvents: false });
+    }
+
+    function loadDetail(sessionId, options) {
+        var opts = options || {};
+        if (opts.forceReload) detailCache.delete(sessionId);
+        if (detailCache.has(sessionId)) return Promise.resolve(detailCache.get(sessionId));
+
+        return fetch(cacheBustUrl('/telemetry/session/' + encodeURIComponent(sessionId)))
+            .then(function(response) {
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                return response.json();
+            })
+            .then(function(data) {
+                detailCache.set(sessionId, data);
+                return data;
+            });
+    }
+
+    function loadParcoursOverlay(parcoursId) {
+        if (!parcoursId) return Promise.resolve(null);
+        if (parcoursCache.has(parcoursId)) return Promise.resolve(parcoursCache.get(parcoursId));
+
+        return fetch('/telemetry/parcours/' + encodeURIComponent(parcoursId))
+            .then(function(response) {
+                if (!response.ok) return null;
+                return response.json();
+            })
+            .then(function(data) {
+                parcoursCache.set(parcoursId, data);
+                return data;
+            })
+            .catch(function() {
+                return null;
+            });
+    }
+
+    function getGpsEvents(events) {
+        return events.filter(function(event) {
+            return event.type === 'gps' && event.data && typeof event.data.lat === 'number' && typeof event.data.lng === 'number';
+        });
+    }
+
+    function getRouteProbeFinalStep(events) {
+        for (var i = events.length - 1; i >= 0; i -= 1) {
+            var event = events[i];
+            if (event.type === 'route_probe' && event.data && Number.isInteger(event.data.currentStep)) return event.data.currentStep;
+        }
+        return null;
+    }
+
+    function computeMetrics(data) {
+        var events = data.events || [];
+        var gpsEvents = getGpsEvents(events);
+        var stepFires = events.filter(function(event) { return event.type === 'step_fire'; });
+        var uniqueSteps = [...new Set(stepFires.map(function(event) { return event.data && event.data.step; }).filter(Number.isInteger))];
+        var gpsQualitySummaries = events.filter(function(event) { return event.type === 'gps_quality_summary'; });
+        var gapMaxFromSummary = Math.max.apply(null, [0].concat(gpsQualitySummaries.map(function(event) { return Number(event.data && event.data.maxGapMs) || 0; })));
+        var gapMaxFromEvents = Math.max.apply(null, [0].concat(events.filter(function(event) { return event.type === 'gps_callback_gap'; }).map(function(event) { return Number(event.data && event.data.gapMs) || 0; })));
+        var gpsAcc = gpsEvents.map(function(event) { return Number(event.data.acc); }).filter(function(value) { return !Number.isNaN(value); });
+        var rejectedFromSummary = gpsQualitySummaries.reduce(function(sum, event) {
+            return sum + (Number(event.data && event.data.rejectedSamples) || 0);
+        }, 0);
+
+        return {
+            finalStep: getRouteProbeFinalStep(events),
+            uniqueSteps: uniqueSteps.length,
+            duplicateStepFires: Math.max(0, stepFires.length - uniqueSteps.length),
+            gpsCount: gpsEvents.length,
+            avgAccuracy: gpsAcc.length ? gpsAcc.reduce(function(sum, value) { return sum + value; }, 0) / gpsAcc.length : null,
+            maxGapMs: Math.max(gapMaxFromSummary, gapMaxFromEvents) || null,
+            sleepSuspects: events.filter(function(event) { return event.type === 'gps_sleep_suspect'; }).length,
+            staleCallbacks: events.filter(function(event) { return event.type === 'gps_stale_callback'; }).length,
+            rejectedFixes: rejectedFromSummary || events.filter(function(event) { return event.type === 'gps_trigger_rejected'; }).length,
+            heartbeatRecoveries: events.filter(function(event) { return event.type === 'gps_heartbeat_ok'; }).length,
+            gpsLost: events.filter(function(event) { return event.type === 'gps_state' && event.data && event.data.state === 'lost'; }).length,
+            audioErrors: events.filter(function(event) { return event.type === 'audio_loaderror' || event.type === 'audio_playerror'; }).length,
+            resumeCount: events.filter(function(event) { return event.type === 'session_resume'; }).length
+        };
+    }
+
+    function describeSession(data, metrics) {
+        var client = data.client || {};
+        return [
+            '<div class="detail-meta"><strong>Session</strong><br><code>' + esc(data.sessionId) + '</code></div>',
+            '<div class="detail-meta"><strong>Parcours</strong><br>' + esc(data.parcoursName || data.parcoursId || '-') + '</div>',
+            '<div class="detail-meta"><strong>Device</strong><br>' + esc(client.deviceModel || '-') + ' / ' + esc(client.osVersion || '-') + '</div>',
+            '<div class="detail-meta"><strong>GPS</strong><br>' + metrics.gpsCount + ' points, avg acc ' + esc(formatNumber(metrics.avgAccuracy, 1)) + 'm</div>',
+            '<div class="detail-meta"><strong>Zones</strong><br><span class="zones-hint">Yellow: steps, red: offlimits, cyan: user track.</span></div>'
+        ].join('');
+    }
+
+    function renderMetricCards(metrics) {
+        var items = [
+            ['Last step', metrics.finalStep == null ? '-' : metrics.finalStep],
+            ['Unique steps', metrics.uniqueSteps],
+            ['Refires', metrics.duplicateStepFires],
+            ['GPS points', metrics.gpsCount],
+            ['Avg acc', metrics.avgAccuracy == null ? '-' : formatNumber(metrics.avgAccuracy, 1) + 'm'],
+            ['Max gap', metrics.maxGapMs == null ? '-' : metrics.maxGapMs + 'ms'],
+            ['Sleep suspect', metrics.sleepSuspects],
+            ['Stale callbacks', metrics.staleCallbacks],
+            ['Rejected fixes', metrics.rejectedFixes],
+            ['Heartbeat ok', metrics.heartbeatRecoveries],
+            ['GPS lost', metrics.gpsLost],
+            ['Audio errors', metrics.audioErrors]
+        ];
+
+        return items.map(function(item) {
+            return '<div class="metric-card"><span class="label">' + esc(item[0]) + '</span><span class="value">' + esc(item[1]) + '</span></div>';
+        }).join('');
+    }
+
+    function renderDetailRow(session, data, detailRow, options) {
+        var opts = options || {};
+        var metrics = computeMetrics(data);
+        var mapId = 'telemetry-map-' + esc(data.sessionId).replace(/[^a-zA-Z0-9_-]/g, '_');
+        var eventPanelId = 'event-panel-' + esc(data.sessionId).replace(/[^a-zA-Z0-9_-]/g, '_');
+        var filtersId = 'event-filters-' + esc(data.sessionId).replace(/[^a-zA-Z0-9_-]/g, '_');
+        var eventTableId = 'event-table-' + esc(data.sessionId).replace(/[^a-zA-Z0-9_-]/g, '_');
+
+        detailRow.innerHTML =
+            '<td colspan="9">' +
+                '<div class="detail-panel">' +
+                    '<div class="d-flex justify-content-between align-items-start gap-3 mb-3">' +
+                        '<div><h5 class="mb-1">' + esc(data.parcoursName || data.parcoursId || '-') + '</h5><div class="text-secondary">' + esc(new Date(data.startTime).toLocaleString('fr-FR')) + '</div></div>' +
+                        '<div class="d-flex gap-2">' +
+                            '<button class="btn btn-outline-secondary btn-sm" data-action="toggle-events">Events</button>' +
+                            '<button class="btn btn-outline-secondary btn-sm" data-action="export-json">JSON</button>' +
+                            '<button class="btn btn-outline-secondary btn-sm" data-action="export-csv">CSV</button>' +
+                            '<button class="btn btn-outline-danger btn-sm" data-action="delete-session">Delete</button>' +
+                        '</div>' +
+                    '</div>' +
+                    '<div class="metrics-grid">' + renderMetricCards(metrics) + '</div>' +
+                    '<div class="detail-grid">' +
+                        '<div><div id="' + mapId + '" class="detail-map"></div></div>' +
+                        '<div class="detail-sidebar">' + describeSession(data, metrics) + '</div>' +
+                    '</div>' +
+                    '<div id="' + eventPanelId + '" class="event-panel">' +
+                        '<div class="mb-2"><strong>Event filters</strong><div id="' + filtersId + '" class="mt-2"></div></div>' +
+                        '<div class="event-table-wrap"><table class="table table-sm mb-0"><thead><tr><th>Time</th><th>+sec</th><th>Type</th><th>Data</th></tr></thead><tbody id="' + eventTableId + '"></tbody></table></div>' +
+                    '</div>' +
+                '</div>' +
+            '</td>';
+
+        detailRow.querySelector('[data-action="export-json"]').addEventListener('click', function() {
+            downloadText(data.sessionId + '.json', JSON.stringify(data, null, 2), 'application/json');
+        });
+
+        detailRow.querySelector('[data-action="export-csv"]').addEventListener('click', function() {
+            var rows = (data.events || []).map(function(event) {
+                return {
+                    time: new Date(event.t).toISOString(),
+                    elapsedSeconds: ((event.t - (data.events[0] ? data.events[0].t : event.t)) / 1000).toFixed(1),
+                    type: event.type,
+                    data: JSON.stringify(event.data || {})
+                };
+            });
+            downloadText(data.sessionId + '-events.csv', toCsv(rows), 'text/csv;charset=utf-8');
+        });
+
+        detailRow.querySelector('[data-action="toggle-events"]').addEventListener('click', function() {
+            var panel = document.getElementById(eventPanelId);
+            panel.classList.toggle('active');
+            detailEventsVisible = panel.classList.contains('active');
+            if (!panel.dataset.rendered) {
+                setupEventPanel(data, filtersId, eventTableId);
+                panel.dataset.rendered = '1';
+            }
+        });
+
+        if (opts.openEvents) {
+            var panel = document.getElementById(eventPanelId);
+            panel.classList.add('active');
+            setupEventPanel(data, filtersId, eventTableId);
+            panel.dataset.rendered = '1';
+            detailEventsVisible = true;
+        }
+
+        detailRow.querySelector('[data-action="delete-session"]').addEventListener('click', function() {
+            if (!confirm('Delete session ' + data.sessionId + '?')) return;
+            fetch('/telemetry/session/' + encodeURIComponent(data.sessionId), { method: 'DELETE' })
+                .then(function(response) {
+                    if (!response.ok) throw new Error('HTTP ' + response.status);
+                    detailCache.delete(data.sessionId);
+                    allSessions = allSessions.filter(function(item) { return item.sessionId !== data.sessionId; });
+                    collapseCurrentDetail();
+                    updateParcoursOptions();
+                    renderSessions();
+                })
+                .catch(function(error) {
+                    alert('Failed to delete session: ' + error);
+                });
+        });
+
+        loadParcoursOverlay(data.parcoursId || data.parcoursName).then(function(overlay) {
+            if (expandedSessionId !== data.sessionId) return;
+            renderMap(mapId, data, overlay);
+        });
+    }
+
+    function setupEventPanel(data, filtersId, eventTableId) {
+        var types = [...new Set((data.events || []).map(function(event) { return event.type; }))].sort();
+        var hiddenTypes = new Set(['gps']);
+        var filtersEl = document.getElementById(filtersId);
+
         filtersEl.innerHTML = '';
-        types.forEach(type => {
+        types.forEach(function(type) {
             var badge = document.createElement('span');
             badge.className = 'badge bg-secondary badge-filter' + (hiddenTypes.has(type) ? '' : ' active');
             badge.textContent = type;
@@ -221,58 +1063,232 @@
                 if (hiddenTypes.has(type)) hiddenTypes.delete(type);
                 else hiddenTypes.add(type);
                 badge.classList.toggle('active');
-                renderEvents(data.events, hiddenTypes);
+                renderEventsTable(data.events || [], hiddenTypes, eventTableId);
             });
             filtersEl.appendChild(badge);
         });
 
-        renderEvents(data.events, hiddenTypes);
-
-        // Delete button
-        document.getElementById('delete-btn').onclick = function() {
-            if (confirm('Delete session ' + data.sessionId + '?')) {
-                fetch('/telemetry/session/' + encodeURIComponent(data.sessionId), {method: 'DELETE'})
-                    .then(() => { goBack(); loadSessions(); });
-            }
-        };
-
-        setTimeout(() => map.invalidateSize(), 200);
+        renderEventsTable(data.events || [], hiddenTypes, eventTableId);
     }
 
-    function renderEvents(events, hiddenTypes) {
-        var list = document.getElementById('event-list');
+    function renderEventsTable(events, hiddenTypes, eventTableId) {
+        var list = document.getElementById(eventTableId);
+        var startT = events.length ? events[0].t : 0;
         list.innerHTML = '';
-        var startT = events.length > 0 ? events[0].t : 0;
 
-        events.forEach(e => {
-            if (hiddenTypes.has(e.type)) return;
-            var tr = document.createElement('tr');
-            tr.className = 'event-row event-' + e.type;
-            var elapsed = ((e.t - startT) / 1000).toFixed(1);
-            var dataStr = '';
-            if (e.type === 'gps') {
-                dataStr = e.data.lat.toFixed(5) + ', ' + e.data.lng.toFixed(5) +
-                    ' (acc:' + e.data.acc + 'm)';
+        events.forEach(function(event) {
+            if (hiddenTypes.has(event.type)) return;
+
+            var row = document.createElement('tr');
+            row.className = 'event-row event-' + event.type;
+            var elapsed = ((event.t - startT) / 1000).toFixed(1);
+            var dataStr;
+
+            if (event.type === 'gps' && event.data) {
+                dataStr = [
+                    Number(event.data.lat).toFixed(5) + ', ' + Number(event.data.lng).toFixed(5),
+                    'acc:' + event.data.acc + 'm',
+                    event.data.source ? 'src:' + event.data.source : null,
+                    event.data.callbackGapMs ? 'gap:' + event.data.callbackGapMs + 'ms' : null,
+                    event.data.ageMs ? 'age:' + event.data.ageMs + 'ms' : null,
+                    event.data.rejected ? 'rejected' : null
+                ].filter(Boolean).join(' | ');
             } else {
-                dataStr = Object.entries(e.data || {}).map(function(kv) {
-                    return kv[0] + ':' + kv[1];
-                }).join(', ');
+                dataStr = JSON.stringify(event.data || {});
             }
-            tr.innerHTML =
-                '<td>' + esc(new Date(e.t).toLocaleTimeString('fr-FR')) + '</td>' +
-                '<td>' + elapsed + '</td>' +
-                '<td><code>' + esc(e.type) + '</code></td>' +
+
+            row.innerHTML =
+                '<td>' + esc(new Date(event.t).toLocaleTimeString('fr-FR')) + '</td>' +
+                '<td>' + esc(elapsed) + '</td>' +
+                '<td><code>' + esc(event.type) + '</code></td>' +
                 '<td>' + esc(dataStr) + '</td>';
-            list.appendChild(tr);
+            list.appendChild(row);
         });
     }
 
-    function goBack() {
-        document.getElementById('sessions').style.display = 'block';
-        document.getElementById('detail').style.display = 'none';
+    function normalizeLatLng(point) {
+        if (!point) return null;
+        if (Array.isArray(point) && point.length >= 2) return [Number(point[0]), Number(point[1])];
+        if (typeof point.lat === 'number' && (typeof point.lng === 'number' || typeof point.lon === 'number')) {
+            return [Number(point.lat), Number(point.lng != null ? point.lng : point.lon)];
+        }
+        if (typeof point.latitude === 'number' && (typeof point.longitude === 'number' || typeof point.lon === 'number')) {
+            return [Number(point.latitude), Number(point.longitude != null ? point.longitude : point.lon)];
+        }
+        return null;
     }
 
-    document.getElementById('back-btn').addEventListener('click', goBack);
+    function addSpotGeometry(map, group, spot, color, fillOpacity, prefix) {
+        var layer = null;
+        var tooltip = prefix + ' ' + (spot.name || '');
+
+        if (Array.isArray(spot.radius) && Array.isArray(spot.radius[0])) {
+            var points = spot.radius.map(normalizeLatLng).filter(Boolean);
+            if (points.length > 2) {
+                layer = L.polygon(points, { color: color, weight: 2, fillOpacity: fillOpacity }).addTo(map);
+            }
+        } else if (typeof spot.radius === 'number') {
+            layer = L.circle([spot.lat, spot.lon], {
+                radius: Number(spot.radius),
+                color: color,
+                weight: 2,
+                fillOpacity: fillOpacity
+            }).addTo(map);
+        } else if (typeof spot.lat === 'number' && typeof spot.lon === 'number') {
+            layer = L.circleMarker([spot.lat, spot.lon], {
+                radius: 5,
+                color: color,
+                weight: 2,
+                fillOpacity: 0.85
+            }).addTo(map);
+        }
+
+        if (!layer) return;
+        layer.bindTooltip(tooltip.trim());
+        group.addLayer(layer);
+    }
+
+    function renderMap(mapId, data, overlay) {
+        destroyDetailMap();
+
+        var map = L.map(mapId).setView([45.75, 4.85], 15);
+        detailMap = map;
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '&copy; OpenStreetMap'
+        }).addTo(map);
+
+        var featureGroup = L.featureGroup().addTo(map);
+
+        if (overlay && overlay.data && overlay.data.spots) {
+            var spots = overlay.data.spots;
+            (spots.steps || []).forEach(function(step, index) {
+                addSpotGeometry(map, featureGroup, step, '#ffc107', 0.08, 'Step ' + index + ':');
+            });
+            (spots.offlimits || []).forEach(function(spot, index) {
+                addSpotGeometry(map, featureGroup, spot, '#dc3545', 0.09, 'Offlimit ' + index + ':');
+            });
+            (spots.zones || []).forEach(function(spot, index) {
+                addSpotGeometry(map, featureGroup, spot, '#20c997', 0.05, 'Zone ' + index + ':');
+            });
+        }
+
+        var gpsEvents = getGpsEvents(data.events || []);
+        if (gpsEvents.length > 0) {
+            var latlngs = gpsEvents.map(function(event) { return [event.data.lat, event.data.lng]; });
+            var polyline = L.polyline(latlngs, { color: '#0dcaf0', weight: 3 }).addTo(map);
+            featureGroup.addLayer(polyline);
+
+            L.circleMarker(latlngs[0], { radius: 7, color: '#198754', fillOpacity: 0.8 }).bindTooltip('Start').addTo(map);
+            L.circleMarker(latlngs[latlngs.length - 1], { radius: 7, color: '#dc3545', fillOpacity: 0.8 }).bindTooltip('End').addTo(map);
+        }
+
+        (data.events || []).filter(function(event) { return event.type === 'step_fire'; }).forEach(function(event) {
+            var gpsAtTime = gpsEvents.filter(function(gps) { return gps.t <= event.t; });
+            if (!gpsAtTime.length) return;
+            var nearest = gpsAtTime[gpsAtTime.length - 1];
+            L.circleMarker([nearest.data.lat, nearest.data.lng], {
+                radius: 5,
+                color: '#ffffff',
+                fillColor: '#ffc107',
+                fillOpacity: 0.9,
+                weight: 1
+            }).bindTooltip((event.data && event.data.name) || ('Step ' + event.data.step)).addTo(map);
+        });
+
+        if (featureGroup.getLayers().length > 0) {
+            map.fitBounds(featureGroup.getBounds().pad(0.08));
+        }
+
+        setTimeout(function() { map.invalidateSize(); }, 80);
+    }
+
+    function setRefreshButtonState(isRefreshing) {
+        var button = document.getElementById('refresh-sessions');
+        if (!button) return;
+        button.disabled = isRefreshing;
+        button.textContent = isRefreshing ? 'Refreshing...' : 'Refresh';
+    }
+
+    function reloadSessions(options) {
+        var opts = options || {};
+        var restoreExpandedSessionId = opts.preserveView ? expandedSessionId : null;
+        var restoreEventsVisible = opts.preserveView ? detailEventsVisible : false;
+
+        hydrationCycleToken += 1;
+        groupMapRenderToken += 1;
+        sessionHydrationPromises.clear();
+        detailCache.clear();
+
+        if (opts.preserveView) clearCurrentDetailRow(true);
+        else clearCurrentDetailRow(false);
+
+        document.getElementById('session-list').innerHTML = '<tr><td colspan="9" class="text-muted">Loading...</td></tr>';
+        return fetch(cacheBustUrl('/telemetry/sessions'))
+            .then(function(response) {
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                return response.json();
+            })
+            .then(function(data) {
+                allSessions = data;
+                updateParcoursOptions();
+                renderSessions();
+
+                if (restoreExpandedSessionId) {
+                    openSessionDetail(restoreExpandedSessionId, {
+                        forceReload: true,
+                        openEvents: restoreEventsVisible
+                    });
+                }
+            })
+            .catch(function(error) {
+                document.getElementById('session-list').innerHTML = '<tr><td colspan="9" class="text-danger">Failed to load sessions: ' + esc(String(error)) + '</td></tr>';
+            });
+    }
+
+    function refreshSessions() {
+        if (refreshInFlight) return;
+        refreshInFlight = true;
+        setRefreshButtonState(true);
+
+        Promise.resolve()
+            .then(function() {
+                return reloadSessions({ preserveView: true });
+            })
+            .finally(function() {
+                refreshInFlight = false;
+                setRefreshButtonState(false);
+            });
+    }
+
+    function loadSessions() {
+        reloadSessions({ preserveView: false });
+    }
+
+    document.getElementById('apply-filters').addEventListener('click', function() {
+        collapseCurrentDetail();
+        renderSessions();
+    });
+
+    document.getElementById('refresh-sessions').addEventListener('click', refreshSessions);
+    document.getElementById('export-summary-json').addEventListener('click', exportFilteredSessionsAsJson);
+    document.getElementById('export-summary-csv').addEventListener('click', exportFilteredSessionsAsCsv);
+
+    document.getElementById('reset-filters').addEventListener('click', function() {
+        document.getElementById('parcours-filter').value = '';
+        document.getElementById('date-from').value = '';
+        document.getElementById('date-to').value = '';
+        document.getElementById('session-search').value = '';
+        collapseCurrentDetail();
+        renderSessions();
+    });
+
+    ['parcours-filter', 'date-from', 'date-to', 'session-search'].forEach(function(id) {
+        document.getElementById(id).addEventListener('change', function() {
+            collapseCurrentDetail();
+            renderSessions();
+        });
+    });
 
     loadSessions();
     </script>

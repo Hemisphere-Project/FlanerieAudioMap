@@ -1444,21 +1444,34 @@ PAGES['end'] = () => {
 PAGE('title');   
 // PAGE('checkgeo');
 
-// TAP RELOAD // DEVMODE
+// TAP RELOAD // DEVMODE // RESTART
 var taps = 0;
+var tapZone = null;
 var tapTimeout = null;
-$('body').off('click').on('click', () => {
-    taps++;
-    if (taps == 5) 
-    {
-        // On Title page: toggle DEVMODE
-        if (currentPage == 'title') devmode(!DEVMODE);
-
-        // On other pages: reload
-        else location.reload();
+$('body').off('click').on('click', (e) => {
+    // On Title page: split top/bottom zones
+    if (currentPage == 'title') {
+        let zone = (e.clientY < window.innerHeight / 2) ? 'top' : 'bottom';
+        if (zone != tapZone) { taps = 0; tapZone = zone; }
+        taps++;
+        if (taps == 5) {
+            if (zone == 'top') devmode(!DEVMODE);
+            else {
+                console.log('RESTART (tap)');
+                TELEMETRY.log('session_restart_click', {reason: 'restart_tap'});
+                TELEMETRY.end();
+                PARCOURS.clearStore();
+                location.reload();
+            }
+        }
+    }
+    // On other pages: reload after 5 taps
+    else {
+        taps++;
+        if (taps == 5) location.reload();
     }
     if (tapTimeout) clearTimeout(tapTimeout);
-    tapTimeout = setTimeout(() => taps = 0, 300);
+    tapTimeout = setTimeout(() => { taps = 0; tapZone = null; }, 300);
 })
 
 // DEV MODE
