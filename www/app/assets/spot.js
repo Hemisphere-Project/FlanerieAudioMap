@@ -287,6 +287,13 @@ class Spot extends EventEmitter
     {
         // Near: load if not loaded
         if (this.player && !this.player.isLoaded() && this.near(pos)) {
+            telemetryLog('spot_audio_prepare', {
+                spot_type: this._type,
+                step: this._type === 'steps' ? this._index : undefined,
+                name: this._spot.name,
+                visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
+                distance_to_center: this.distanceToCenter(pos),
+            })
             this.loadAudio()
             console.log('Spot load:', this._spot.name, this.player.isLoaded())
         }
@@ -543,7 +550,10 @@ class Step extends Spot
                 step: this._index,
                 name: this._spot.name,
                 distanceToCenter: this.distanceToCenter(position),
-                distanceToBorder: borderDistance
+                distanceToBorder: borderDistance,
+                visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
+                player_ready: typeof this.player.isReady === 'function' ? this.player.isReady() : this.player.isLoaded(),
+                player_load_state: typeof this.player.loadState === 'function' ? this.player.loadState() : undefined,
             })
             this.player.resume()
             return inside
@@ -577,7 +587,20 @@ class Step extends Spot
             })
             
             // Play
-            if (this.player.isPaused()) this.player.resume()
+            let action = this.player.isPaused() ? 'resume' : 'play'
+            telemetryLog('step_audio_trigger', {
+                step: this._index,
+                name: this._spot.name,
+                action: action,
+                was_current_step: wasCurrentStep,
+                visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
+                distanceToCenter: this.distanceToCenter(position),
+                distanceToBorder: borderDistance,
+                player_prepared_before_play: this.player.isLoaded(),
+                player_ready_before_play: typeof this.player.isReady === 'function' ? this.player.isReady() : this.player.isLoaded(),
+                player_load_state_before_play: typeof this.player.loadState === 'function' ? this.player.loadState() : undefined,
+            })
+            if (action === 'resume') this.player.resume()
             else this.player.play()
 
             if (wasCurrentStep) {
@@ -586,7 +609,9 @@ class Step extends Spot
                     name: this._spot.name,
                     distanceToCenter: this.distanceToCenter(position),
                     distanceToBorder: borderDistance,
-                    paused: this.player.isPaused()
+                    paused: this.player.isPaused(),
+                    player_ready_before_play: typeof this.player.isReady === 'function' ? this.player.isReady() : this.player.isLoaded(),
+                    player_load_state_before_play: typeof this.player.loadState === 'function' ? this.player.loadState() : undefined,
                 })
             }
 

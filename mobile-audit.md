@@ -258,7 +258,7 @@ What remains:
 - The `checknotifications` Android 13+ permission gate **preserved**: Android 13+ requires `POST_NOTIFICATIONS` for the BackgroundGeolocation foreground service notification, independent of the local notification chain.
 
 **Replacement strategies (tracked in P0.5 and C1b):**
-- Fix 1d (P0.5): `WKWebView.allowsBackgroundTimeExtension` (iOS 17+) — prevents WKWebView JS suspension natively, merged into the background GPS plugin fork.
+- Fix 1d (P0.5): `WKWebView.allowsBackgroundTimeExtension` (iOS 17.4+) — prevents WKWebView JS suspension natively, merged into the background GPS plugin fork.
 - Fix 1e (P0.5): Android direct AlarmManager + WebView wakeup — replaces the broken notification chain, merged into the background GPS plugin fork.
 - C1b: Android `FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK` in the audiofocus plugin fork — OEM-level audio service protection on Samsung/Xiaomi.
 
@@ -329,7 +329,7 @@ Applied to fork v2.4.0 (committed 2026-05-06, deployed to FlanerieCordova). iOS:
 
 **Fix 1d — iOS: `WKWebView.allowsBackgroundTimeExtension`** ✅ DONE (2026-05-06)
 
-`CDVBackgroundGeolocation.m` `pluginInitialize`: sets `wv.allowsBackgroundTimeExtension = YES` under `@available(iOS 17.0, *)`. Prevents WKWebView JS context suspension — removes the root cause that Fix 1b compensates for. Fix 1b remains active as fallback for pre-iOS 17 devices (~30% of active iPhones).
+`CDVBackgroundGeolocation.m` `pluginInitialize`: sets `wv.allowsBackgroundTimeExtension = YES` under `@available(iOS 17.4, *)`. Prevents WKWebView JS context suspension where Apple exposes the API. Fix 1b remains active as fallback for pre-iOS 17.4 devices.
 
 **Fix 2 — iOS: significant location changes as parallel keepalive** ✅ DONE (2026-05-06)
 
@@ -777,7 +777,7 @@ Goal:
 Current implementation status:
 - ✅ Implemented: telemetry client (`telemetry.js`), local buffering/flush/retry, session resume, server ingestion (`/telemetry-push`), session storage, admin listing endpoints.
 - ✅ Implemented events: session start/resume/end, GPS stream, GPS state (`ok/lost/off`), step fire, step done.
-- ⚠️ Missing/partial: permission-state snapshots, notification scheduling/permission diagnostics, background/foreground transition logs, explicit media preload success/failure telemetry, audio failure/focus lifecycle telemetry, offlimit enter/exit telemetry.
+- ⚠️ Missing/partial: permission-state snapshots, notification scheduling/permission diagnostics, background/foreground transition logs, explicit media preload success/failure telemetry, audio failure/focus lifecycle telemetry, offlimit enter/exit telemetry, iOS background-task timing, and warm-start vs cold-start audio trigger state.
 
 Recommended telemetry scope:
 - app start
@@ -793,6 +793,10 @@ Recommended telemetry scope:
 - repeated resume overlays or audio focus losses
 - notification scheduling failures or missing permission state
 - media preload success/failure and size
+- iOS background task begin/end timing around GPS callbacks
+- whether a GPS-triggered audio start was warm (already loaded) or cold (load + play in background)
+- play request / play success / play timeout / play error with app visibility and lock state
+- native AVAudioSession category / active state / interruption / route-change snapshots
 
 Implemented/extended on 2026-04-27:
 - Added behavioral telemetry for `global_offlimit_enter` / `global_offlimit_leave`.
@@ -813,6 +817,7 @@ Files:
 - `www/app/pages.js`
 - `www/app/assets/geoloc.js`
 - `www/app/assets/player.js`
+- `cordova-plugin-audiofocus/src/ios/AudioFocus.m`
 - `server.js`
 
 Acceptance:
@@ -896,6 +901,70 @@ Two independent declarations already cover this:
 Both the manifest permission and the service declaration are already in place at v2.3.2. Android 14+ requirements are met.
 
 Regression risk: **NONE** — already handled.
+
+#### P3.4 iOS locked-screen GPS-triggered audio start 🆕 [TEST-FIRST] ⏳ ACTIVE
+
+Retested 2026-05-07. The bug still reproduces on iOS after the initial lifecycle fixes.
+
+Current understanding:
+- The failure is not the general ability to keep audio alive while locked; it is the ability to start the next GPS-triggered audio while the phone is already locked.
+- This concerns the real visitor path, not just diagnostic UX. The diagnostic suite must reflect the production path rather than adding a special-case workaround.
+- The current iOS playback path is still HTML5 Howler. Keep that as the primary engine for now.
+
+Likely causes:
+- `geoloc.js` opens an iOS background task for each location callback but ends it immediately after synchronous JS dispatch. A GPS-triggered HTML5 audio start may still be pending asynchronously when the task is already over.
+- Step audio can still be a cold start when the phone is locked. Full parcours preload is not viable for a 45-minute walk; selective prewarm is only a mitigation.
+- The `cordova-plugin-audiofocus` fork currently covers interruptions, but not the full AVAudioSession lifecycle needed for a long locked-screen GPS-triggered walk.
+
+Decision:
+- Do not build diagnostic-only cheats that make the test pass without matching the real walk behavior.
+- Do not switch to a separate foreground-only playback path.
+- Keep native playback as a later fallback if task/session fixes still do not make HTML5 reliable.
+
+Action plan:
+1. **Phase 1 — real-path diagnostics + telemetry**
+    - Extend the diagnostic suite to test the real locked-screen trigger problem explicitly:
+      - warm-start while locked (player already loaded before lock)
+      - cold-start while locked (player first loaded/played after GPS callback)
+      - keep the same `PlayerSimple` / `PlayerStep` path used by the real app, not a separate test-only implementation
+    - Add telemetry in both diagnostic and real walk paths for:
+      - iOS background task begin/end around each GPS callback
+      - step trigger source and timestamp
+      - player load state at trigger (`loaded` / `cold`)
+      - play request, play success, play timeout, loaderror, playerror
+      - app visibility / lock-resume markers
+      - native AVAudioSession state snapshots from the iOS audiofocus fork
+
+2. **Phase 2 — hold background execution until audio start settles**
+    - On iOS, stop ending the BackgroundGeolocation background task immediately after `positionCallback(position)` returns.
+    - Hold it until the triggered audio start reaches one of: success, failure, or timeout.
+    - This is the first production fix to test because it directly matches the most likely failure mode.
+
+3. **Phase 2b — selective prewarm, not full preload**
+    - Consider keeping the next likely step warm on iOS so the lock-screen trigger is more often a warm-start than a cold-start.
+    - Treat this as a mitigation only. It does not remove the need to make cold-start reliable enough for skipped or distant steps.
+
+4. **Phase 3 — make the audiofocus fork the AVAudioSession owner**
+    - Expand the iOS audiofocus fork from interruption handling to full walk-session ownership:
+      - explicit session begin/end for the walk
+      - interruption handling
+      - route change handling
+      - media services reset/loss handling
+      - JS-visible session state telemetry
+    - Preferred path: keep HTML5 playback, but make the AVAudioSession lifecycle native and authoritative.
+
+5. **Phase 4 — native playback fallback only if Phases 1-3 fail**
+    - If locked-screen GPS-triggered cold-start still cannot be made reliable enough with HTML5 + better task/session handling, move the real playback path itself to native on iOS.
+    - This is explicitly deferred until after the task/session path is proven insufficient.
+
+What to start with now:
+- Start with **Phase 1 instrumentation + diagnostic update**, then immediately do **Phase 2 background-task lifetime**.
+- These two steps have the highest information value and the best chance of fixing the real user path without a larger architecture switch.
+
+Acceptance:
+- Telemetry can distinguish warm-start vs cold-start failures on iOS locked-screen triggers.
+- The diagnostic suite reproduces the real locked-screen next-step start problem instead of a simplified proxy.
+- GPS-triggered next-step audio starts reliably on iOS while locked when a valid background GPS callback arrives.
 
 ### C: Cordova container findings (cross-reference, 2026-05-05)
 

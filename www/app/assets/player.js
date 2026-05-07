@@ -138,6 +138,46 @@ class PlayerSimple extends EventEmitter
         this._volume = 0
         this._media = null
         this._loadError = false
+        this._pendingGeoTask = null
+    }
+
+    _src() {
+        if (this._player && this._player._src) return this._player._src
+        if (this._media && this._media.src) return this._media.src
+        return null
+    }
+
+    loadState() {
+        if (this._media && this._media.src == '-') return 'empty'
+        if (!this._player) return 'unloaded'
+        if (typeof this._player.state === 'function') return this._player.state()
+        return 'unknown'
+    }
+
+    isReady() {
+        return this.loadState() === 'loaded' || (this._media && this._media.src == '-')
+    }
+
+    _claimGeoTask(meta) {
+        if (typeof claimBackgroundGeoTask !== 'function') return null
+        let task = claimBackgroundGeoTask(Object.assign({
+            src: this._src(),
+            visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
+            loaded_before_play: this.isReady(),
+            prepared_before_play: this.isLoaded(),
+            load_state_before_play: this.loadState(),
+        }, meta || {}))
+        if (task) this._pendingGeoTask = task
+        return task
+    }
+
+    _resolveGeoTask(status, extra) {
+        if (!this._pendingGeoTask || typeof resolveBackgroundGeoTask !== 'function') return
+        resolveBackgroundGeoTask(this._pendingGeoTask, status, Object.assign({
+            src: this._src(),
+            visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
+        }, extra || {}))
+        this._pendingGeoTask = null
     }
 
     load(basepath, media, usemediapath = true) {
@@ -199,6 +239,18 @@ class PlayerSimple extends EventEmitter
             this._playRequested = false
             this.emit('play', this._player._src)
             console.log('PlayerSimple play:', this._player._src)
+            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_play_started', {
+                src: this._src(),
+                visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
+                loaded_before_play: this.isReady(),
+                prepared_before_play: this.isLoaded(),
+                load_state: this.loadState(),
+            })
+            this._resolveGeoTask('play-started', {
+                loaded_before_play: this.isReady(),
+                prepared_before_play: this.isLoaded(),
+                load_state: this.loadState(),
+            })
         })
         this._player.on('pause', () => {
             if (!this._player) return
@@ -215,6 +267,11 @@ class PlayerSimple extends EventEmitter
             if (this._player) {
                 this._loadError = false
                 this.emit('load', this._player._src)
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_load_ready', {
+                    src: this._src(),
+                    visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
+                    load_state: this.loadState(),
+                })
                 // console.log('PlayerSimple ready:', this._player._src)
             }
         })
@@ -225,6 +282,7 @@ class PlayerSimple extends EventEmitter
             clearTimeout(this._playRequestedTimeout)
             this.emit('loaderror', this._player ? this._player._src : null, error)
             if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_loaderror', {src: this._player ? this._player._src : null, error: String(error)});
+            this._resolveGeoTask('loaderror', { error: String(error) })
         })
         this._player.on('playerror', (id, error) => {
             console.error('PlayerSimple playerror:', this._player ? this._player._src : '?', error)
@@ -233,6 +291,7 @@ class PlayerSimple extends EventEmitter
             clearTimeout(this._playRequestedTimeout)
             this.emit('playerror', this._player ? this._player._src : null, error)
             if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_playerror', {src: this._player ? this._player._src : null, error: String(error)});
+            this._resolveGeoTask('playerror', { error: String(error) })
         })
 
         this.master(media.master)
@@ -245,6 +304,7 @@ class PlayerSimple extends EventEmitter
             ALL_PLAYERS = ALL_PLAYERS.filter(player => player !== this)
             PAUSED_PLAYERS = PAUSED_PLAYERS.filter(player => player !== this)
             DUCKED_PLAYERS.delete(this)
+            this._resolveGeoTask('cleared')
             this._player.stop()
             this._player.unload()
             this._player = null
@@ -290,9 +350,20 @@ class PlayerSimple extends EventEmitter
                 console.warn('PlayerSimple play timeout: resetting stuck _playRequested', this._player ? this._player._src : '?')
                 this._playRequested = false
                 if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_play_timeout', {src: this._player ? this._player._src : null})
+                this._resolveGeoTask('play-timeout')
             }
         }, 5000)
         console.log('PlayerSimple play requested:', this._player._src, 'seek:', seek, 'volume:', volume)
+        let bgTask = this._claimGeoTask({ seek: seek })
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_play_requested', {
+            src: this._src(),
+            visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
+            loaded_before_play: this.isReady(),
+            prepared_before_play: this.isLoaded(),
+            load_state_before_play: this.loadState(),
+            bg_task_claimed: !!bgTask,
+            seek: seek,
+        })
 
         // Only re-request native focus when it was explicitly lost.
         // Unknown/unavailable focus state (-1) should not block playback.
@@ -578,6 +649,17 @@ class PlayerStep extends EventEmitter
 
     isLoaded() {
         return this.voice.isLoaded() && this.music.isLoaded() && this.ambiant.isLoaded() && this.offlimit.isLoaded() && this.afterplay.isLoaded()
+    }
+
+    isReady() {
+        return this.voice.isReady() && this.music.isReady() && this.ambiant.isReady() && this.offlimit.isReady() && this.afterplay.isReady()
+    }
+
+    loadState() {
+        let states = [this.voice, this.music, this.ambiant, this.offlimit, this.afterplay].map(player => player.loadState())
+        if (states.every(state => state === 'loaded' || state === 'empty')) return 'loaded'
+        if (states.every(state => state === 'unloaded' || state === 'empty')) return 'unloaded'
+        return states.join(',')
     }
 
     isOfflimit() {

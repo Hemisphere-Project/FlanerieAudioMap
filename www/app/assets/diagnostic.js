@@ -108,14 +108,25 @@ class DiagnosticRunner extends EventEmitter {
             // ====== PHASE 3: Keepalive stress ======
 
             {
-                id: 'T9', phase: 3,
-                name: 'Audio verrouillé + GPS',
-                instructions: 'Verrouillez votre téléphone et mettez-le en poche.\nMarchez lentement ~10m.\nUn son doit se déclencher.\nDéverrouillez après ~30s.',
+                id: 'T8', phase: 3,
+                name: 'Audio préchargé + GPS verrouillé',
+                instructions: 'Le son de test est d\'abord préchargé.\nAttendez que le diagnostic affiche qu\'il est prêt, verrouillez le téléphone, puis marchez lentement ~10m.\nLe son doit démarrer téléphone verrouillé.',
                 duration: 60000,
                 auto: false,
-                run: (ctx) => this._testLockedAudioTrigger(ctx),
-                pass: (m) => m.triggered,
-                userQuestion: 'Avez-vous entendu un son se déclencher dans votre poche ?',
+                run: (ctx) => this._testLockedAudioTrigger(ctx, { prewarm: true }),
+                pass: (m) => m.triggered && m.play_ok && !m.had_error,
+                userQuestion: 'Avez-vous entendu le son préchargé se déclencher téléphone verrouillé ?',
+            },
+
+            {
+                id: 'T9', phase: 3,
+                name: 'Audio démarrage à froid + GPS verrouillé',
+                instructions: 'Le son n\'est créé qu\'au moment du déclenchement.\nVerrouillez votre téléphone et mettez-le en poche.\nMarchez lentement ~10m.\nLe son doit démarrer depuis un état froid pendant que le téléphone est verrouillé.',
+                duration: 60000,
+                auto: false,
+                run: (ctx) => this._testLockedAudioTrigger(ctx, { prewarm: false }),
+                pass: (m) => m.triggered && m.play_ok && !m.had_error,
+                userQuestion: 'Avez-vous entendu le son démarrer à froid dans votre poche ?',
             },
             {
                 id: 'T10', phase: 3,
@@ -292,6 +303,46 @@ class DiagnosticRunner extends EventEmitter {
             html5: this._html5()
         })
         return this._trackPlayer(h)
+    }
+
+    _howlState(howl) {
+        if (!howl) return 'missing'
+        try {
+            return typeof howl.state === 'function' ? howl.state() : 'unknown'
+        }
+        catch (e) {
+            return 'error'
+        }
+    }
+
+    _bindDiagAudioPlayer(ctx, player, meta) {
+        let m = ctx.metrics
+        let mode = meta && meta.mode ? meta.mode : 'unknown'
+
+        player.on('load', () => {
+            m.player_state = this._howlState(player)
+            m.player_loaded = true
+            if (mode === 'warm') m.prewarm_ready = true
+            this.emit('metrics', m)
+        })
+        player.on('play', () => {
+            m.play_ok = true
+            m.player_state = this._howlState(player)
+            m.play_started_in_background = m.is_background === true
+            this.emit('metrics', m)
+        })
+        player.on('loaderror', (id, err) => {
+            m.had_error = true
+            m.error = String(err)
+            m.player_state = this._howlState(player)
+            this.emit('metrics', m)
+        })
+        player.on('playerror', (id, err) => {
+            m.had_error = true
+            m.error = String(err)
+            m.player_state = this._howlState(player)
+            this.emit('metrics', m)
+        })
     }
 
     _requestAudioFocus() {
@@ -579,7 +630,8 @@ class DiagnosticRunner extends EventEmitter {
     // T9: GPS-triggered audio with phone locked.
     // Uses the same direction projection as T6, but from the first movement observed
     // while the phone may already be locked.
-    _testLockedAudioTrigger(ctx) {
+    _testLockedAudioTrigger(ctx, options) {
+        options = options || {}
         let m = ctx.metrics
         m.triggered = false
         m.origin_locked = false
@@ -587,10 +639,31 @@ class DiagnosticRunner extends EventEmitter {
         m.is_background = false
         m.waiting_for_accuracy = true
         m.distance_from_start = 0
+        m.play_ok = false
+        m.had_error = false
+        m.prewarm_ready = false
+        m.player_loaded = false
+        m.player_state = 'missing'
+        m.trigger_mode = options.prewarm ? 'warm' : 'cold'
+        m.triggered_in_background = false
+        m.play_started_in_background = false
 
-        let player = this._makeTestHowl('background-ok.mp3', false)
+        let player = null
         let originLat = null, originLon = null
         let triggerRadius = 10
+
+        let ensurePlayer = () => {
+            if (player) return player
+            player = this._makeTestHowl('background-ok.mp3', false)
+            this._bindDiagAudioPlayer(ctx, player, { mode: m.trigger_mode })
+            m.player_state = this._howlState(player)
+            this.emit('metrics', m)
+            return player
+        }
+
+        if (options.prewarm) {
+            ensurePlayer()
+        }
 
         let onPause = () => { m.is_background = true; this.emit('metrics', m) }
         let onResume = () => { m.is_background = false; this.emit('metrics', m) }
@@ -619,7 +692,11 @@ class DiagnosticRunner extends EventEmitter {
 
             if (dist >= triggerRadius && !m.triggered) {
                 m.triggered = true
+                m.triggered_in_background = m.is_background === true
                 this._requestAudioFocus()
+                let triggerPlayer = ensurePlayer()
+                m.player_loaded_at_trigger = m.player_loaded === true
+                m.player_state = this._howlState(triggerPlayer)
                 player.play()
                 this.emit('metrics', m)
             }
