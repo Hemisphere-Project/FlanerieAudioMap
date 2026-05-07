@@ -331,6 +331,12 @@ class DiagnosticRunner extends EventEmitter {
                 this.emit('metrics', m)
                 return
             }
+            if (m.play_ok && m.play_started_in_background && m.is_background === false) {
+                m.duplicate_foreground_replay = true
+                try { player.stop() } catch (e) {}
+                this.emit('metrics', m)
+                return
+            }
             m.play_ok = true
             m.player_state = this._howlState(player)
             m.play_started_in_background = m.is_background === true
@@ -662,6 +668,7 @@ class DiagnosticRunner extends EventEmitter {
         m.trigger_mode = options.prewarm ? 'warm' : 'cold'
         m.triggered_in_background = false
         m.play_started_in_background = false
+        m.duplicate_foreground_replay = false
 
         let player = null
         let originLat = null, originLon = null

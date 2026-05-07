@@ -299,7 +299,7 @@ class Spot extends EventEmitter
         }
 
         // Far: unload if loaded — uses _unloadRadius (> _loadRadius) to avoid oscillation at zone edges
-        if (this.player && this.player.isLoaded() && this.distanceToCenter(pos) > this._unloadRadius) {
+        if (this.player && this.player.isLoaded() && this.distanceToCenter(pos) > this._unloadRadius && !this._keepLoadedForUpcomingTrigger) {
             if (this._type === 'steps' && PARCOURS.currentStep() == this._index) {
                 telemetryLog('step_active_unload', {
                     step: this._index,
@@ -476,6 +476,7 @@ class Step extends Spot
         // player
         this.player = new PlayerStep()
         this._done = false
+        this._keepLoadedForUpcomingTrigger = false
         this.player.on('done', () => {
             this._done = true
             this.emit('done', this)
@@ -501,6 +502,29 @@ class Step extends Spot
     loadAudio() {
         // Players
         this.player.load( '/media/' + this.pID + '/' + this._spot.folder + '/', this._spot.media ) 
+    }
+
+    holdLoadedForUpcomingTrigger(value) {
+        this._keepLoadedForUpcomingTrigger = !!value
+    }
+
+    prewarmForLockedStart(reason = 'unknown') {
+        if (typeof APP_VISIBILITY !== 'undefined' && APP_VISIBILITY !== 'foreground') return false
+        if (!this.player) return false
+
+        this._keepLoadedForUpcomingTrigger = true
+        telemetryLog('step_prewarm_next', {
+            step: this._index,
+            name: this._spot.name,
+            reason: reason,
+            visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
+            already_loaded: this.player.isLoaded(),
+            already_ready: typeof this.player.isReady === 'function' ? this.player.isReady() : this.player.isLoaded(),
+            load_state: typeof this.player.loadState === 'function' ? this.player.loadState() : undefined,
+        })
+
+        if (!this.player.isLoaded()) this.loadAudio()
+        return true
     }
 
     updatePosition(position) 
@@ -555,6 +579,7 @@ class Step extends Spot
                 player_ready: typeof this.player.isReady === 'function' ? this.player.isReady() : this.player.isLoaded(),
                 player_load_state: typeof this.player.loadState === 'function' ? this.player.loadState() : undefined,
             })
+            this._keepLoadedForUpcomingTrigger = false
             this.player.resume()
             return inside
         }
@@ -600,6 +625,7 @@ class Step extends Spot
                 player_ready_before_play: typeof this.player.isReady === 'function' ? this.player.isReady() : this.player.isLoaded(),
                 player_load_state_before_play: typeof this.player.loadState === 'function' ? this.player.loadState() : undefined,
             })
+            this._keepLoadedForUpcomingTrigger = false
             if (action === 'resume') this.player.resume()
             else this.player.play()
 
@@ -628,6 +654,7 @@ class Step extends Spot
     }
 
     clear() {
+        this._keepLoadedForUpcomingTrigger = false
         super.clear()
         
         // Remove from allSteps

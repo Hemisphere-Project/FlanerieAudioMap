@@ -55,8 +55,24 @@ class Parcours extends EventEmitter {
         if (s !== null) {
             this.state.stepIndex = s;
             this.store();
+            this.prewarmUpcomingStep('current-step-change');
         }
         return this.state.stepIndex;
+    }
+
+    prewarmUpcomingStep(reason = 'unknown') {
+        let nextIndex = this.state.stepIndex < 0 ? 0 : this.state.stepIndex + 1;
+        let steps = this.spots.steps || [];
+        steps.forEach(step => {
+            if (typeof step.holdLoadedForUpcomingTrigger === 'function') {
+                step.holdLoadedForUpcomingTrigger(step._index === nextIndex);
+            }
+        });
+
+        let nextStep = this.find('steps', nextIndex);
+        if (nextStep && typeof nextStep.prewarmForLockedStart === 'function') {
+            nextStep.prewarmForLockedStart(reason);
+        }
     }
 
     telemetryRouteProbe(position, triggerAccepted = true) {
@@ -150,6 +166,8 @@ class Parcours extends EventEmitter {
         GEO.on('position', (position) => {
             this.update(position)
         })
+
+        this.prewarmUpcomingStep('build')
 
         this.store();
         return this;
