@@ -137,3 +137,22 @@ x En DEV: afficher les sorties de route sur la carte
 - APP: MAP offline !
 - APP: Store progress time in media in steps => restore jumps to that point
 
+*******************************
+
+VISIO 29 avril 2026
+
+CHAT:
+- Infomaniak Maintenance page sur hébergement nodejs => Support Ticket / Main GZ+KXKM + Fallback Infomaniak ?
+- Transistor SDK background-GPS
+- Je suis perdu -> bouton plus visible , carte + Rejoins la zone = texte explicatif, c'est ton GPS qui est out, essaie de rejoindre la prochaine étape
+    --- Attention niveau de zoom = garder la prochaine étape dans le champs
+    --- Permettre le dezoom 
+    --- Texte: 
+    --- GPS precision
+=> Message global t'es perdu ! si hit the wall (no audio) -> si OFFAudio loop, 
+don't trigger offlimits to allow reenter the Parcours, wait for next step
+- review inside / near (distance to Center / border) / Step updatePosition -> when hit the wall ? 
+
+Couleur Current / Next zone
+
+=> GPS state dans la page je suis perdu
