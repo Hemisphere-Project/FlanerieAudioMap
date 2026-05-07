@@ -682,8 +682,9 @@ class DiagnosticRunner extends EventEmitter {
                 primeHowlForBackground(prewarmedPlayer, {
                     src: BASEURL + '/images/background-ok.mp3',
                     reason: 'diag-prewarm'
-                }).then(ok => {
-                    m.prime_ok = ok
+                }).then(result => {
+                    m.prime_ok = !!(result && result.ok)
+                    m.prime_error = result && result.ok ? null : (result && result.reason ? String(result.reason) : null)
                     this.emit('metrics', m)
                 })
             }

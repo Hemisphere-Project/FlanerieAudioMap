@@ -140,20 +140,11 @@ function shouldRequestAudioFocusForPlay() {
 
 function primeHowlForBackground(howl, options) {
     options = options || {}
-    if (!howl || PLATFORM !== 'ios') return Promise.resolve(false)
-    if (howl.__backgroundPrimed) return Promise.resolve(true)
+    if (!howl || PLATFORM !== 'ios') return Promise.resolve({ ok: false, reason: 'unsupported' })
+    if (howl.__backgroundPrimed) return Promise.resolve({ ok: true, reason: 'already-primed' })
     if (howl.__backgroundPrimingPromise) return howl.__backgroundPrimingPromise
 
     let state = typeof howl.state === 'function' ? howl.state() : 'unknown'
-    if (state !== 'loaded') {
-        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_prime_skip', {
-            src: options.src || null,
-            reason: options.reason || 'unknown',
-            visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
-            load_state: state,
-        })
-        return Promise.resolve(false)
-    }
 
     let originalVolume = 1
     try { originalVolume = howl.volume() } catch (e) {}
@@ -184,7 +175,7 @@ function primeHowlForBackground(howl, options) {
                 visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
             }, extra || {}))
 
-            resolve(ok)
+            resolve({ ok: ok, reason: ok ? 'played' : ((extra && extra.error) || 'failed') })
         }
 
         let onPlay = () => {
