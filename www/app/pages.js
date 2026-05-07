@@ -1529,7 +1529,7 @@ $('#logs-title').on('click', (e) => {
 var GPSLOST_PLAYER = new PlayerSimple(true, 0);
 GPSLOST_PLAYER.load(BASEURL+'/images/', {src: 'gpslost.mp3', master: 1}, false);
 
-GEO.stateUpdateTimeout = (PLATFORM == 'android') ? 10 * 1000 : 30 * 1000; // 10s on Android, 30s on iOS
+GEO.stateUpdateTimeout = 30 * 1000; // 30s on all platforms — must exceed the 15s native keepalive interval
 GEO.on('stateUpdate', (state) => {
     if (state == 'lost') {
         if (currentPage != 'parcours') return;                                  // only if on parcours page
