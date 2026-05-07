@@ -1268,9 +1268,9 @@ PAGES['parcours'] = () => {
     }
 
     // ON step fire: show next
-    PARCOURS.on('fire', (s) => {
+    PARCOURS.on('fire', (s, meta = {}) => {
         if (s._type != 'steps') return
-        TELEMETRY.log('step_fire', {step: s._index, name: s._spot.name});
+        if (!meta.refire) TELEMETRY.log('step_fire', {step: s._index, name: s._spot.name});
         updateStepsMarkers()
 
         // First step

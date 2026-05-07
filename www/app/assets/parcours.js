@@ -275,7 +275,7 @@ class Parcours extends EventEmitter {
         if (s) {
             s.on('enter', () => this.emit('enter', s));
             s.on('leave', () => this.emit('leave', s));
-            s.on('fire', () => this.emit('fire', s));
+            s.on('fire', (spot, meta) => this.emit('fire', spot, meta));
             s.on('done', () => this.emit('done', s));
         }
         return this;

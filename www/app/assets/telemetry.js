@@ -13,13 +13,115 @@ var TELEMETRY = (function() {
     var sessionStartedAt = null;
     var sessionHasFlushed = false;
     var sessionMeta = null;
+    var gpsSummary = null;
 
     var GPS_INTERVAL = 5000;    // min 5s between GPS logs
     var FLUSH_INTERVAL = 30000; // flush every 30s
     var BUFFER_CAP = 500;
     var STORAGE_KEY = 'telemetry_session';
     var RESUME_MAX_AGE = 4 * 60 * 60 * 1000;
-    var SCHEMA_VERSION = 1;
+    var SCHEMA_VERSION = 2;
+
+    function _resetGpsSummary() {
+        return {
+            startedAt: Date.now(),
+            samples: 0,
+            rejectedSamples: 0,
+            backgroundSamples: 0,
+            heartbeatSamples: 0,
+            stationarySamples: 0,
+            bucketCounts: {
+                excellent: 0,
+                good: 0,
+                fair: 0,
+                poor: 0,
+                bad: 0,
+                unknown: 0
+            },
+            minAcc: null,
+            maxAcc: null,
+            lastAcc: null,
+            lastSource: null,
+            minGapMs: null,
+            maxGapMs: null,
+            totalGapMs: 0,
+            gapSamples: 0,
+            maxAgeMs: null,
+            totalAgeMs: 0,
+            ageSamples: 0
+        };
+    }
+
+    function _accuracyBucket(acc) {
+        if (typeof acc !== 'number' || isNaN(acc)) return 'unknown';
+        if (acc <= 10) return 'excellent';
+        if (acc <= 20) return 'good';
+        if (acc <= 40) return 'fair';
+        if (acc <= 80) return 'poor';
+        return 'bad';
+    }
+
+    function _recordGpsSample(data) {
+        if (!gpsSummary) gpsSummary = _resetGpsSummary();
+
+        gpsSummary.samples += 1;
+        if (data.rejected) gpsSummary.rejectedSamples += 1;
+        if (data.visibility === 'background') gpsSummary.backgroundSamples += 1;
+        if (data.source === 'heartbeat') gpsSummary.heartbeatSamples += 1;
+        if (data.source === 'bg_stationary') gpsSummary.stationarySamples += 1;
+
+        var bucket = _accuracyBucket(data.acc);
+        if (!(bucket in gpsSummary.bucketCounts)) bucket = 'unknown';
+        gpsSummary.bucketCounts[bucket] += 1;
+
+        if (typeof data.acc === 'number' && !isNaN(data.acc)) {
+            gpsSummary.minAcc = gpsSummary.minAcc == null ? data.acc : Math.min(gpsSummary.minAcc, data.acc);
+            gpsSummary.maxAcc = gpsSummary.maxAcc == null ? data.acc : Math.max(gpsSummary.maxAcc, data.acc);
+            gpsSummary.lastAcc = data.acc;
+        }
+
+        if (typeof data.callbackGapMs === 'number' && !isNaN(data.callbackGapMs)) {
+            gpsSummary.minGapMs = gpsSummary.minGapMs == null ? data.callbackGapMs : Math.min(gpsSummary.minGapMs, data.callbackGapMs);
+            gpsSummary.maxGapMs = gpsSummary.maxGapMs == null ? data.callbackGapMs : Math.max(gpsSummary.maxGapMs, data.callbackGapMs);
+            gpsSummary.totalGapMs += data.callbackGapMs;
+            gpsSummary.gapSamples += 1;
+        }
+
+        if (typeof data.ageMs === 'number' && !isNaN(data.ageMs)) {
+            gpsSummary.maxAgeMs = gpsSummary.maxAgeMs == null ? data.ageMs : Math.max(gpsSummary.maxAgeMs, data.ageMs);
+            gpsSummary.totalAgeMs += data.ageMs;
+            gpsSummary.ageSamples += 1;
+        }
+
+        gpsSummary.lastSource = data.source || gpsSummary.lastSource;
+    }
+
+    function _flushGpsSummary(reason) {
+        if (!sessionId || !gpsSummary || gpsSummary.samples === 0) return;
+
+        var summary = gpsSummary;
+        gpsSummary = _resetGpsSummary();
+
+        _log('gps_quality_summary', {
+            reason: reason || 'interval',
+            windowMs: Date.now() - summary.startedAt,
+            samples: summary.samples,
+            rejectedSamples: summary.rejectedSamples,
+            backgroundSamples: summary.backgroundSamples,
+            heartbeatSamples: summary.heartbeatSamples,
+            stationarySamples: summary.stationarySamples,
+            accuracyBuckets: summary.bucketCounts,
+            minAcc: summary.minAcc,
+            maxAcc: summary.maxAcc,
+            lastAcc: summary.lastAcc,
+            avgGapMs: summary.gapSamples ? Math.round(summary.totalGapMs / summary.gapSamples) : null,
+            minGapMs: summary.minGapMs,
+            maxGapMs: summary.maxGapMs,
+            avgAgeMs: summary.ageSamples ? Math.round(summary.totalAgeMs / summary.ageSamples) : null,
+            maxAgeMs: summary.maxAgeMs,
+            lastSource: summary.lastSource
+        });
+    }
 
     function _readStored() {
         try {
@@ -130,6 +232,8 @@ var TELEMETRY = (function() {
                 sessionHasFlushed = !!stored.hasFlushed;
                 sessionMeta = _buildSessionMeta();
                 buffer = [];
+                gpsSummary = _resetGpsSummary();
+                lastGpsTime = 0;
                 _writeStored();
                 _log(sessionHasFlushed ? 'session_resume' : 'session_start', {
                     parcoursId: parcoursId,
@@ -147,6 +251,8 @@ var TELEMETRY = (function() {
             sessionHasFlushed = false;
             sessionMeta = _buildSessionMeta();
             buffer = [];
+            gpsSummary = _resetGpsSummary();
+            lastGpsTime = 0;
             _writeStored();
             _log('session_start', {parcoursId: parcoursId, parcoursName: parcoursName});
             _startFlushTimer();
@@ -185,17 +291,31 @@ var TELEMETRY = (function() {
         catch(e) { console.warn('[TELEMETRY] log error', e); }
     }
 
-    function gps(position) {
+    function gps(position, meta) {
         try {
             var now = Date.now();
-            if (now - lastGpsTime < GPS_INTERVAL) return;
-            lastGpsTime = now;
-            _log('gps', {
+            meta = meta || {};
+
+            var data = {
                 lat: position.coords.latitude,
                 lng: position.coords.longitude,
                 acc: Math.round(position.coords.accuracy),
-                spd: position.coords.speed
-            });
+                spd: position.coords.speed,
+                source: meta.source || 'unknown',
+                visibility: meta.visibility || 'unknown'
+            };
+
+            if (typeof meta.callbackGapMs === 'number') data.callbackGapMs = Math.round(meta.callbackGapMs);
+            if (typeof meta.ageMs === 'number') data.ageMs = Math.round(meta.ageMs);
+            if (typeof meta.motionStationary === 'boolean') data.motionStationary = meta.motionStationary;
+            if (meta.rejected) data.rejected = true;
+            if (meta.reason) data.reason = meta.reason;
+
+            _recordGpsSample(data);
+
+            if (now - lastGpsTime < GPS_INTERVAL) return;
+            lastGpsTime = now;
+            _log('gps', data);
         } catch(e) { console.warn('[TELEMETRY] gps error', e); }
     }
 
@@ -205,6 +325,7 @@ var TELEMETRY = (function() {
                 console.log('[TELEMETRY] flush skipped: browser mode');
                 return Promise.resolve({ ok: false, skipped: true, reason: 'browser-mode' });
             }
+            _flushGpsSummary('interval');
             if (!sessionId || buffer.length === 0) {
                 console.log('[TELEMETRY] flush skipped: sessionId=' + sessionId + ' buffer=' + buffer.length);
                 return Promise.resolve({ ok: false, skipped: true, reason: 'empty-buffer' });
@@ -247,6 +368,7 @@ var TELEMETRY = (function() {
 
     function end() {
         try {
+            _flushGpsSummary('end');
             _log('session_end', {});
             if (flushTimer) { clearInterval(flushTimer); flushTimer = null; }
             localStorage.removeItem(STORAGE_KEY);
@@ -254,12 +376,14 @@ var TELEMETRY = (function() {
             _flushFinal();
             console.log('[TELEMETRY] Ended session', sessionId);
             sessionId = null;
+            gpsSummary = null;
         } catch(e) { console.warn('[TELEMETRY] end error', e); }
     }
 
     // Best-effort flush for page unload / session end
     function _flushFinal() {
         if (typeof PLATFORM !== 'undefined' && PLATFORM === 'browser') return;
+        _flushGpsSummary('final');
         if (!sessionId || buffer.length === 0) return;
         var payload = JSON.stringify({
             sessionId: sessionId,

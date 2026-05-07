@@ -469,6 +469,7 @@ class Step extends Spot
         // player
         this.player = new PlayerStep()
         this._done = false
+        this._lastSkipTelemetryAt = 0
         this.player.on('done', () => {
             this._done = true
             this.emit('done', this)
@@ -531,7 +532,10 @@ class Step extends Spot
 
         // Already completed in this run
         if (this._done) {
-            telemetryLog('step_skip_done', {step: this._index, name: this._spot.name})
+            if (Date.now() - this._lastSkipTelemetryAt > 15000) {
+                this._lastSkipTelemetryAt = Date.now()
+                telemetryLog('step_skip_done', {step: this._index, name: this._spot.name})
+            }
             return inside
         }
 
@@ -596,7 +600,7 @@ class Step extends Spot
             console.log('== ETAPE:', this._index, this._spot.name)
 
             // fire event
-            this.emit('fire', this)
+            this.emit('fire', this, {refire: wasCurrentStep})
         }
 
         return inside

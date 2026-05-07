@@ -138,6 +138,28 @@ class PlayerSimple extends EventEmitter
         this._volume = 0
         this._media = null
         this._loadError = false
+        this._lastTelemetryErrorSignature = null
+        this._lastTelemetryErrorAt = 0
+    }
+
+    _logAudioTelemetry(type, error, extra = {}) {
+        let src = this._player && this._player._src ? this._player._src : (this._media && this._media.src ? this._media.src : null)
+        let message = String(error)
+        let signature = type + '|' + (src || '-') + '|' + message
+        let now = Date.now()
+
+        if (signature === this._lastTelemetryErrorSignature && (now - this._lastTelemetryErrorAt) < 30000) return
+
+        this._lastTelemetryErrorSignature = signature
+        this._lastTelemetryErrorAt = now
+
+        if (typeof TELEMETRY !== 'undefined') {
+            TELEMETRY.log(type, Object.assign({
+                src: src,
+                error: message,
+                cleared: !this._player
+            }, extra))
+        }
     }
 
     load(basepath, media, usemediapath = true) {
@@ -224,7 +246,7 @@ class PlayerSimple extends EventEmitter
             this._playRequested = false
             clearTimeout(this._playRequestedTimeout)
             this.emit('loaderror', this._player ? this._player._src : null, error)
-            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_loaderror', {src: this._player ? this._player._src : null, error: String(error)});
+            this._logAudioTelemetry('audio_loaderror', error)
         })
         this._player.on('playerror', (id, error) => {
             console.error('PlayerSimple playerror:', this._player ? this._player._src : '?', error)
@@ -232,7 +254,7 @@ class PlayerSimple extends EventEmitter
             this._playRequested = false
             clearTimeout(this._playRequestedTimeout)
             this.emit('playerror', this._player ? this._player._src : null, error)
-            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_playerror', {src: this._player ? this._player._src : null, error: String(error)});
+            this._logAudioTelemetry('audio_playerror', error)
         })
 
         this.master(media.master)
