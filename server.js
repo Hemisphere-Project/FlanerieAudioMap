@@ -418,40 +418,63 @@ function getTelemetryDeviceLabel(client) {
   return parts.join(' ');
 }
 
-// Telemetry: list sessions
+const TELEMETRY_DIR = path.join(__dirname, 'telemetry');
+const TELEMETRY_ARCHIVE_DIR = path.join(TELEMETRY_DIR, 'archive');
+
+function telemetryDirFor(archived) {
+  return archived ? TELEMETRY_ARCHIVE_DIR : TELEMETRY_DIR;
+}
+
+function isArchivedQuery(req) {
+  const value = req.query && req.query.archived;
+  return value === '1' || value === 'true';
+}
+
+function buildSessionSummary(data) {
+  const events = Array.isArray(data.events) ? data.events : [];
+  const summary = summarizeTelemetrySessionData(data);
+  const lastEvent = events.length > 0 ? events[events.length - 1].t : null;
+  const startMs = data.startTime ? new Date(data.startTime).getTime() : null;
+  const durationMs = (lastEvent != null && Number.isFinite(startMs)) ? Math.max(0, lastEvent - startMs) : 0;
+  return {
+    sessionId: data.sessionId,
+    parcoursId: data.parcoursId,
+    parcoursName: data.parcoursName,
+    deviceModel: getTelemetryDeviceLabel(data.client),
+    devicePlatform: data.client && (data.client.devicePlatform || data.client.platform) ? (data.client.devicePlatform || data.client.platform) : '',
+    deviceManufacturer: data.client && (data.client.deviceManufacturer || data.client.manufacturer) ? (data.client.deviceManufacturer || data.client.manufacturer) : '',
+    startTime: data.startTime,
+    eventCount: events.length,
+    lastEvent,
+    durationMs,
+    finalStep: summary.finalStep,
+    uniqueStepCount: summary.uniqueStepCount,
+    gpsCount: summary.gpsCount,
+    avgAccuracy: summary.avgAccuracy,
+    maxGapMs: summary.maxGapMs,
+    sleepSuspects: summary.sleepSuspects,
+    staleCallbacks: summary.staleCallbacks,
+    rejectedFixes: summary.rejectedFixes,
+    heartbeatRecoveries: summary.heartbeatRecoveries,
+    gpsLostCount: summary.gpsLostCount,
+    audioErrors: summary.audioErrors
+  };
+}
+
+// Telemetry: list sessions (active by default, ?archived=1 for archive)
 app.get('/telemetry/sessions', requireAdmin, (req, res) => {
-  const telemetryDir = path.join(__dirname, 'telemetry');
-  if (!fs.existsSync(telemetryDir)) return res.json([]);
+  const archived = isArchivedQuery(req);
+  const dir = telemetryDirFor(archived);
+  if (!fs.existsSync(dir)) return res.json([]);
 
   const sessions = [];
-  fs.readdirSync(telemetryDir).forEach(file => {
+  fs.readdirSync(dir).forEach(file => {
     if (!file.endsWith('.json')) return;
     try {
-      const data = JSON.parse(fs.readFileSync(path.join(telemetryDir, file), 'utf8'));
-      const events = Array.isArray(data.events) ? data.events : [];
-      const summary = summarizeTelemetrySessionData(data);
-      sessions.push({
-        sessionId: data.sessionId,
-        parcoursId: data.parcoursId,
-        parcoursName: data.parcoursName,
-        deviceModel: getTelemetryDeviceLabel(data.client),
-        devicePlatform: data.client && (data.client.devicePlatform || data.client.platform) ? (data.client.devicePlatform || data.client.platform) : '',
-        deviceManufacturer: data.client && (data.client.deviceManufacturer || data.client.manufacturer) ? (data.client.deviceManufacturer || data.client.manufacturer) : '',
-        startTime: data.startTime,
-        eventCount: events.length,
-        lastEvent: events.length > 0 ? events[events.length - 1].t : null,
-        finalStep: summary.finalStep,
-        uniqueStepCount: summary.uniqueStepCount,
-        gpsCount: summary.gpsCount,
-        avgAccuracy: summary.avgAccuracy,
-        maxGapMs: summary.maxGapMs,
-        sleepSuspects: summary.sleepSuspects,
-        staleCallbacks: summary.staleCallbacks,
-        rejectedFixes: summary.rejectedFixes,
-        heartbeatRecoveries: summary.heartbeatRecoveries,
-        gpsLostCount: summary.gpsLostCount,
-        audioErrors: summary.audioErrors
-      });
+      const data = JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8'));
+      const summary = buildSessionSummary(data);
+      summary.archived = archived;
+      sessions.push(summary);
     } catch(e) { /* skip corrupt files */ }
   });
 
@@ -462,7 +485,8 @@ app.get('/telemetry/sessions', requireAdmin, (req, res) => {
 // Telemetry: get session detail
 app.get('/telemetry/session/:id', requireAdmin, (req, res) => {
   const safeId = req.params.id.replace(/[^a-zA-Z0-9_\-]/g, '');
-  const filePath = path.join(__dirname, 'telemetry', safeId + '.json');
+  const archived = isArchivedQuery(req);
+  const filePath = path.join(telemetryDirFor(archived), safeId + '.json');
   if (!fs.existsSync(filePath)) return res.status(404).send('Not found');
 
   const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -478,11 +502,84 @@ app.get('/telemetry/parcours/:id', requireAdmin, (req, res) => {
 // Telemetry: delete session
 app.delete('/telemetry/session/:id', requireAdmin, (req, res) => {
   const safeId = req.params.id.replace(/[^a-zA-Z0-9_\-]/g, '');
-  const filePath = path.join(__dirname, 'telemetry', safeId + '.json');
+  const archived = isArchivedQuery(req);
+  const filePath = path.join(telemetryDirFor(archived), safeId + '.json');
   if (!fs.existsSync(filePath)) return res.status(404).send('Not found');
 
   fs.unlinkSync(filePath);
   res.status(200).send('Deleted');
+});
+
+// Telemetry: archive a session (active -> archive/)
+app.post('/telemetry/session/:id/archive', requireAdmin, (req, res) => {
+  const safeId = req.params.id.replace(/[^a-zA-Z0-9_\-]/g, '');
+  if (!safeId) return res.status(400).send('Invalid session ID');
+
+  const src = path.join(TELEMETRY_DIR, safeId + '.json');
+  if (!fs.existsSync(src)) return res.status(404).send('Not found');
+  if (!fs.existsSync(TELEMETRY_ARCHIVE_DIR)) fs.mkdirSync(TELEMETRY_ARCHIVE_DIR, { recursive: true });
+
+  const dest = path.join(TELEMETRY_ARCHIVE_DIR, safeId + '.json');
+  fs.renameSync(src, dest);
+  res.status(200).json({ sessionId: safeId, archived: true });
+});
+
+// Telemetry: unarchive a session (archive/ -> active)
+app.post('/telemetry/session/:id/unarchive', requireAdmin, (req, res) => {
+  const safeId = req.params.id.replace(/[^a-zA-Z0-9_\-]/g, '');
+  if (!safeId) return res.status(400).send('Invalid session ID');
+
+  const src = path.join(TELEMETRY_ARCHIVE_DIR, safeId + '.json');
+  if (!fs.existsSync(src)) return res.status(404).send('Not found');
+  if (!fs.existsSync(TELEMETRY_DIR)) fs.mkdirSync(TELEMETRY_DIR, { recursive: true });
+
+  const dest = path.join(TELEMETRY_DIR, safeId + '.json');
+  fs.renameSync(src, dest);
+  res.status(200).json({ sessionId: safeId, archived: false });
+});
+
+// Telemetry: bulk archive (body: { sessionIds: [...] })
+app.post('/telemetry/archive-bulk', requireAdmin, express.json(), (req, res) => {
+  const ids = Array.isArray(req.body && req.body.sessionIds) ? req.body.sessionIds : [];
+  if (!fs.existsSync(TELEMETRY_ARCHIVE_DIR)) fs.mkdirSync(TELEMETRY_ARCHIVE_DIR, { recursive: true });
+
+  const archived = [];
+  const skipped = [];
+  ids.forEach(rawId => {
+    const safeId = String(rawId || '').replace(/[^a-zA-Z0-9_\-]/g, '');
+    if (!safeId) { skipped.push(rawId); return; }
+    const src = path.join(TELEMETRY_DIR, safeId + '.json');
+    if (!fs.existsSync(src)) { skipped.push(safeId); return; }
+    fs.renameSync(src, path.join(TELEMETRY_ARCHIVE_DIR, safeId + '.json'));
+    archived.push(safeId);
+  });
+  res.json({ archived, skipped });
+});
+
+// Telemetry: prune short sessions (active only). Hard delete files where lastEvent - startTime < thresholdMs (default 60000).
+app.post('/telemetry/prune-short', requireAdmin, express.json(), (req, res) => {
+  const threshold = Number(req.body && req.body.thresholdMs);
+  const thresholdMs = Number.isFinite(threshold) && threshold > 0 ? threshold : 60000;
+  if (!fs.existsSync(TELEMETRY_DIR)) return res.json({ deleted: [], thresholdMs });
+
+  const deleted = [];
+  fs.readdirSync(TELEMETRY_DIR).forEach(file => {
+    if (!file.endsWith('.json')) return;
+    const filePath = path.join(TELEMETRY_DIR, file);
+    try {
+      const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      const events = Array.isArray(data.events) ? data.events : [];
+      const lastEvent = events.length > 0 ? events[events.length - 1].t : null;
+      const startMs = data.startTime ? new Date(data.startTime).getTime() : null;
+      if (lastEvent == null || !Number.isFinite(startMs)) return;
+      const durationMs = lastEvent - startMs;
+      if (durationMs < thresholdMs) {
+        fs.unlinkSync(filePath);
+        deleted.push(data.sessionId || file.replace(/\.json$/, ''));
+      }
+    } catch(e) { /* skip corrupt */ }
+  });
+  res.json({ deleted, thresholdMs });
 });
 
 

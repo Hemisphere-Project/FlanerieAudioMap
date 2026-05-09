@@ -227,6 +227,13 @@
                 <label for="session-search">Session contains</label>
                 <input id="session-search" type="text" class="form-control form-control-sm" placeholder="20260507_1331">
             </div>
+            <div>
+                <label for="show-archived">Source</label>
+                <div class="form-check form-switch mt-1">
+                    <input id="show-archived" type="checkbox" class="form-check-input" role="switch">
+                    <label class="form-check-label small" for="show-archived">Show archives</label>
+                </div>
+            </div>
             <div class="d-flex align-items-end gap-2">
                 <button id="apply-filters" class="btn btn-primary btn-sm w-100">Apply</button>
                 <button id="reset-filters" class="btn btn-outline-secondary btn-sm w-100">Reset</button>
@@ -235,8 +242,10 @@
 
         <div class="toolbar-row">
             <div id="results-meta" class="results-meta mb-0"></div>
-            <div class="d-flex gap-2">
+            <div class="d-flex gap-2 flex-wrap">
                 <button id="refresh-sessions" class="btn btn-outline-info btn-sm">Refresh</button>
+                <button id="archive-filtered" class="btn btn-outline-warning btn-sm">Archive filtered</button>
+                <button id="prune-short" class="btn btn-outline-danger btn-sm">Prune &lt;1min</button>
                 <button id="export-summary-csv" class="btn btn-outline-secondary btn-sm">Export CSV</button>
                 <button id="export-summary-json" class="btn btn-outline-secondary btn-sm">Export JSON</button>
             </div>
@@ -280,6 +289,16 @@
     var groupMapViewState = null;
     var preserveDetailMapViewOnNextRender = false;
     var preserveGroupMapViewOnNextRender = false;
+    var archiveMode = false;
+
+    function archivedQuery() {
+        return archiveMode ? '?archived=1' : '';
+    }
+
+    function archivedQueryAppend(url) {
+        if (!archiveMode) return url;
+        return url + (url.indexOf('?') === -1 ? '?' : '&') + 'archived=1';
+    }
 
     function esc(str) {
         var d = document.createElement('div');
@@ -889,7 +908,7 @@
         if (opts.forceReload) detailCache.delete(sessionId);
         if (detailCache.has(sessionId)) return Promise.resolve(detailCache.get(sessionId));
 
-        return fetch(cacheBustUrl('/telemetry/session/' + encodeURIComponent(sessionId)))
+        return fetch(cacheBustUrl(archivedQueryAppend('/telemetry/session/' + encodeURIComponent(sessionId))))
             .then(function(response) {
                 if (!response.ok) throw new Error('HTTP ' + response.status);
                 return response.json();
@@ -1011,6 +1030,9 @@
                             '<button class="btn btn-outline-secondary btn-sm" data-action="toggle-events">Events</button>' +
                             '<button class="btn btn-outline-secondary btn-sm" data-action="export-json">JSON</button>' +
                             '<button class="btn btn-outline-secondary btn-sm" data-action="export-csv">CSV</button>' +
+                            (archiveMode
+                                ? '<button class="btn btn-outline-warning btn-sm" data-action="unarchive-session">Unarchive</button>'
+                                : '<button class="btn btn-outline-warning btn-sm" data-action="archive-session">Archive</button>') +
                             '<button class="btn btn-outline-danger btn-sm" data-action="delete-session">Delete</button>' +
                         '</div>' +
                     '</div>' +
@@ -1062,7 +1084,7 @@
 
         detailRow.querySelector('[data-action="delete-session"]').addEventListener('click', function() {
             if (!confirm('Delete session ' + data.sessionId + '?')) return;
-            fetch('/telemetry/session/' + encodeURIComponent(data.sessionId), { method: 'DELETE' })
+            fetch(archivedQueryAppend('/telemetry/session/' + encodeURIComponent(data.sessionId)), { method: 'DELETE' })
                 .then(function(response) {
                     if (!response.ok) throw new Error('HTTP ' + response.status);
                     detailCache.delete(data.sessionId);
@@ -1075,6 +1097,44 @@
                     alert('Failed to delete session: ' + error);
                 });
         });
+
+        var archiveButton = detailRow.querySelector('[data-action="archive-session"]');
+        if (archiveButton) {
+            archiveButton.addEventListener('click', function() {
+                if (!confirm('Archive session ' + data.sessionId + '?')) return;
+                fetch('/telemetry/session/' + encodeURIComponent(data.sessionId) + '/archive', { method: 'POST' })
+                    .then(function(response) {
+                        if (!response.ok) throw new Error('HTTP ' + response.status);
+                        detailCache.delete(data.sessionId);
+                        allSessions = allSessions.filter(function(item) { return item.sessionId !== data.sessionId; });
+                        collapseCurrentDetail();
+                        updateParcoursOptions();
+                        renderSessions();
+                    })
+                    .catch(function(error) {
+                        alert('Failed to archive session: ' + error);
+                    });
+            });
+        }
+
+        var unarchiveButton = detailRow.querySelector('[data-action="unarchive-session"]');
+        if (unarchiveButton) {
+            unarchiveButton.addEventListener('click', function() {
+                if (!confirm('Unarchive session ' + data.sessionId + '?')) return;
+                fetch('/telemetry/session/' + encodeURIComponent(data.sessionId) + '/unarchive', { method: 'POST' })
+                    .then(function(response) {
+                        if (!response.ok) throw new Error('HTTP ' + response.status);
+                        detailCache.delete(data.sessionId);
+                        allSessions = allSessions.filter(function(item) { return item.sessionId !== data.sessionId; });
+                        collapseCurrentDetail();
+                        updateParcoursOptions();
+                        renderSessions();
+                    })
+                    .catch(function(error) {
+                        alert('Failed to unarchive session: ' + error);
+                    });
+            });
+        }
 
         loadParcoursOverlay(data.parcoursId || data.parcoursName).then(function(overlay) {
             if (expandedSessionId !== data.sessionId) return;
@@ -1264,7 +1324,7 @@
         else clearCurrentDetailRow(false);
 
         document.getElementById('session-list').innerHTML = '<tr><td colspan="9" class="text-muted">Loading...</td></tr>';
-        return fetch(cacheBustUrl('/telemetry/sessions'))
+        return fetch(cacheBustUrl(archivedQueryAppend('/telemetry/sessions')))
             .then(function(response) {
                 if (!response.ok) throw new Error('HTTP ' + response.status);
                 return response.json();
@@ -1315,6 +1375,64 @@
     document.getElementById('refresh-sessions').addEventListener('click', refreshSessions);
     document.getElementById('export-summary-json').addEventListener('click', exportFilteredSessionsAsJson);
     document.getElementById('export-summary-csv').addEventListener('click', exportFilteredSessionsAsCsv);
+
+    document.getElementById('show-archived').addEventListener('change', function() {
+        archiveMode = !!this.checked;
+        var archiveBtn = document.getElementById('archive-filtered');
+        var pruneBtn = document.getElementById('prune-short');
+        if (archiveBtn) archiveBtn.disabled = archiveMode;
+        if (pruneBtn) pruneBtn.disabled = archiveMode;
+        loadSessions();
+    });
+
+    document.getElementById('archive-filtered').addEventListener('click', function() {
+        if (archiveMode) return;
+        var ids = getFilteredSessions().map(function(s) { return s.sessionId; });
+        if (ids.length === 0) { alert('No sessions match the current filters.'); return; }
+        if (!confirm('Archive ' + ids.length + ' filtered session' + (ids.length > 1 ? 's' : '') + '?')) return;
+        fetch('/telemetry/archive-bulk', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sessionIds: ids })
+        })
+            .then(function(response) {
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                return response.json();
+            })
+            .then(function(result) {
+                var archivedCount = (result.archived || []).length;
+                var skippedCount = (result.skipped || []).length;
+                var message = 'Archived ' + archivedCount + ' session' + (archivedCount === 1 ? '' : 's');
+                if (skippedCount > 0) message += ' (' + skippedCount + ' skipped)';
+                alert(message);
+                refreshSessions();
+            })
+            .catch(function(error) {
+                alert('Failed to archive: ' + error);
+            });
+    });
+
+    document.getElementById('prune-short').addEventListener('click', function() {
+        if (archiveMode) return;
+        if (!confirm('Permanently delete all active sessions shorter than 1 minute?')) return;
+        fetch('/telemetry/prune-short', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ thresholdMs: 60000 })
+        })
+            .then(function(response) {
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                return response.json();
+            })
+            .then(function(result) {
+                var count = (result.deleted || []).length;
+                alert('Pruned ' + count + ' short session' + (count === 1 ? '' : 's') + '.');
+                refreshSessions();
+            })
+            .catch(function(error) {
+                alert('Failed to prune: ' + error);
+            });
+    });
 
     document.getElementById('reset-filters').addEventListener('click', function() {
         document.getElementById('parcours-filter').value = '';
