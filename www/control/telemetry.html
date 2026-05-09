@@ -186,6 +186,46 @@
         }
         .badge-filter.active { opacity: 1; }
         .badge-filter:not(.active) { opacity: 0.38; }
+        .error-badge {
+            cursor: pointer;
+            user-select: none;
+        }
+        .error-badge:hover {
+            outline: 1px solid rgba(255,255,255,0.5);
+        }
+        .error-popover {
+            max-width: 480px;
+        }
+        .error-popover .popover-body {
+            max-height: 320px;
+            overflow: auto;
+            font-size: 0.82rem;
+        }
+        .error-popover .error-event-row {
+            padding: 6px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.08);
+        }
+        .error-popover .error-event-row:last-child {
+            border-bottom: none;
+        }
+        .error-popover .error-event-time {
+            color: rgba(255,255,255,0.55);
+            font-size: 0.75rem;
+        }
+        .error-popover .error-event-payload {
+            word-break: break-all;
+            color: rgba(255,255,255,0.85);
+        }
+        .error-popover .error-event-payload code {
+            color: #8bd3ff;
+        }
+        .error-popover-footer {
+            margin-top: 8px;
+            padding-top: 6px;
+            border-top: 1px solid rgba(255,255,255,0.08);
+            color: rgba(255,255,255,0.55);
+            font-size: 0.72rem;
+        }
         .zones-hint {
             color: rgba(255,255,255,0.65);
             font-size: 0.86rem;
@@ -293,6 +333,75 @@
     var preserveDetailMapViewOnNextRender = false;
     var preserveGroupMapViewOnNextRender = false;
     var archiveMode = false;
+    var activeErrorPopover = null;
+
+    var ERROR_BADGE_KINDS = {
+        gap: {
+            label: 'Callback gaps',
+            types: ['gps_callback_gap'],
+            sortKey: function(event) { return -(Number(event.data && event.data.gapMs) || 0); },
+            describe: function(event) {
+                var data = event.data || {};
+                return [
+                    data.gapMs != null ? 'gap:' + formatGap(Number(data.gapMs)) : null,
+                    data.source ? 'src:' + data.source : null,
+                    data.visibility ? 'vis:' + data.visibility : null,
+                    data.acc != null ? 'acc:' + data.acc + 'm' : null
+                ].filter(Boolean).join(' · ');
+            }
+        },
+        sleep: {
+            label: 'Sleep suspects',
+            types: ['gps_sleep_suspect'],
+            describe: function(event) {
+                var data = event.data || {};
+                return [
+                    data.gapMs != null ? 'gap:' + formatGap(Number(data.gapMs)) : null,
+                    data.source ? 'src:' + data.source : null,
+                    data.acc != null ? 'acc:' + data.acc + 'm' : null,
+                    data.motionStationary != null ? 'still:' + data.motionStationary : null
+                ].filter(Boolean).join(' · ');
+            }
+        },
+        stale: {
+            label: 'Stale callbacks',
+            types: ['gps_stale_callback'],
+            describe: function(event) {
+                var data = event.data || {};
+                return [
+                    data.ageMs != null ? 'age:' + formatGap(Number(data.ageMs)) : null,
+                    data.source ? 'src:' + data.source : null
+                ].filter(Boolean).join(' · ');
+            }
+        },
+        reject: {
+            label: 'Rejected fixes',
+            types: ['gps_trigger_rejected'],
+            describe: function(event) {
+                var data = event.data || {};
+                return [
+                    data.reason ? 'reason:' + data.reason : null,
+                    data.acc != null ? 'acc:' + data.acc + 'm' : null,
+                    data.source ? 'src:' + data.source : null,
+                    data.visibility ? 'vis:' + data.visibility : null
+                ].filter(Boolean).join(' · ');
+            }
+        },
+        audio: {
+            label: 'Audio errors',
+            types: ['audio_loaderror', 'audio_playerror', 'audio_play_timeout'],
+            describe: function(event) {
+                var data = event.data || {};
+                var src = data.src || '';
+                var fileName = src ? src.split('/').pop() : '';
+                return [
+                    event.type,
+                    data.error ? 'error:' + data.error : null,
+                    fileName ? 'file:' + fileName : null
+                ].filter(Boolean).join(' · ');
+            }
+        }
+    };
 
     function archivedQuery() {
         return archiveMode ? '?archived=1' : '';
@@ -486,24 +595,126 @@
         return '<span class="badge text-bg-danger">coarse ' + esc(formatNumber(accuracy, 1)) + 'm</span>';
     }
 
+    function errorBadge(kind, color, label) {
+        return '<span class="badge text-bg-' + color + ' error-badge" data-error-kind="' + esc(kind) + '" tabindex="0" role="button" title="Click for details, alt-click to expand events">' + esc(label) + '</span>';
+    }
+
     function renderGpsBadges(session) {
         var badges = [precisionBadge(session)];
         if (session.maxGapMs != null && Number(session.maxGapMs) >= 8000) {
-            badges.push('<span class="badge text-bg-warning">gap ' + esc(formatGap(Number(session.maxGapMs))) + '</span>');
+            badges.push(errorBadge('gap', 'warning', 'gap ' + formatGap(Number(session.maxGapMs))));
         }
         if (Number(session.sleepSuspects) > 0) {
-            badges.push('<span class="badge text-bg-danger">sleep x' + esc(session.sleepSuspects) + '</span>');
+            badges.push(errorBadge('sleep', 'danger', 'sleep x' + session.sleepSuspects));
         }
         if (Number(session.staleCallbacks) > 0) {
-            badges.push('<span class="badge text-bg-warning">stale x' + esc(session.staleCallbacks) + '</span>');
+            badges.push(errorBadge('stale', 'warning', 'stale x' + session.staleCallbacks));
         }
         if (Number(session.rejectedFixes) > 0) {
-            badges.push('<span class="badge text-bg-warning">reject x' + esc(session.rejectedFixes) + '</span>');
+            badges.push(errorBadge('reject', 'warning', 'reject x' + session.rejectedFixes));
         }
         if (Number(session.audioErrors) > 0) {
-            badges.push('<span class="badge text-bg-secondary">audio x' + esc(session.audioErrors) + '</span>');
+            badges.push(errorBadge('audio', 'secondary', 'audio x' + session.audioErrors));
         }
         return '<div class="gps-badges">' + badges.join('') + '</div>';
+    }
+
+    function dismissErrorPopover() {
+        if (!activeErrorPopover) return;
+        try { activeErrorPopover.popover.dispose(); } catch (e) {}
+        activeErrorPopover = null;
+        document.removeEventListener('click', onDocumentClickForPopover, true);
+        document.removeEventListener('keydown', onKeydownForPopover, true);
+    }
+
+    function getActivePopoverEl() {
+        if (!activeErrorPopover) return null;
+        var id = activeErrorPopover.trigger.getAttribute('aria-describedby');
+        return id ? document.getElementById(id) : null;
+    }
+
+    function onDocumentClickForPopover(event) {
+        if (!activeErrorPopover) return;
+        var trigger = activeErrorPopover.trigger;
+        var popoverEl = getActivePopoverEl();
+        if (trigger && trigger.contains(event.target)) return;
+        if (popoverEl && popoverEl.contains(event.target)) return;
+        dismissErrorPopover();
+    }
+
+    function onKeydownForPopover(event) {
+        if (event.key === 'Escape') dismissErrorPopover();
+    }
+
+    function renderErrorPopoverBody(session, kind, events) {
+        var def = ERROR_BADGE_KINDS[kind];
+        if (!events.length) {
+            return '<div class="text-secondary">No matching events recorded for this session.</div>';
+        }
+        var sorted = events.slice();
+        if (def.sortKey) sorted.sort(function(a, b) { return def.sortKey(a) - def.sortKey(b); });
+
+        var maxRows = 25;
+        var rows = sorted.slice(0, maxRows).map(function(event) {
+            var when = new Date(event.t).toLocaleTimeString('fr-FR');
+            return '<div class="error-event-row">' +
+                '<div class="error-event-time">' + esc(when) + ' · <code>' + esc(event.type) + '</code></div>' +
+                '<div class="error-event-payload">' + esc(def.describe(event)) + '</div>' +
+            '</div>';
+        }).join('');
+
+        var footer = '<div class="error-popover-footer">' +
+            sorted.length + ' event' + (sorted.length > 1 ? 's' : '') +
+            (sorted.length > maxRows ? ' (showing top ' + maxRows + ')' : '') +
+            ' · alt-click the badge to open the full events panel' +
+        '</div>';
+
+        return rows + footer;
+    }
+
+    function showErrorPopover(triggerEl, session, kind) {
+        var def = ERROR_BADGE_KINDS[kind];
+        if (!def) return;
+        if (activeErrorPopover && activeErrorPopover.trigger === triggerEl) {
+            dismissErrorPopover();
+            return;
+        }
+        dismissErrorPopover();
+
+        var popover = new bootstrap.Popover(triggerEl, {
+            title: def.label + ' — ' + session.sessionId,
+            content: '<div class="text-secondary">Loading...</div>',
+            html: true,
+            trigger: 'manual',
+            placement: 'auto',
+            customClass: 'error-popover',
+            sanitize: false
+        });
+        popover.show();
+        activeErrorPopover = { trigger: triggerEl, popover: popover };
+        setTimeout(function() {
+            document.addEventListener('click', onDocumentClickForPopover, true);
+            document.addEventListener('keydown', onKeydownForPopover, true);
+        }, 0);
+
+        loadDetail(session.sessionId)
+            .then(function(data) {
+                if (!activeErrorPopover || activeErrorPopover.trigger !== triggerEl) return;
+                var allowed = new Set(def.types);
+                var matching = (data.events || []).filter(function(event) { return allowed.has(event.type); });
+                var popoverEl = getActivePopoverEl();
+                var bodyEl = popoverEl && popoverEl.querySelector('.popover-body');
+                if (bodyEl) {
+                    bodyEl.innerHTML = renderErrorPopoverBody(session, kind, matching);
+                    popover.update();
+                }
+            })
+            .catch(function(error) {
+                if (!activeErrorPopover || activeErrorPopover.trigger !== triggerEl) return;
+                var popoverEl = getActivePopoverEl();
+                var bodyEl = popoverEl && popoverEl.querySelector('.popover-body');
+                if (bodyEl) bodyEl.innerHTML = '<div class="text-danger">Failed to load: ' + esc(String(error)) + '</div>';
+            });
     }
 
     function buildSummaryRow(session) {
@@ -787,6 +998,7 @@
     }
 
     function renderSessions() {
+        dismissErrorPopover();
         var filtered = getFilteredSessions();
         var list = document.getElementById('session-list');
         var meta = document.getElementById('results-meta');
@@ -820,6 +1032,20 @@
             row.querySelector('button').addEventListener('click', function() {
                 toggleSessionDetail(session, row, this);
             });
+
+            row.querySelectorAll('.error-badge').forEach(function(badgeEl) {
+                badgeEl.addEventListener('click', function(event) {
+                    event.stopPropagation();
+                    var kind = badgeEl.dataset.errorKind;
+                    if (event.altKey || event.shiftKey || event.metaKey || event.ctrlKey) {
+                        dismissErrorPopover();
+                        openSessionDetail(session.sessionId, { openEvents: true, errorFilterKind: kind });
+                    } else {
+                        showErrorPopover(badgeEl, session, kind);
+                    }
+                });
+            });
+
             list.appendChild(row);
 
             if (expandedSessionId === session.sessionId && currentDetailRow) {
@@ -890,7 +1116,10 @@
         loadDetail(session.sessionId, { forceReload: !!opts.forceReload })
             .then(function(detailData) {
                 if (expandedSessionId !== session.sessionId || !currentDetailRow) return;
-                renderDetailRow(session, detailData, currentDetailRow, { openEvents: !!opts.openEvents });
+                renderDetailRow(session, detailData, currentDetailRow, {
+                    openEvents: !!opts.openEvents,
+                    errorFilterKind: opts.errorFilterKind || null
+                });
             })
             .catch(function(error) {
                 if (!currentDetailRow) return;
@@ -1080,7 +1309,7 @@
         if (opts.openEvents) {
             var panel = document.getElementById(eventPanelId);
             panel.classList.add('active');
-            setupEventPanel(data, filtersId, eventTableId);
+            setupEventPanel(data, filtersId, eventTableId, opts.errorFilterKind);
             panel.dataset.rendered = '1';
             detailEventsVisible = true;
         }
@@ -1145,9 +1374,15 @@
         });
     }
 
-    function setupEventPanel(data, filtersId, eventTableId) {
+    function setupEventPanel(data, filtersId, eventTableId, errorFilterKind) {
         var types = [...new Set((data.events || []).map(function(event) { return event.type; }))].sort();
-        var hiddenTypes = new Set(['gps']);
+        var hiddenTypes;
+        if (errorFilterKind && ERROR_BADGE_KINDS[errorFilterKind]) {
+            var allowed = new Set(ERROR_BADGE_KINDS[errorFilterKind].types);
+            hiddenTypes = new Set(types.filter(function(type) { return !allowed.has(type); }));
+        } else {
+            hiddenTypes = new Set(['gps']);
+        }
         var filtersEl = document.getElementById(filtersId);
 
         filtersEl.innerHTML = '';
