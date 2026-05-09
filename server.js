@@ -556,16 +556,19 @@ app.post('/telemetry/archive-bulk', requireAdmin, express.json(), (req, res) => 
   res.json({ archived, skipped });
 });
 
-// Telemetry: prune short sessions (active only). Hard delete files where lastEvent - startTime < thresholdMs (default 60000).
+// Telemetry: prune short sessions. Hard delete files where lastEvent - startTime < thresholdMs (default 60000).
+// Targets the active dir by default; pass { archived: true } to prune the archive instead.
 app.post('/telemetry/prune-short', requireAdmin, express.json(), (req, res) => {
   const threshold = Number(req.body && req.body.thresholdMs);
   const thresholdMs = Number.isFinite(threshold) && threshold > 0 ? threshold : 60000;
-  if (!fs.existsSync(TELEMETRY_DIR)) return res.json({ deleted: [], thresholdMs });
+  const archived = !!(req.body && req.body.archived);
+  const dir = telemetryDirFor(archived);
+  if (!fs.existsSync(dir)) return res.json({ deleted: [], thresholdMs, archived });
 
   const deleted = [];
-  fs.readdirSync(TELEMETRY_DIR).forEach(file => {
+  fs.readdirSync(dir).forEach(file => {
     if (!file.endsWith('.json')) return;
-    const filePath = path.join(TELEMETRY_DIR, file);
+    const filePath = path.join(dir, file);
     try {
       const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
       const events = Array.isArray(data.events) ? data.events : [];
@@ -579,7 +582,7 @@ app.post('/telemetry/prune-short', requireAdmin, express.json(), (req, res) => {
       }
     } catch(e) { /* skip corrupt */ }
   });
-  res.json({ deleted, thresholdMs });
+  res.json({ deleted, thresholdMs, archived });
 });
 
 

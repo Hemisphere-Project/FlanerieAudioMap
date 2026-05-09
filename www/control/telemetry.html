@@ -245,7 +245,10 @@
             <div class="d-flex gap-2 flex-wrap">
                 <button id="refresh-sessions" class="btn btn-outline-info btn-sm">Refresh</button>
                 <button id="archive-filtered" class="btn btn-outline-warning btn-sm">Archive filtered</button>
-                <button id="prune-short" class="btn btn-outline-danger btn-sm">Prune &lt;1min</button>
+                <div class="d-flex align-items-center gap-2">
+                    <button id="prune-short" class="btn btn-outline-danger btn-sm">Prune &lt;<span id="prune-threshold-label">1min</span></button>
+                    <input id="prune-threshold" type="range" min="30" max="300" step="30" value="60" class="form-range" style="width: 120px;">
+                </div>
                 <button id="export-summary-csv" class="btn btn-outline-secondary btn-sm">Export CSV</button>
                 <button id="export-summary-json" class="btn btn-outline-secondary btn-sm">Export JSON</button>
             </div>
@@ -1376,12 +1379,31 @@
     document.getElementById('export-summary-json').addEventListener('click', exportFilteredSessionsAsJson);
     document.getElementById('export-summary-csv').addEventListener('click', exportFilteredSessionsAsCsv);
 
+    function formatPruneThreshold(seconds) {
+        if (seconds < 60) return seconds + 's';
+        var min = Math.floor(seconds / 60);
+        var rem = seconds % 60;
+        if (rem === 0) return min + 'min';
+        return min + 'm' + String(rem).padStart(2, '0') + 's';
+    }
+
+    function getPruneThresholdSeconds() {
+        var raw = Number(document.getElementById('prune-threshold').value);
+        if (!Number.isFinite(raw) || raw < 30) return 60;
+        return Math.round(raw);
+    }
+
+    function updatePruneLabel() {
+        document.getElementById('prune-threshold-label').textContent = formatPruneThreshold(getPruneThresholdSeconds());
+    }
+
+    document.getElementById('prune-threshold').addEventListener('input', updatePruneLabel);
+    updatePruneLabel();
+
     document.getElementById('show-archived').addEventListener('change', function() {
         archiveMode = !!this.checked;
         var archiveBtn = document.getElementById('archive-filtered');
-        var pruneBtn = document.getElementById('prune-short');
         if (archiveBtn) archiveBtn.disabled = archiveMode;
-        if (pruneBtn) pruneBtn.disabled = archiveMode;
         loadSessions();
     });
 
@@ -1413,12 +1435,14 @@
     });
 
     document.getElementById('prune-short').addEventListener('click', function() {
-        if (archiveMode) return;
-        if (!confirm('Permanently delete all active sessions shorter than 1 minute?')) return;
+        var seconds = getPruneThresholdSeconds();
+        var label = formatPruneThreshold(seconds);
+        var scope = archiveMode ? 'archived' : 'active';
+        if (!confirm('Permanently delete all ' + scope + ' sessions shorter than ' + label + '?')) return;
         fetch('/telemetry/prune-short', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ thresholdMs: 60000 })
+            body: JSON.stringify({ thresholdMs: seconds * 1000, archived: archiveMode })
         })
             .then(function(response) {
                 if (!response.ok) throw new Error('HTTP ' + response.status);
@@ -1426,7 +1450,7 @@
             })
             .then(function(result) {
                 var count = (result.deleted || []).length;
-                alert('Pruned ' + count + ' short session' + (count === 1 ? '' : 's') + '.');
+                alert('Pruned ' + count + ' ' + scope + ' session' + (count === 1 ? '' : 's') + ' shorter than ' + label + '.');
                 refreshSessions();
             })
             .catch(function(error) {
