@@ -1,3 +1,5 @@
+var allSteps = [];
+
 class Parcours extends EventEmitter {
     constructor() {
         super()
