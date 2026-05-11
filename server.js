@@ -310,24 +310,171 @@ app.post('/telemetry-push', (req, res, next) => {
   res.status(200).send('OK');
 });
 
-// Telemetry: list sessions
+function normalizeTelemetryKey(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .toLowerCase();
+}
+
+function findParcoursByTelemetryId(parcoursId) {
+  const normalizedTarget = normalizeTelemetryKey(parcoursId);
+  if (!normalizedTarget) return null;
+
+  const parcoursDir = path.join(__dirname, 'parcours');
+  if (!fs.existsSync(parcoursDir)) return null;
+
+  const files = fs.readdirSync(parcoursDir).filter(file => file.endsWith('.json'));
+  for (const file of files) {
+    const fileName = file.replace(/\.json$/i, '');
+    const filePath = path.join(parcoursDir, file);
+    const raw = fs.readFileSync(filePath, 'utf8');
+    const data = JSON.parse(raw);
+    const candidates = [
+      fileName,
+      data && data.info ? data.info.name : '',
+      data && data.pID ? data.pID : ''
+    ].map(normalizeTelemetryKey);
+
+    if (candidates.includes(normalizedTarget)) {
+      return { fileName, data };
+    }
+  }
+
+  return null;
+}
+
+function summarizeTelemetrySessionData(data) {
+  const events = Array.isArray(data.events) ? data.events : [];
+  const gpsEvents = events.filter(event => event.type === 'gps' && event.data && typeof event.data.acc === 'number');
+  const gpsQualitySummaries = events.filter(event => event.type === 'gps_quality_summary');
+  const stepFires = events.filter(event => event.type === 'step_fire');
+  const uniqueSteps = new Set(stepFires
+    .map(event => event.data && event.data.step)
+    .filter(step => Number.isInteger(step)));
+
+  let finalStep = null;
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event.type === 'route_probe' && event.data && Number.isInteger(event.data.currentStep)) {
+      finalStep = event.data.currentStep;
+      break;
+    }
+  }
+
+  const gpsAccuracies = gpsEvents
+    .map(event => Number(event.data.acc))
+    .filter(value => !Number.isNaN(value));
+
+  const gapMaxFromSummary = gpsQualitySummaries.reduce((maxGap, event) => {
+    const value = Number(event.data && event.data.maxGapMs);
+    return Number.isFinite(value) ? Math.max(maxGap, value) : maxGap;
+  }, 0);
+
+  const gapMaxFromEvents = events.reduce((maxGap, event) => {
+    if (event.type !== 'gps_callback_gap') return maxGap;
+    const value = Number(event.data && event.data.gapMs);
+    return Number.isFinite(value) ? Math.max(maxGap, value) : maxGap;
+  }, 0);
+
+  const rejectedFromSummary = gpsQualitySummaries.reduce((sum, event) => {
+    const value = Number(event.data && event.data.rejectedSamples);
+    return Number.isFinite(value) ? sum + value : sum;
+  }, 0);
+
+  return {
+    finalStep,
+    uniqueStepCount: uniqueSteps.size,
+    gpsCount: gpsEvents.length,
+    avgAccuracy: gpsAccuracies.length > 0
+      ? gpsAccuracies.reduce((sum, value) => sum + value, 0) / gpsAccuracies.length
+      : null,
+    maxGapMs: Math.max(gapMaxFromSummary, gapMaxFromEvents) || null,
+    sleepSuspects: events.filter(event => event.type === 'gps_sleep_suspect').length,
+    staleCallbacks: events.filter(event => event.type === 'gps_stale_callback').length,
+    rejectedFixes: rejectedFromSummary || events.filter(event => event.type === 'gps_trigger_rejected').length,
+    heartbeatRecoveries: events.filter(event => event.type === 'gps_heartbeat_ok').length,
+    gpsLostCount: events.filter(event => event.type === 'gps_state' && event.data && event.data.state === 'lost').length,
+    audioErrors: events.filter(event => event.type === 'audio_loaderror' || event.type === 'audio_playerror').length
+  };
+}
+
+function getTelemetryDeviceLabel(client) {
+  if (!client || typeof client !== 'object') return '';
+
+  const manufacturer = client.deviceManufacturer || client.manufacturer || '';
+  const model = client.deviceModel || client.model || '';
+  const platform = client.devicePlatform || client.platform || '';
+  const parts = [];
+
+  if (manufacturer && model && !String(model).toLowerCase().includes(String(manufacturer).toLowerCase())) {
+    parts.push(manufacturer);
+  }
+  if (model) parts.push(model);
+  if (!parts.length && platform) parts.push(platform);
+
+  return parts.join(' ');
+}
+
+const TELEMETRY_DIR = path.join(__dirname, 'telemetry');
+const TELEMETRY_ARCHIVE_DIR = path.join(TELEMETRY_DIR, 'archive');
+
+function telemetryDirFor(archived) {
+  return archived ? TELEMETRY_ARCHIVE_DIR : TELEMETRY_DIR;
+}
+
+function isArchivedQuery(req) {
+  const value = req.query && req.query.archived;
+  return value === '1' || value === 'true';
+}
+
+function buildSessionSummary(data) {
+  const events = Array.isArray(data.events) ? data.events : [];
+  const summary = summarizeTelemetrySessionData(data);
+  const lastEvent = events.length > 0 ? events[events.length - 1].t : null;
+  const startMs = data.startTime ? new Date(data.startTime).getTime() : null;
+  const durationMs = (lastEvent != null && Number.isFinite(startMs)) ? Math.max(0, lastEvent - startMs) : 0;
+  return {
+    sessionId: data.sessionId,
+    parcoursId: data.parcoursId,
+    parcoursName: data.parcoursName,
+    deviceModel: getTelemetryDeviceLabel(data.client),
+    devicePlatform: data.client && (data.client.devicePlatform || data.client.platform) ? (data.client.devicePlatform || data.client.platform) : '',
+    deviceManufacturer: data.client && (data.client.deviceManufacturer || data.client.manufacturer) ? (data.client.deviceManufacturer || data.client.manufacturer) : '',
+    startTime: data.startTime,
+    eventCount: events.length,
+    lastEvent,
+    durationMs,
+    finalStep: summary.finalStep,
+    uniqueStepCount: summary.uniqueStepCount,
+    gpsCount: summary.gpsCount,
+    avgAccuracy: summary.avgAccuracy,
+    maxGapMs: summary.maxGapMs,
+    sleepSuspects: summary.sleepSuspects,
+    staleCallbacks: summary.staleCallbacks,
+    rejectedFixes: summary.rejectedFixes,
+    heartbeatRecoveries: summary.heartbeatRecoveries,
+    gpsLostCount: summary.gpsLostCount,
+    audioErrors: summary.audioErrors
+  };
+}
+
+// Telemetry: list sessions (active by default, ?archived=1 for archive)
 app.get('/telemetry/sessions', requireAdmin, (req, res) => {
-  const telemetryDir = path.join(__dirname, 'telemetry');
-  if (!fs.existsSync(telemetryDir)) return res.json([]);
+  const archived = isArchivedQuery(req);
+  const dir = telemetryDirFor(archived);
+  if (!fs.existsSync(dir)) return res.json([]);
 
   const sessions = [];
-  fs.readdirSync(telemetryDir).forEach(file => {
+  fs.readdirSync(dir).forEach(file => {
     if (!file.endsWith('.json')) return;
     try {
-      const data = JSON.parse(fs.readFileSync(path.join(telemetryDir, file), 'utf8'));
-      sessions.push({
-        sessionId: data.sessionId,
-        parcoursId: data.parcoursId,
-        parcoursName: data.parcoursName,
-        startTime: data.startTime,
-        eventCount: data.events.length,
-        lastEvent: data.events.length > 0 ? data.events[data.events.length - 1].t : null
-      });
+      const data = JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8'));
+      const summary = buildSessionSummary(data);
+      summary.archived = archived;
+      sessions.push(summary);
     } catch(e) { /* skip corrupt files */ }
   });
 
@@ -338,21 +485,104 @@ app.get('/telemetry/sessions', requireAdmin, (req, res) => {
 // Telemetry: get session detail
 app.get('/telemetry/session/:id', requireAdmin, (req, res) => {
   const safeId = req.params.id.replace(/[^a-zA-Z0-9_\-]/g, '');
-  const filePath = path.join(__dirname, 'telemetry', safeId + '.json');
+  const archived = isArchivedQuery(req);
+  const filePath = path.join(telemetryDirFor(archived), safeId + '.json');
   if (!fs.existsSync(filePath)) return res.status(404).send('Not found');
 
   const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
   res.json(data);
 });
 
+app.get('/telemetry/parcours/:id', requireAdmin, (req, res) => {
+  const match = findParcoursByTelemetryId(req.params.id);
+  if (!match) return res.status(404).json({ error: 'Parcours not found' });
+  res.json({ fileName: match.fileName, data: match.data });
+});
+
 // Telemetry: delete session
 app.delete('/telemetry/session/:id', requireAdmin, (req, res) => {
   const safeId = req.params.id.replace(/[^a-zA-Z0-9_\-]/g, '');
-  const filePath = path.join(__dirname, 'telemetry', safeId + '.json');
+  const archived = isArchivedQuery(req);
+  const filePath = path.join(telemetryDirFor(archived), safeId + '.json');
   if (!fs.existsSync(filePath)) return res.status(404).send('Not found');
 
   fs.unlinkSync(filePath);
   res.status(200).send('Deleted');
+});
+
+// Telemetry: archive a session (active -> archive/)
+app.post('/telemetry/session/:id/archive', requireAdmin, (req, res) => {
+  const safeId = req.params.id.replace(/[^a-zA-Z0-9_\-]/g, '');
+  if (!safeId) return res.status(400).send('Invalid session ID');
+
+  const src = path.join(TELEMETRY_DIR, safeId + '.json');
+  if (!fs.existsSync(src)) return res.status(404).send('Not found');
+  if (!fs.existsSync(TELEMETRY_ARCHIVE_DIR)) fs.mkdirSync(TELEMETRY_ARCHIVE_DIR, { recursive: true });
+
+  const dest = path.join(TELEMETRY_ARCHIVE_DIR, safeId + '.json');
+  fs.renameSync(src, dest);
+  res.status(200).json({ sessionId: safeId, archived: true });
+});
+
+// Telemetry: unarchive a session (archive/ -> active)
+app.post('/telemetry/session/:id/unarchive', requireAdmin, (req, res) => {
+  const safeId = req.params.id.replace(/[^a-zA-Z0-9_\-]/g, '');
+  if (!safeId) return res.status(400).send('Invalid session ID');
+
+  const src = path.join(TELEMETRY_ARCHIVE_DIR, safeId + '.json');
+  if (!fs.existsSync(src)) return res.status(404).send('Not found');
+  if (!fs.existsSync(TELEMETRY_DIR)) fs.mkdirSync(TELEMETRY_DIR, { recursive: true });
+
+  const dest = path.join(TELEMETRY_DIR, safeId + '.json');
+  fs.renameSync(src, dest);
+  res.status(200).json({ sessionId: safeId, archived: false });
+});
+
+// Telemetry: bulk archive (body: { sessionIds: [...] })
+app.post('/telemetry/archive-bulk', requireAdmin, express.json(), (req, res) => {
+  const ids = Array.isArray(req.body && req.body.sessionIds) ? req.body.sessionIds : [];
+  if (!fs.existsSync(TELEMETRY_ARCHIVE_DIR)) fs.mkdirSync(TELEMETRY_ARCHIVE_DIR, { recursive: true });
+
+  const archived = [];
+  const skipped = [];
+  ids.forEach(rawId => {
+    const safeId = String(rawId || '').replace(/[^a-zA-Z0-9_\-]/g, '');
+    if (!safeId) { skipped.push(rawId); return; }
+    const src = path.join(TELEMETRY_DIR, safeId + '.json');
+    if (!fs.existsSync(src)) { skipped.push(safeId); return; }
+    fs.renameSync(src, path.join(TELEMETRY_ARCHIVE_DIR, safeId + '.json'));
+    archived.push(safeId);
+  });
+  res.json({ archived, skipped });
+});
+
+// Telemetry: prune short sessions. Hard delete files where lastEvent - startTime < thresholdMs (default 60000).
+// Targets the active dir by default; pass { archived: true } to prune the archive instead.
+app.post('/telemetry/prune-short', requireAdmin, express.json(), (req, res) => {
+  const threshold = Number(req.body && req.body.thresholdMs);
+  const thresholdMs = Number.isFinite(threshold) && threshold > 0 ? threshold : 60000;
+  const archived = !!(req.body && req.body.archived);
+  const dir = telemetryDirFor(archived);
+  if (!fs.existsSync(dir)) return res.json({ deleted: [], thresholdMs, archived });
+
+  const deleted = [];
+  fs.readdirSync(dir).forEach(file => {
+    if (!file.endsWith('.json')) return;
+    const filePath = path.join(dir, file);
+    try {
+      const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      const events = Array.isArray(data.events) ? data.events : [];
+      const lastEvent = events.length > 0 ? events[events.length - 1].t : null;
+      const startMs = data.startTime ? new Date(data.startTime).getTime() : null;
+      if (lastEvent == null || !Number.isFinite(startMs)) return;
+      const durationMs = lastEvent - startMs;
+      if (durationMs < thresholdMs) {
+        fs.unlinkSync(filePath);
+        deleted.push(data.sessionId || file.replace(/\.json$/, ''));
+      }
+    } catch(e) { /* skip corrupt */ }
+  });
+  res.json({ deleted, thresholdMs, archived });
 });
 
 

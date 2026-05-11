@@ -4,8 +4,28 @@ var DUCKED_PLAYERS = new Map()
 var AUDIOFOCUS = -1  // Audio focus state, -1 means not available, 0 means no focus, 1 means focus gained
 var AUDIOFOCUS_DUCK_FACTOR = 0.25
 
+function showResumeOverlayIfNeeded(pausedCount) {
+    if (pausedCount > 0) $('#resume-overlay').css('display', 'flex');
+    else $('#resume-overlay').hide();
+}
+
 Howler.autoUnlock = true; // Enable automatic context unlocking
 Howler.autoSuspend = false; // Prevent automatic context suspension
+
+// Converts a WKWebView http://localhost/... URL back to a file:// native path
+// needed by cordova-plugin-media, which bypasses the WKWebView HTTP server.
+function httpToNativePath(httpPath) {
+    if (!httpPath) return null
+    if (document.LOCALMEDIA_PATH && document.LOCALMEDIA_PATH_NATIVE &&
+        httpPath.startsWith(document.LOCALMEDIA_PATH)) {
+        return document.LOCALMEDIA_PATH_NATIVE + httpPath.slice(document.LOCALMEDIA_PATH.length)
+    }
+    if (document.LOCALAPP_PATH && document.LOCALAPP_PATH_NATIVE &&
+        httpPath.startsWith(document.LOCALAPP_PATH)) {
+        return document.LOCALAPP_PATH_NATIVE + httpPath.slice(document.LOCALAPP_PATH.length)
+    }
+    return null
+}
 
 // Watch for audio focus changes
 document.addEventListener('deviceready', function() {
@@ -18,9 +38,9 @@ document.addEventListener('deviceready', function() {
         if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audiofocus_change', {state: focusState});
         if (focusState === "AUDIOFOCUS_LOSS" || focusState === "AUDIOFOCUS_LOSS_TRANSIENT") {
             if (navigator.vibrate) navigator.vibrate([300]);
-            pauseAllPlayers();
+            let pausedCount = pauseAllPlayers();
             AUDIOFOCUS = 0;
-            $('#resume-overlay').css('display', 'flex');
+            showResumeOverlayIfNeeded(pausedCount);
         } else if (focusState === "AUDIOFOCUS_GAIN") {
             if (navigator.vibrate) navigator.vibrate([100]);
             restoreDuckedPlayers();
@@ -49,13 +69,16 @@ function pauseAllPlayers() {
     // Additive: do not reset PAUSED_PLAYERS — a second call (e.g. document.pause
     // then AUDIOFOCUS_LOSS for the same phone call) must not wipe the list that
     // the first call already built, or resumeAllPlayers() will have nothing to restore.
+    let pausedCount = 0;
     ALL_PLAYERS.forEach(player => {
         if (player.isPlaying() && !PAUSED_PLAYERS.includes(player)) {
             player.pause();
             PAUSED_PLAYERS.push(player);
+            pausedCount++;
             console.log('Paused player:', player._src);
         }
     });
+    return pausedCount;
 }
 
 function resumeAllPlayers() {
@@ -96,6 +119,10 @@ function requestAudioFocus() {
         cordova.plugins.audiofocus.requestFocus(
             function() {
                 console.log('[AudioFocus] requested successfully.');
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audiofocus_request_ok', {
+                    visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
+                    platform: typeof PLATFORM !== 'undefined' ? PLATFORM : 'unknown',
+                })
                 restoreDuckedPlayers();
                 resumeAllPlayers();
                 AUDIOFOCUS = 1;  // Focus gained
@@ -104,17 +131,301 @@ function requestAudioFocus() {
             },
             function(error) {
                 console.error('[AudioFocus] failed to request:', error);
-                pauseAllPlayers();
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audiofocus_request_fail', {
+                    visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
+                    platform: typeof PLATFORM !== 'undefined' ? PLATFORM : 'unknown',
+                    error: String(error),
+                })
+                let pausedCount = pauseAllPlayers();
                 AUDIOFOCUS = 0;  // No focus
-                $('#resume-overlay').css('display', 'flex');
+                showResumeOverlayIfNeeded(pausedCount);
                 reject(error);
             }
         );
     });
 }
 
+function shouldRequestAudioFocusForPlay() {
+    if (typeof cordova === 'undefined' || typeof cordova.plugins.audiofocus === 'undefined') return false
+    // NativeMediaPlayer activates AVAudioSession itself on play(); no pre-request needed.
+    // Request focus only when it was explicitly lost (phone call, other app).
+    return AUDIOFOCUS === 0
+}
+
+function primeHowlForBackground(howl, options) {
+    options = options || {}
+    if (!howl || PLATFORM !== 'ios') return Promise.resolve({ ok: false, reason: 'unsupported' })
+    if (howl.__backgroundPrimed) return Promise.resolve({ ok: true, reason: 'already-primed' })
+    if (howl.__backgroundPrimingPromise) return howl.__backgroundPrimingPromise
+
+    let state = typeof howl.state === 'function' ? howl.state() : 'unknown'
+
+    let originalVolume = 1
+    try { originalVolume = howl.volume() } catch (e) {}
+
+    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_prime_attempt', {
+        src: options.src || null,
+        reason: options.reason || 'unknown',
+        visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
+    })
+
+    howl.__isPrimingForBackground = true
+    howl.__backgroundPrimingPromise = new Promise(resolve => {
+        let settled = false
+        let timeoutId = null
+
+        let settle = (ok, extra) => {
+            if (settled) return
+            settled = true
+            if (timeoutId) clearTimeout(timeoutId)
+            howl.__isPrimingForBackground = false
+            howl.__backgroundPrimingPromise = null
+            try { howl.volume(originalVolume) } catch (e) {}
+            if (ok) howl.__backgroundPrimed = true
+
+            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log(ok ? 'audio_prime_ok' : 'audio_prime_fail', Object.assign({
+                src: options.src || null,
+                reason: options.reason || 'unknown',
+                visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
+            }, extra || {}))
+
+            resolve({ ok: ok, reason: ok ? 'played' : ((extra && extra.error) || 'failed') })
+        }
+
+        let onPlay = () => {
+            try {
+                howl.pause()
+                howl.seek(0)
+            }
+            catch (e) {}
+            settle(true)
+        }
+
+        let onPlayError = (id, error) => {
+            try {
+                howl.stop()
+                howl.seek(0)
+            }
+            catch (e) {}
+            settle(false, { error: String(error) })
+        }
+
+        howl.once('play', onPlay)
+        howl.once('playerror', onPlayError)
+        timeoutId = setTimeout(() => settle(false, { error: 'prime-timeout' }), 3000)
+
+        try {
+            howl.volume(0)
+            howl.play()
+        }
+        catch (error) {
+            settle(false, { error: String(error) })
+        }
+    })
+
+    return howl.__backgroundPrimingPromise
+}
+
 $('#resume-button').on('click', function() { requestAudioFocus() })
 $('#resume-overlay').hide();
+
+
+// Wraps cordova-plugin-media for iOS background audio.
+// AVAudioPlayer is not subject to the WebKit user-gesture restriction that
+// blocks HTML5 audio initiated from GPS callbacks while the screen is locked.
+class NativeMediaPlayer extends EventEmitter {
+    constructor(src, options) {
+        super()
+        this._src = src
+        this._loop = (options && options.loop) || false
+        this._nativeState = 0   // mirrors Media.MEDIA_* (NONE=0 STARTING=1 RUNNING=2 PAUSED=3 STOPPED=4)
+        this._volume = 1
+        this._positionSec = 0
+        this._positionPollInterval = null
+        this._pendingSeekSec = null     // seek queued before media is prepared
+        this._fadeInterval = null
+        this._loaded = false            // true once first MEDIA_RUNNING received (file prepared)
+        this._playIntent = false        // true while waiting for RUNNING after play() call
+        this._stoppedByCall = false     // distinguishes stop() from natural track end
+        this.__isPrimingForBackground = false  // keeps PlayerSimple event handler compat
+
+        this._media = new Media(
+            src,
+            () => this._onSuccess(),
+            (err) => this._onError(err),
+            (status) => this._onStatus(status)
+        )
+    }
+
+    // Fired by cordova-plugin-media when the track completes naturally (not on stop()).
+    // Looped players use AVAudioPlayer.numberOfLoops = -1 (native infinite loop), so
+    // successCallback never fires for them — no JS roundtrip gap, no session deactivation window.
+    _onSuccess() {
+        this.emit('end', this._src)
+    }
+
+    _onError(err) {
+        this._stopPositionPoll()
+        this._stopFade()
+        this._playIntent = false
+        this.emit('playerror', this._src, err)
+    }
+
+    _onStatus(status) {
+        this._nativeState = status
+
+        if (status === 2) {  // MEDIA_RUNNING
+            if (!this._loaded) {
+                this._loaded = true
+                this.emit('load', this._src)
+                if (this._pendingSeekSec !== null) {
+                    this._media.seekTo(this._pendingSeekSec * 1000)
+                    this._pendingSeekSec = null
+                }
+            }
+            this._startPositionPoll()
+            if (this._playIntent) {
+                this._playIntent = false
+                this.emit('play', this._src)
+            }
+        }
+        else if (status === 3) {  // MEDIA_PAUSED
+            this._stopPositionPoll()
+            this.emit('pause', this._src)
+        }
+        else if (status === 4) {  // MEDIA_STOPPED
+            this._stopPositionPoll()
+            if (this._stoppedByCall) {
+                this._stoppedByCall = false
+                this.emit('stop', this._src)
+            }
+            // natural end: _onSuccess() handles the event, not here
+        }
+    }
+
+    _startPositionPoll() {
+        this._stopPositionPoll()
+        this._positionPollInterval = setInterval(() => {
+            if (!this._media) return
+            this._media.getCurrentPosition(
+                (pos) => { if (pos >= 0) this._positionSec = pos },
+                () => {}
+            )
+        }, 250)
+    }
+
+    _stopPositionPoll() {
+        if (this._positionPollInterval) {
+            clearInterval(this._positionPollInterval)
+            this._positionPollInterval = null
+        }
+    }
+
+    _stopFade() {
+        if (this._fadeInterval) {
+            clearInterval(this._fadeInterval)
+            this._fadeInterval = null
+        }
+    }
+
+    // Howler-compatible API
+
+    state() {
+        if (this._nativeState === 0) return 'unloaded'
+        if (this._nativeState === 1) return 'loading'
+        return 'loaded'  // RUNNING(2), PAUSED(3), STOPPED(4) — all prepared
+    }
+
+    playing() { return this._nativeState === 2 }
+    paused()  { return this._nativeState === 3 }
+
+    play() {
+        if (!this._media) return
+        this._stopFade()
+        this._stoppedByCall = false
+        this._playIntent = true
+        this._media.setVolume(this._volume)
+        // numberOfLoops: -1 → AVAudioPlayer.numberOfLoops = -2 (any negative = infinite loop).
+        // CDVSound subtracts 1 from the JS value before assigning to AVAudioPlayer.
+        this._media.play(this._loop ? { numberOfLoops: -1 } : undefined)
+    }
+
+    pause() {
+        // Only valid when RUNNING; mirrors Howler which ignores pause() on stopped sounds.
+        // Prevents spurious 'pause' events (and rewindOnPause seeks) from PlayerSimple's
+        // stabilization call to pause() before every play().
+        if (!this._media || this._nativeState !== 2) return
+        this._stopFade()
+        this._media.pause()
+    }
+
+    stop() {
+        if (!this._media) return
+        this._stopFade()
+        this._stopPositionPoll()
+        this._playIntent = false
+        this._stoppedByCall = true
+        this._positionSec = 0
+        this._media.stop()
+    }
+
+    // seek(seconds)  getter/setter in seconds, matching Howler's API
+    seek(seconds) {
+        if (seconds === undefined) return this._positionSec
+        if (seconds < 0) return
+        if (this._loaded) {
+            this._media.seekTo(seconds * 1000)
+        } else {
+            this._pendingSeekSec = seconds
+        }
+    }
+
+    volume(v) {
+        if (v === undefined) return this._volume
+        this._volume = Math.max(0, Math.min(1, v))
+        if (this._media) this._media.setVolume(this._volume)
+        return this._volume
+    }
+
+    fade(from, to, duration) {
+        this._stopFade()
+        this.volume(from)
+        const totalSteps = Math.max(1, Math.round(duration / 50))
+        const stepVol = (to - from) / totalSteps
+        const stepMs = duration / totalSteps
+        let step = 0
+        this._fadeInterval = setInterval(() => {
+            step++
+            const v = step >= totalSteps ? to : from + stepVol * step
+            this.volume(v)
+            if (step >= totalSteps) {
+                clearInterval(this._fadeInterval)
+                this._fadeInterval = null
+            }
+        }, stepMs)
+    }
+
+    loop(value) {
+        if (value !== undefined) this._loop = value
+        return this._loop
+    }
+
+    unload() {
+        this._stopFade()
+        this._stopPositionPoll()
+        this._playIntent = false
+        this._stoppedByCall = false
+        if (this._media) {
+            this._media.stop()
+            this._media.release()
+            this._media = null
+        }
+        this._nativeState = 0
+        this._loaded = false
+        this._positionSec = 0
+        this._pendingSeekSec = null
+    }
+}
 
 
 class PlayerSimple extends EventEmitter
@@ -130,6 +441,68 @@ class PlayerSimple extends EventEmitter
         this._volume = 0
         this._media = null
         this._loadError = false
+        this._lastTelemetryErrorSignature = null
+        this._lastTelemetryErrorAt = 0
+        this._pendingGeoTask = null
+    }
+
+    _src() {
+        if (this._player && this._player._src) return this._player._src
+        if (this._media && this._media.src) return this._media.src
+        return null
+    }
+
+    loadState() {
+        if (this._media && this._media.src == '-') return 'empty'
+        if (!this._player) return 'unloaded'
+        if (typeof this._player.state === 'function') return this._player.state()
+        return 'unknown'
+    }
+
+    isReady() {
+        return this.loadState() === 'loaded' || (this._media && this._media.src == '-')
+    }
+
+    _logAudioTelemetry(type, error, extra = {}) {
+        let src = this._src()
+        let message = String(error)
+        let signature = type + '|' + (src || '-') + '|' + message
+        let now = Date.now()
+
+        if (signature === this._lastTelemetryErrorSignature && (now - this._lastTelemetryErrorAt) < 30000) return
+
+        this._lastTelemetryErrorSignature = signature
+        this._lastTelemetryErrorAt = now
+
+        if (typeof TELEMETRY !== 'undefined') {
+            TELEMETRY.log(type, Object.assign({
+                src: src,
+                error: message,
+                cleared: !this._player
+            }, extra))
+        }
+    }
+
+    _claimGeoTask(meta) {
+        if (typeof claimBackgroundGeoTask !== 'function') return null
+        let task = claimBackgroundGeoTask(Object.assign({
+            src: this._src(),
+            visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
+            loaded_before_play: this.isReady(),
+            prepared_before_play: this.isLoaded(),
+            load_state_before_play: this.loadState(),
+        }, meta || {}))
+        if (task) this._pendingGeoTask = task
+        return task
+    }
+
+    _resolveGeoTask(status, extra) {
+        if (!this._pendingGeoTask || typeof resolveBackgroundGeoTask !== 'function') return
+        resolveBackgroundGeoTask(this._pendingGeoTask, status, Object.assign({
+            src: this._src(),
+            visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
+        }, extra || {}))
+        this._pendingGeoTask = null
     }
 
     load(basepath, media, usemediapath = true) {
@@ -148,19 +521,22 @@ class PlayerSimple extends EventEmitter
                 basepath = document.LOCALMEDIA_PATH + basepath
         }
         
-        console.log('PlayerSimple load:', basepath + media.src)
-
-        let html5enabled = false
-        try { html5enabled = (cordova.platformId == 'ios') } catch (e) {}
+        let fullSrc = basepath + media.src
+        console.log('PlayerSimple load:', fullSrc)
 
         this.clear()
-        this._player = new Howl({
-            src: basepath + media.src,
-            loop: this._loop,
-            autoplay: false,
-            volume: 1,
-            html5: html5enabled
-        })
+
+        if (PLATFORM === 'ios') {
+            let nativeSrc = httpToNativePath(fullSrc)
+            if (nativeSrc) {
+                this._player = new NativeMediaPlayer(nativeSrc, { loop: this._loop })
+            } else {
+                console.warn('[NativeMedia] Cannot resolve native path for:', fullSrc, '— using Howler fallback')
+                this._player = new Howl({ src: fullSrc, loop: this._loop, autoplay: false, volume: 1, html5: true })
+            }
+        } else {
+            this._player = new Howl({ src: fullSrc, loop: this._loop, autoplay: false, volume: 1, html5: false })
+        }
 
         // Register the player in the global ALL_PLAYERS array
         ALL_PLAYERS.push(this)
@@ -183,6 +559,10 @@ class PlayerSimple extends EventEmitter
         })
         this._player.on('play', () => {
             if (!this._player) return
+            if (this._player.__isPrimingForBackground) {
+                console.log('PlayerSimple prime play:', this._player._src)
+                return
+            }
             if (!this._playRequested) {
                 console.warn('PlayerSimple play but is not requested ...')
                 this._player.stop()
@@ -191,6 +571,18 @@ class PlayerSimple extends EventEmitter
             this._playRequested = false
             this.emit('play', this._player._src)
             console.log('PlayerSimple play:', this._player._src)
+            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_play_started', {
+                src: this._src(),
+                visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
+                loaded_before_play: this.isReady(),
+                prepared_before_play: this.isLoaded(),
+                load_state: this.loadState(),
+            })
+            this._resolveGeoTask('play-started', {
+                loaded_before_play: this.isReady(),
+                prepared_before_play: this.isLoaded(),
+                load_state: this.loadState(),
+            })
         })
         this._player.on('pause', () => {
             if (!this._player) return
@@ -207,7 +599,13 @@ class PlayerSimple extends EventEmitter
             if (this._player) {
                 this._loadError = false
                 this.emit('load', this._player._src)
-                // console.log('PlayerSimple ready:', this._player._src)
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_load_ready', {
+                    src: this._src(),
+                    visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
+                    load_state: this.loadState(),
+                })
+                // primeHowlForBackground removed: iOS now uses NativeMediaPlayer which
+                // activates AVAudioSession natively on play() without requiring prior priming.
             }
         })
         this._player.on('loaderror', (id, error) => {
@@ -216,15 +614,18 @@ class PlayerSimple extends EventEmitter
             this._playRequested = false
             clearTimeout(this._playRequestedTimeout)
             this.emit('loaderror', this._player ? this._player._src : null, error)
-            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_loaderror', {src: this._player ? this._player._src : null, error: String(error)});
+            this._logAudioTelemetry('audio_loaderror', error)
+            this._resolveGeoTask('loaderror', { error: String(error) })
         })
         this._player.on('playerror', (id, error) => {
+            if (this._player && this._player.__isPrimingForBackground) return
             console.error('PlayerSimple playerror:', this._player ? this._player._src : '?', error)
             this._loadError = true
             this._playRequested = false
             clearTimeout(this._playRequestedTimeout)
             this.emit('playerror', this._player ? this._player._src : null, error)
-            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_playerror', {src: this._player ? this._player._src : null, error: String(error)});
+            this._logAudioTelemetry('audio_playerror', error)
+            this._resolveGeoTask('playerror', { error: String(error) })
         })
 
         this.master(media.master)
@@ -237,6 +638,7 @@ class PlayerSimple extends EventEmitter
             ALL_PLAYERS = ALL_PLAYERS.filter(player => player !== this)
             PAUSED_PLAYERS = PAUSED_PLAYERS.filter(player => player !== this)
             DUCKED_PLAYERS.delete(this)
+            this._resolveGeoTask('cleared')
             this._player.stop()
             this._player.unload()
             this._player = null
@@ -282,13 +684,33 @@ class PlayerSimple extends EventEmitter
                 console.warn('PlayerSimple play timeout: resetting stuck _playRequested', this._player ? this._player._src : '?')
                 this._playRequested = false
                 if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_play_timeout', {src: this._player ? this._player._src : null})
+                this._resolveGeoTask('play-timeout')
             }
         }, 5000)
         console.log('PlayerSimple play requested:', this._player._src, 'seek:', seek, 'volume:', volume)
+        let bgTask = this._claimGeoTask({ seek: seek })
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_play_requested', {
+            src: this._src(),
+            visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
+            loaded_before_play: this.isReady(),
+            prepared_before_play: this.isLoaded(),
+            load_state_before_play: this.loadState(),
+            bg_task_claimed: !!bgTask,
+            seek: seek,
+        })
 
-        // Only re-request native focus when it was explicitly lost.
-        // Unknown/unavailable focus state (-1) should not block playback.
-        if (PLATFORM == 'ios' || AUDIOFOCUS !== 0) {
+        let needsFocusRequest = shouldRequestAudioFocusForPlay()
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_play_gate', {
+            src: this._src(),
+            visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
+            platform: typeof PLATFORM !== 'undefined' ? PLATFORM : 'unknown',
+            audiofocus: AUDIOFOCUS,
+            request_focus_before_play: needsFocusRequest,
+        })
+
+        // Unknown/unavailable focus state (-1) should not block playback unless
+        // this specific play requires a fresh native audio-session activation.
+        if (!needsFocusRequest) {
             if (!this._player) return
             this._player.play()
 
@@ -570,6 +992,22 @@ class PlayerStep extends EventEmitter
 
     isLoaded() {
         return this.voice.isLoaded() && this.music.isLoaded() && this.ambiant.isLoaded() && this.offlimit.isLoaded() && this.afterplay.isLoaded()
+    }
+
+    hasError() {
+        return !!(this.voice._loadError || this.music._loadError || this.ambiant._loadError ||
+                  this.offlimit._loadError || this.afterplay._loadError)
+    }
+
+    isReady() {
+        return this.voice.isReady() && this.music.isReady() && this.ambiant.isReady() && this.offlimit.isReady() && this.afterplay.isReady()
+    }
+
+    loadState() {
+        let states = [this.voice, this.music, this.ambiant, this.offlimit, this.afterplay].map(player => player.loadState())
+        if (states.every(state => state === 'loaded' || state === 'empty')) return 'loaded'
+        if (states.every(state => state === 'unloaded' || state === 'empty')) return 'unloaded'
+        return states.join(',')
     }
 
     isOfflimit() {

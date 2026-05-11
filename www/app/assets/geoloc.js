@@ -2,6 +2,121 @@ var CALIBRATION_TIME = 2
 var APP_VISIBILITY = 'foreground' // foreground, background
 var LAST_AUDIO_CONTEXT_STATE = null
 var AUDIO_CONTEXT_STATE_BOUND = false
+var GPS_CALLBACK_GAP_THRESHOLD = 8000
+var GPS_SLEEP_SUSPECT_THRESHOLD = 15000
+var ACTIVE_GEO_BACKGROUND_TASK = null
+var IOS_GEO_BACKGROUND_TASK_TIMEOUT = 8000
+
+function gpsAccuracyBucket(acc) {
+    if (typeof acc !== 'number' || isNaN(acc)) return 'unknown'
+    if (acc <= 10) return 'excellent'
+    if (acc <= 20) return 'good'
+    if (acc <= 40) return 'fair'
+    if (acc <= 80) return 'poor'
+    return 'bad'
+}
+
+function _geoTaskTelemetry(type, data) {
+    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log(type, data)
+}
+
+function _finishGeoBackgroundTask(task, status, extra) {
+    if (!task || task.ended) return
+
+    task.ended = true
+    if (task.timeoutId) {
+        clearTimeout(task.timeoutId)
+        task.timeoutId = null
+    }
+
+    let payload = Object.assign({
+        taskKey: task.taskKey,
+        reason: task.reason,
+        retained: task.retained,
+        duration_ms: Date.now() - task.startedAt,
+    }, task.meta || {}, extra || {})
+
+    _geoTaskTelemetry('ios_bg_task_end', Object.assign({ status: status }, payload))
+
+    try {
+        if (typeof BackgroundGeolocation !== 'undefined' && BackgroundGeolocation && typeof BackgroundGeolocation.endTask === 'function') {
+            BackgroundGeolocation.endTask(task.taskKey)
+        }
+    }
+    catch (e) {
+        console.warn('[BG-TASK] endTask failed', e)
+    }
+}
+
+function runWithGeoBackgroundTask(taskKey, reason, meta, work) {
+    if (PLATFORM !== 'ios') {
+        work(null)
+        return
+    }
+
+    let task = {
+        taskKey: taskKey,
+        reason: reason,
+        startedAt: Date.now(),
+        retained: false,
+        ended: false,
+        timeoutId: null,
+        meta: Object.assign({ visibility: APP_VISIBILITY }, meta || {})
+    }
+
+    ACTIVE_GEO_BACKGROUND_TASK = task
+    _geoTaskTelemetry('ios_bg_task_begin', {
+        taskKey: task.taskKey,
+        reason: task.reason,
+        visibility: task.meta.visibility,
+        acc: task.meta.acc,
+    })
+
+    try {
+        work(task)
+    }
+    finally {
+        ACTIVE_GEO_BACKGROUND_TASK = null
+        if (!task.retained) {
+            _finishGeoBackgroundTask(task, 'sync-complete')
+        }
+        else {
+            _geoTaskTelemetry('ios_bg_task_deferred', {
+                taskKey: task.taskKey,
+                reason: task.reason,
+                visibility: task.meta.visibility,
+            })
+        }
+    }
+}
+
+function claimBackgroundGeoTask(meta) {
+    if (PLATFORM !== 'ios' || !ACTIVE_GEO_BACKGROUND_TASK) return null
+
+    let task = ACTIVE_GEO_BACKGROUND_TASK
+    task.retained = true
+    task.meta = Object.assign({}, task.meta || {}, meta || {})
+
+    if (!task.timeoutId) {
+        task.timeoutId = setTimeout(() => {
+            _finishGeoBackgroundTask(task, 'timeout', { visibility: APP_VISIBILITY })
+        }, IOS_GEO_BACKGROUND_TASK_TIMEOUT)
+    }
+
+    _geoTaskTelemetry('ios_bg_task_claim', {
+        taskKey: task.taskKey,
+        reason: task.reason,
+        visibility: task.meta.visibility,
+        src: task.meta.src,
+        loaded_before_play: task.meta.loaded_before_play,
+    })
+
+    return task
+}
+
+function resolveBackgroundGeoTask(task, status, meta) {
+    _finishGeoBackgroundTask(task, status, meta)
+}
 
 function logAudioContextState(reason = 'unknown', force = false) {
     if (typeof Howler === 'undefined' || !Howler.ctx) return
@@ -162,6 +277,7 @@ class GeoLoc extends EventEmitter {
 
         this.stateUpdate = 'off'; // off, ok, lost
         this.stateUpdateTimeout = 10000; // 10 seconds
+        this.lastAccuracyBucket = null;
 
         this.stateUpdateTimer = setInterval(() => {
             let nextStep = this.stateUpdate;
@@ -222,7 +338,14 @@ class GeoLoc extends EventEmitter {
                         speed: location.speed,
                     }
                 };
-                this._callbackPosition(position);
+                if (typeof TELEMETRY !== 'undefined') {
+                    TELEMETRY.log('gps_heartbeat_ok', {
+                        visibility: APP_VISIBILITY,
+                        acc: Math.round(location.accuracy),
+                        ageMs: typeof location.time === 'number' ? Math.max(0, Date.now() - location.time) : null
+                    });
+                }
+                this._callbackPosition(position, {source: 'heartbeat', visibility: APP_VISIBILITY});
                 this._heartbeatInProgress = false;
             },
             (error) => {
@@ -234,9 +357,68 @@ class GeoLoc extends EventEmitter {
         );
     }
 
-    _callbackPosition(position) 
+    _callbackPosition(position, telemetryMeta = {}) 
     {
         resumeAudioContext('position')
+
+        let now = Date.now()
+        let callbackGapMs = this.lastTimeUpdate == null ? null : now - this.lastTimeUpdate
+        let positionAgeMs = typeof position.timestamp === 'number' ? Math.max(0, now - position.timestamp) : null
+        let accuracy = position && position.coords ? Math.round(position.coords.accuracy) : null
+        let visibility = telemetryMeta.visibility || APP_VISIBILITY
+        let source = telemetryMeta.source || (position.simulate ? 'simulate' : 'unknown')
+        let motionStationary = !!this.motionIsStationary
+        let accuracyBucket = gpsAccuracyBucket(accuracy)
+
+        telemetryMeta.source = source
+        telemetryMeta.visibility = visibility
+        telemetryMeta.motionStationary = motionStationary
+        if (callbackGapMs !== null) telemetryMeta.callbackGapMs = callbackGapMs
+        if (positionAgeMs !== null) telemetryMeta.ageMs = positionAgeMs
+
+        if (callbackGapMs !== null && callbackGapMs >= GPS_CALLBACK_GAP_THRESHOLD && typeof TELEMETRY !== 'undefined') {
+            TELEMETRY.log('gps_callback_gap', {
+                gapMs: Math.round(callbackGapMs),
+                source: source,
+                visibility: visibility,
+                acc: accuracy,
+                ageMs: positionAgeMs,
+                motionStationary: motionStationary
+            })
+        }
+
+        if (callbackGapMs !== null && visibility === 'background' && callbackGapMs >= GPS_SLEEP_SUSPECT_THRESHOLD && typeof TELEMETRY !== 'undefined') {
+            TELEMETRY.log('gps_sleep_suspect', {
+                gapMs: Math.round(callbackGapMs),
+                source: source,
+                acc: accuracy,
+                ageMs: positionAgeMs,
+                motionStationary: motionStationary
+            })
+        }
+
+        if (positionAgeMs !== null && positionAgeMs >= 10000 && typeof TELEMETRY !== 'undefined') {
+            TELEMETRY.log('gps_stale_callback', {
+                ageMs: Math.round(positionAgeMs),
+                source: source,
+                visibility: visibility,
+                acc: accuracy
+            })
+        }
+
+        if (accuracyBucket !== this.lastAccuracyBucket) {
+            if (this.lastAccuracyBucket !== null && typeof TELEMETRY !== 'undefined') {
+                TELEMETRY.log('gps_accuracy_bucket', {
+                    from: this.lastAccuracyBucket,
+                    to: accuracyBucket,
+                    acc: accuracy,
+                    source: source,
+                    visibility: visibility,
+                    gapMs: callbackGapMs
+                })
+            }
+            this.lastAccuracyBucket = accuracyBucket
+        }
 
         // first measure
         if (!this.firstMeasure) {
@@ -270,12 +452,19 @@ class GeoLoc extends EventEmitter {
             // Accuracy gate: reject inaccurate fixes for step triggering
             if (!position.simulate && position.coords.accuracy > 30) {
                 console.warn('GPS accuracy too low (' + Math.round(position.coords.accuracy) + 'm), position ignored for triggers');
+                telemetryMeta.rejected = true
+                telemetryMeta.reason = 'accuracy'
                 if (typeof TELEMETRY !== 'undefined') {
                     TELEMETRY.log('gps_trigger_rejected', {
                         reason: 'accuracy',
                         acc: Math.round(position.coords.accuracy),
                         lat: position.coords.latitude,
-                        lng: position.coords.longitude
+                        lng: position.coords.longitude,
+                        source: source,
+                        visibility: visibility,
+                        gapMs: callbackGapMs,
+                        ageMs: positionAgeMs,
+                        motionStationary: motionStationary
                     });
                 }
                 // Still update lastPosition/lastTimeUpdate so GPS-lost detection doesn't fire
@@ -293,7 +482,7 @@ class GeoLoc extends EventEmitter {
             this.emit('stateUpdate', 'ok');
             if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_state', {state: 'ok'});
         }
-        if (typeof TELEMETRY !== 'undefined') TELEMETRY.gps(position);
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.gps(position, telemetryMeta);
     }
 
     _callbackError(error) {
@@ -326,7 +515,7 @@ class GeoLoc extends EventEmitter {
 
     // Fake update event (triggered by map move, simulate GPS new position event)
     fakeUpdate(pos = null) {
-        this._callbackPosition(this.fakePosition(pos));
+        this._callbackPosition(this.fakePosition(pos), {source: 'simulate', visibility: APP_VISIBILITY});
     }
 
     // Test if geoloc is supported
@@ -390,6 +579,7 @@ class GeoLoc extends EventEmitter {
         this.initialPosition = null;
         this.lastPosition = null;
         this.initializing = true;
+        this.lastAccuracyBucket = null;
 
         this.runMode = mode;
         this.setMap(this.map);
@@ -495,11 +685,15 @@ class GeoLoc extends EventEmitter {
                 console.warn('BackgroundGeolocation is not available, TESTING classic navigator geolocation');
                 return this.testGPS().then(() => {
                     console.log('classic GEO TEST OK, starting navigator geolocation');
-                    this.watchId = navigator.geolocation.watchPosition(this._callbackPosition.bind(this), this._callbackError.bind(this), {
+                    this.watchId = navigator.geolocation.watchPosition(
+                        position => this._callbackPosition(position, {source: 'navigator', visibility: APP_VISIBILITY}),
+                        this._callbackError.bind(this),
+                        {
                         enableHighAccuracy: true,
                         timeout: 10000,
                         maximumAge: 0,
-                    });
+                        }
+                    );
                     resolve();
                 })
                 .catch(error => {
@@ -602,11 +796,13 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
                     speed: location.speed,
                 }
             }
-            positionCallback(position);
-            // execute long running task
-            // eg. ajax post location
-            // IMPORTANT: task has to be ended by endTask
-            BackgroundGeolocation.endTask(taskKey);
+            runWithGeoBackgroundTask(taskKey, 'location', {
+                acc: location.accuracy,
+                lat: location.latitude,
+                lng: location.longitude,
+            }, function() {
+                positionCallback(position, {source: 'bg_location', visibility: APP_VISIBILITY});
+            });
         });
     });
 
@@ -627,8 +823,13 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
                     speed: location.speed,
                 }
             }
-            positionCallback(position);
-            BackgroundGeolocation.endTask(taskKey);
+            runWithGeoBackgroundTask(taskKey, 'stationary', {
+                acc: location.accuracy,
+                lat: location.latitude,
+                lng: location.longitude,
+            }, function() {
+                positionCallback(position, {source: 'bg_stationary', visibility: APP_VISIBILITY});
+            });
         });
     });
 
