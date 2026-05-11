@@ -5,6 +5,7 @@ _tmp/
 telemetry/
 guest_password.json
 .claude/*
+*.code-workspace
 
 # Logs
 logs
