@@ -1448,7 +1448,9 @@ PAGE('title');
 var taps = 0;
 var tapZone = null;
 var tapTimeout = null;
+var tapLocked = false;
 $('body').off('click').on('click', (e) => {
+    if (tapLocked) return;
     // On Title page: split top/bottom zones
     if (currentPage == 'title') {
         let zone = (e.clientY < window.innerHeight / 2) ? 'top' : 'bottom';
@@ -1461,6 +1463,7 @@ $('body').off('click').on('click', (e) => {
                 TELEMETRY.log('session_restart_click', {reason: 'restart_tap'});
                 TELEMETRY.end();
                 PARCOURS.clearStore();
+                tapLocked = true;
                 setTimeout(() => { alert('Application réinitialisée'); location.reload(); }, 300);
             }
         }
