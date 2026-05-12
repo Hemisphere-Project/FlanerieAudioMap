@@ -1461,8 +1461,7 @@ $('body').off('click').on('click', (e) => {
                 TELEMETRY.log('session_restart_click', {reason: 'restart_tap'});
                 TELEMETRY.end();
                 PARCOURS.clearStore();
-                alert('Application réinitialisée');
-                location.reload();
+                setTimeout(() => { alert('Application réinitialisée'); location.reload(); }, 300);
             }
         }
     }
@@ -1522,8 +1521,7 @@ $('#parcours-restart').click(() => {
     TELEMETRY.log('session_restart_click', {reason: 'restart_button'});
     TELEMETRY.end();
     PARCOURS.clearStore();
-    alert('Application réinitialisée');
-    location.reload();
+    setTimeout(() => { alert('Application réinitialisée'); location.reload(); }, 300);
 });
 
 
