@@ -157,3 +157,28 @@ Couleur Current / Next zone
 
 => GPS state dans la page je suis perdu
 
+****************
+
+REU 12 mai
+
+-> check Settings -> Application -> :
+    - GPS auth (always ? while using app ?)
+    - Notification (android ?)
+    - Battery restriction (Android ?)
+
+-> CBR / VBR / format check ! allow only MP3
+
+-> on Restart: check update / check media / reinit all
+-> Alert Restart : confirmer la re-init
+
+-> After crash: recupération position !
+
+-> Check: si deepsleep -> resume at position quand on reveille le téléphone
+
+-> Out of zone: unload Area -> plus d'audio -> "GPS out" message et montrer la carte 
+
+-> Laters: -> "You are late" message = afterplay generalisé -> quand étape audio terminé 
+
+-> Je suis perdu -> montre la carte + texte "Rejoins la zone de telle couleur"
+
+-> review NO AUDIO situations
