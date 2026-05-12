@@ -166,10 +166,9 @@ REU 12 mai
     - Notification (android ?)
     - Battery restriction (Android ?)
 
--> CBR / VBR / format check ! allow only MP3
+=> Optimisation par défault vs Cycle de charge..
 
--> on Restart: check update / check media / reinit all
--> Alert Restart : confirmer la re-init
+-> CBR / VBR / format check ! allow only MP3
 
 -> After crash: recupération position !
 
@@ -182,3 +181,11 @@ REU 12 mai
 -> Je suis perdu -> montre la carte + texte "Rejoins la zone de telle couleur"
 
 -> review NO AUDIO situations
+
+-> first start (after install): 
+freeze on splash screen 
+
+-> Audio test initial: is supposed to loop 
+
+OK Alert Restart : confirmer la re-init
+OK on Restart: check update / check media / reinit all

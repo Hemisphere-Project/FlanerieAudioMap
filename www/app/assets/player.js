@@ -438,6 +438,7 @@ class PlayerSimple extends EventEmitter
         this.isGoingOut = null
         this._playRequested = false
         this._playRequestedTimeout = null
+        this._isActive = false
         this._volume = 0
         this._media = null
         this._loadError = false
@@ -545,6 +546,7 @@ class PlayerSimple extends EventEmitter
             if (!this._player) return
             console.log('PlayerSimple end:', this._player._src)
             this._playRequested = false
+            this._isActive = false
             this.emit('end', this._player._src)
             // console.log('PlayerSimple end:', this._player._src)
         })
@@ -552,6 +554,7 @@ class PlayerSimple extends EventEmitter
             if (!this._player) return
             console.log('PlayerSimple stop:', this._player._src)
             this._playRequested = false
+            this._isActive = false
             if (this._player) {
                 this.emit('stop', this._player._src)
                 console.log('PlayerSimple stop:', this._player._src)
@@ -563,12 +566,14 @@ class PlayerSimple extends EventEmitter
                 console.log('PlayerSimple prime play:', this._player._src)
                 return
             }
-            if (!this._playRequested) {
+            if (!this._playRequested && !this._isActive) {
                 console.warn('PlayerSimple play but is not requested ...')
                 this._player.stop()
                 return
             }
+            if (!this._playRequested) return  // loop iteration — already active, skip re-emit
             this._playRequested = false
+            this._isActive = true
             this.emit('play', this._player._src)
             console.log('PlayerSimple play:', this._player._src)
             if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_play_started', {
@@ -643,6 +648,7 @@ class PlayerSimple extends EventEmitter
             this._player.unload()
             this._player = null
             this._playRequested = false
+            this._isActive = false
             clearTimeout(this._playRequestedTimeout)
             this._loadError = false
         }
