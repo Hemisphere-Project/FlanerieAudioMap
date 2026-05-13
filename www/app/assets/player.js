@@ -3,6 +3,10 @@ var PAUSED_PLAYERS = []  // Interrupted players that are paused and can be resum
 var DUCKED_PLAYERS = new Map()
 var AUDIOFOCUS = -1  // Audio focus state, -1 means not available, 0 means no focus, 1 means focus gained
 var AUDIOFOCUS_DUCK_FACTOR = 0.25
+// Sticky flag: any iOS PlayerSimple that fell back to Howler sets this true.
+// checkaudio reads it to fail-fast before the user starts walking with a
+// broken locked-screen audio path. Reset on app reload only.
+var IOS_NATIVE_FALLBACK_DETECTED = false
 
 function showResumeOverlayIfNeeded(pausedCount) {
     if (pausedCount > 0) $('#resume-overlay').css('display', 'flex');
@@ -37,12 +41,14 @@ document.addEventListener('deviceready', function() {
         console.log('[AudioFocus] change:', focusState);
         if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audiofocus_change', {state: focusState});
         if (focusState === "AUDIOFOCUS_LOSS" || focusState === "AUDIOFOCUS_LOSS_TRANSIENT") {
-            if (navigator.vibrate) navigator.vibrate([300]);
+            // Distinctive triple-pulse so a pocketed user can feel that audio paused
+            // — a single 300ms pulse is easy to miss against walking motion.
+            if (navigator.vibrate) navigator.vibrate([300, 150, 300, 150, 300]);
             let pausedCount = pauseAllPlayers();
             AUDIOFOCUS = 0;
             showResumeOverlayIfNeeded(pausedCount);
         } else if (focusState === "AUDIOFOCUS_GAIN") {
-            if (navigator.vibrate) navigator.vibrate([100]);
+            if (navigator.vibrate) navigator.vibrate([100, 80, 100]);
             restoreDuckedPlayers();
             resumeAllPlayers();
             AUDIOFOCUS = 1;
@@ -527,12 +533,22 @@ class PlayerSimple extends EventEmitter
 
         this.clear()
 
+        this._isNativeFallback = false
         if (PLATFORM === 'ios') {
             let nativeSrc = httpToNativePath(fullSrc)
             if (nativeSrc) {
                 this._player = new NativeMediaPlayer(nativeSrc, { loop: this._loop })
             } else {
-                console.warn('[NativeMedia] Cannot resolve native path for:', fullSrc, '— using Howler fallback')
+                // FATAL on iOS — Howler cannot start playback from a background GPS
+                // callback when the phone is locked. checkaudio gates on this flag.
+                console.error('[NativeMedia] Cannot resolve native path for:', fullSrc, '— iOS Howler fallback (BROKEN for locked-screen GPS triggers)')
+                this._isNativeFallback = true
+                IOS_NATIVE_FALLBACK_DETECTED = true
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('ios_native_fallback', {
+                    src: fullSrc,
+                    has_localmedia: !!document.LOCALMEDIA_PATH_NATIVE,
+                    has_localapp: !!document.LOCALAPP_PATH_NATIVE,
+                })
                 this._player = new Howl({ src: fullSrc, loop: this._loop, autoplay: false, volume: 1, html5: true })
             }
         } else {
@@ -689,10 +705,12 @@ class PlayerSimple extends EventEmitter
             if (this._playRequested) {
                 console.warn('PlayerSimple play timeout: resetting stuck _playRequested', this._player ? this._player._src : '?')
                 this._playRequested = false
-                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_play_timeout', {src: this._player ? this._player._src : null})
+                // 15s window covers slow filesystems / large MP3 loads. loaderror/playerror fire
+                // on real failures and resolve the geo task earlier; this is the last-resort safety net.
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_play_timeout', {src: this._player ? this._player._src : null, ms: 15000})
                 this._resolveGeoTask('play-timeout')
             }
-        }, 5000)
+        }, 15000)
         console.log('PlayerSimple play requested:', this._player._src, 'seek:', seek, 'volume:', volume)
         let bgTask = this._claimGeoTask({ seek: seek })
         if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_play_requested', {

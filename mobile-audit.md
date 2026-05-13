@@ -1,7 +1,7 @@
 # Mobile Audit Remediation Plan
 
-Date: 2026-04-27  
-Last updated: 2026-05-13 (GPS auth workflow hardening + power-optimization bug fixes + deferred fork plan)  
+Original: 2026-04-27  
+Last updated: 2026-05-13 (audit restructure: dedup C heading, P3.5 relocated, Architecture Summary aligned with current code)  
 Scope: Cordova launcher + downloaded local webapp, GPS-triggered audio walk, locked-screen pocket usage, published parcours FLANERIE_ELYSEE  
 Plugin: [`cordova-background-geolocation-plugin`](https://github.com/Maigre/cordova-background-geolocation-plugin) v2.4.0 (Flanerie fork of HaylLtd v2.3.3)
 
@@ -39,30 +39,33 @@ Stabilize the real field experience on a wide range of devices, with focus on:
 
 ## Architecture Summary
 
-Key files:
-- `www/app/pages.js` — 25+ page state machine (entry point, ~1000 lines)
-- `www/app/assets/geoloc.js` — GPS tracking via BackgroundGeolocation plugin + browser fallback
-- `www/app/assets/player.js` — Audio engine: PlayerSimple (single track) + PlayerStep (5-channel step player)
-- `www/app/assets/spot.js` — Geofence detection: Zone (ambient/object audio), Offlimit, Step (sequential waypoints)
-- `www/app/assets/parcours.js` — Parcours data model, media download, state persistence (localStorage)
+Key files (line counts as of 2026-05-13):
+- `www/app/pages.js` — 25 pages, ~2000 lines (entry point + state machine + mid-walk monitoring)
+- `www/app/assets/geoloc.js` — GPS tracking via BackgroundGeolocation plugin + browser fallback (~1100 lines)
+- `www/app/assets/player.js` — Audio engine: `PlayerSimple` wraps Howler or `NativeMediaPlayer` (iOS); `PlayerStep` composes 2 PlayerSimple channels (voice + afterplay) (~1000 lines)
+- `www/app/assets/spot.js` — Geofence classes: `Zone` (ambient/object audio, looped PlayerSimple), `Offlimit` (boundary message, looped PlayerSimple), `Step` (sequential waypoints, PlayerStep) (~700 lines)
+- `www/app/assets/parcours.js` — Parcours data model, media download, state persistence (localStorage), step progression
+- `www/app/assets/diagnostic.js` — DEV-mode diagnostic test suite T0–T11
 - `www/app/assets/map.js` — Leaflet map with offline tile support (currently disabled)
 - `www/app/assets/telemetry.js` — Event logging, session tracking, beacon-based flush
 - `www/app/assets/common.js` — EventEmitter base class, geo_distance(), HTTP helpers
 
-Libraries: Howler.js 2.2.4 (Android/browser), cordova-plugin-media via NativeMediaPlayer (iOS audio), Leaflet 1.9.4, NoSleep.js, jQuery 3.7.1
+Libraries: Howler.js 2.2.4 (Android/browser fallback), cordova-plugin-media via `NativeMediaPlayer` (iOS primary), Leaflet 1.9.4, NoSleep.js, jQuery 3.7.1
 
 Keepalive stack (all active during parcours):
 1. `SILENT_PLAYER` — looped silent mp3 via PlayerSimple (NativeMediaPlayer on iOS, Howler on Android/browser)
 2. NoSleep.js — Wake Lock API / silent video hack
 3. BackgroundGeolocation native keepalive — foreground service + Handler 15s tick (Android) / `UIBackgroundModes: location` + NSTimer 15s tick (iOS, v2.4.0)
-4. Local notification chain — disabled (`NOTIF_CHAIN_ENABLED = false`); was delivering zero keepalive contribution on both platforms
+4. `cordova-plugin-audiofocus` foreground service — `FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK` (Android API 29+, see C1b) signals audio activity to OEM battery savers independently of the GPS service
+5. Local notification chain — disabled (`NOTIF_CHAIN_ENABLED = false`); was delivering zero keepalive contribution on both platforms
 
-Audio channel model per step (PlayerStep class):
-- `voice` — narration, rewind 3s on pause
-- `music` — background music, rewind 3s on pause
-- `ambiant` — loop, continues during afterplay
-- `offlimit` — plays when user crosses step boundary
-- `afterplay` — loop after voice/music end
+Audio model (current code; see player.js + spot.js):
+- **Step → PlayerStep**: 2 internal channels.
+  - `voice` — non-looped narration, rewind 3s on pause, fires `end` → starts afterplay.
+  - `afterplay` — looped continuation, native infinite-loop on iOS (`numberOfLoops: -1`), starts when voice ends, no `end` event while looping.
+- **Zone → PlayerSimple (looped)** — ambient or object audio (mode `Ambiance` uses 4000ms fade, otherwise instant).
+- **Offlimit → PlayerSimple (looped, 1000ms fade)** — boundary message; once loaded, kept loaded for upcoming triggers.
+- **Global persistent players**: `SILENT_PLAYER` (parcours-page keepalive), `GPSLOST_PLAYER` (GPS-lost cue), `testplayer` (checkaudio gate).
 
 Page flow:
 ```
@@ -130,12 +133,11 @@ Acceptance:
 - iOS users are not blocked by a notification permission gate.
 - Notification accumulation in the iOS tray is eliminated.
 
-#### P0.4 Plugin guards [SAFE-TODAY]
+#### P0.4 Plugin guards ✅ ROLLING (superseded by concrete fixes)
 
-Opportunistically add `typeof` guards around plugin calls when touching files for other reasons. No dedicated pass until P0.1 and P0.3 are field-validated.
+Originally an opportunistic task to add `typeof` guards around plugin calls. Effectively closed: concrete fixes since 2026-04 have hardened the major plugin touchpoints — `geoloc.js` (P0.1, P0.5, P3.3b-d), `player.js` (P1.11, P1.11b, P3.4), `pages.js` (P1.12, P1.13, P3.2, P3.3b-d). Future plugin additions should bake guards in at write-time rather than as a separate audit pass.
 
-Files: `www/app/pages.js`, `www/app/assets/player.js`, `www/app/assets/geoloc.js`  
-Regression risk: **LOW**.
+Files: `www/app/pages.js`, `www/app/assets/player.js`, `www/app/assets/geoloc.js`
 
 #### P0.5 Background geolocation plugin fork ✅ PARTIAL — v2.4.0 (2026-05-06)
 
@@ -219,15 +221,63 @@ Vibration on GPS loss/recovery, `#gpslost-overlay` shown on loss with "Continuer
 
 Files: `www/app/app.html`, `www/app/pages.js`
 
-#### P1.11 Audio focus auto-resume ✅ DONE (2026-05-05, updated 2026-05-06)
+#### P1.11 Audio focus auto-resume ✅ DONE (2026-05-05, updated 2026-05-06 + 2026-05-13)
 
-- Vibration on `AUDIOFOCUS_LOSS` (300ms) and `AUDIOFOCUS_GAIN` (100ms).
+- Vibration on `AUDIOFOCUS_LOSS` / `AUDIOFOCUS_GAIN` — patterns updated in **P1.11b** (triple-pulse loss, double-pulse gain).
 - `shouldRequestAudioFocusForPlay()` fixed: re-requests focus only when `AUDIOFOCUS === 0` (explicitly lost), not on every background play.
 - iOS: generic app backgrounding no longer treated as audio interruption. Only native `AVAudioSessionInterruptionNotification` events (via audiofocus plugin, see C1) trigger pause/resume.
 - Android: re-requests audio focus on app resume.
 - `AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK`: active players reduced to 25% volume, restored on `AUDIOFOCUS_GAIN`.
 
 Files: `www/app/assets/player.js`, `www/app/assets/geoloc.js`
+
+#### P1.11b Audio stack hardening ✅ DONE (2026-05-13)
+
+Field-review-driven JS-only hardening of the audio path for the 45-min locked-pocket scenario. Five fixes shipped together — none require native code changes (one is a Cordova install variable).
+
+**1. iOS Howler-fallback fail-fast (was a silent failure trapdoor):**
+
+If `httpToNativePath()` returns null on iOS (e.g., `LOCALMEDIA_PATH_NATIVE`/`LOCALAPP_PATH_NATIVE` not captured), `PlayerSimple.load()` previously fell back to `Howl({html5: true})` with only a `console.warn`. Howler cannot start playback from a background GPS callback on a locked iPhone — the walk would silently die in the pocket while `checkaudio` (foreground) still passed.
+
+Now: the fallback branch flips a per-instance `_isNativeFallback` flag and a sticky module-level `IOS_NATIVE_FALLBACK_DETECTED`. `console.warn` upgraded to `console.error`. Telemetry `ios_native_fallback` records which path bases were missing. `checkaudio` hard-fails on either flag with French copy "Erreur de compatibilité audio (iOS) — Demandez à un membre de l'équipe."
+
+**2. `AUDIOFOCUS === -1` (plugin failed to init) fail-fast:**
+
+`shouldRequestAudioFocusForPlay()` previously returned false when `AUDIOFOCUS === -1`, silently letting playback proceed without focus on Android (system can interrupt at any time) and without explicit AVAudioSession activation on iOS. `checkaudio` now gates on `AUDIOFOCUS === -1` and hard-fails with "Le module audio n'est pas disponible."
+
+**3. `KEEP_AVAUDIOSESSION_ALWAYS_ACTIVE` config alignment:**
+
+`FlanerieCordova/package.json` install variable was `"NO"` while `FlanerieCordova/config.xml` set the runtime preference to `"YES"` — Cordova's config merge order made the effective value non-deterministic. If the install-time value won, `CDVSound.m` would call `setActive:NO` between voice and afterplay (during the JS-roundtrip on track end), risking audio death between steps on a locked iPhone. Aligned both to `"YES"`.
+
+**Requires plugin reinstall on next build** — install variables only re-read when the plugin is installed:
+```bash
+cordova plugin remove cordova-plugin-media
+cordova plugin add cordova-plugin-media@7.0.0
+```
+Or `cordova platform remove ios && cordova platform add ios`. Add to C4 build checklist.
+
+**4. Play-timeout watchdog 5s → 15s:**
+
+`PlayerSimple._playRequestedTimeout` previously reset `_playRequested` after 5s if no `play` event arrived. For large MP3s on slow filesystems (Samsung A-series microSD, etc.), 5s wasn't enough — step audio silently aborted. Bumped to 15s. `loaderror`/`playerror` still fire on real failures and resolve the geo task earlier; this is just the last-resort safety net.
+
+**5. Distinctive vibration patterns:**
+
+`AUDIOFOCUS_LOSS` vibration changed from `[300]` (single pulse, easily missed against walking motion) to `[300, 150, 300, 150, 300]` (triple pulse, unmistakable in pocket). `AUDIOFOCUS_GAIN` changed from `[100]` to `[100, 80, 100]` (double pulse, distinct from loss). Helps the walker realise audio paused even without seeing the resume overlay.
+
+**Telemetry added:**
+
+- `ios_native_fallback` — fires once per failing PlayerSimple load on iOS, with `has_localmedia` / `has_localapp` flags.
+- `checkaudio_fail` — fires with `reason` ∈ {`loaderror`, `playerror`, `audiofocus_unavailable`, `ios_native_fallback`} when the page hard-blocks.
+- `audio_play_timeout` now includes `ms` value (15000) for traceability.
+
+Files: `www/app/assets/player.js`, `www/app/pages.js`, `FlanerieCordova/package.json`
+
+Regression risk: **LOW** — gates only fire on already-broken phones (failed plugin init or missing native path bases); existing fleet expected to pass. Vibration pattern change is cosmetic. KEEP_AVAUDIOSESSION change requires plugin reinstall to take effect, so existing builds are unaffected.
+
+Acceptance:
+- iOS phone with `LOCALMEDIA_PATH_NATIVE` artificially unset (force fallback): `checkaudio` displays red error, accept button hidden.
+- Real walker on Android: triple vibration during phone call is felt clearly in pocket.
+- Build pipeline: `cordova plugin add cordova-plugin-media` (with `KEEP_AVAUDIOSESSION_ALWAYS_ACTIVE=YES`) propagates to `platforms/ios/App/config.xml`.
 
 #### P1.12 Android battery optimization guidance ✅ DONE (2026-05-05), hardened (2026-05-13)
 
@@ -398,10 +448,6 @@ Acceptance:
 - Concurrent multi-channel playback is uninterrupted across loop restarts.
 - Android and browser walks are unaffected.
 
----
-
-### C: Cordova container findings
-
 #### P3.5 Voice position resume across app restart ✅ PARTIAL (2026-05-13)
 
 Step voice playback position is now saved to localStorage and restored (minus 3s rewind) when the user re-enters the step zone after a crash, force-quit, or deep sleep restart.
@@ -477,6 +523,10 @@ Android SDK 36 + Build Tools 36.0.0 must be installed via SDK Manager first.
 
 No reproducible build checklist or smoke-test script. Add a minimal one (Android debug build + iOS prepare in Xcode) before the next platform upgrade.
 
+**Known reinstall requirements** to bake into the checklist when written:
+- `cordova-plugin-media` — install variable `KEEP_AVAUDIOSESSION_ALWAYS_ACTIVE` changed `NO` → `YES` (2026-05-13, P1.11b). Variable is read at plugin install time only; existing builds keep the old value. Required step on next build: `cordova plugin remove cordova-plugin-media && cordova plugin add cordova-plugin-media@7.0.0` OR `cordova platform remove ios && cordova platform add ios`.
+- After build: verify `platforms/ios/App/config.xml` contains `<preference name="KeepAVAudioSessionAlwaysActive" value="YES" />` (lowercased key `keepavaudiosessionalwaysactive` is what `CDVSound.m:38` actually reads).
+
 #### C5 Deferred plugin fork — power optimization [open, scheduled next session]
 
 **Status:** scoped 2026-05-13, deferred (cannot republish the app this session). The JS-only fixes for known bugs and manufacturer-tailored copy are already shipped under P1.12 — this entry covers what requires forking `cordova-plugin-power-optimization` (currently `github:snt1017/cordova-plugin-power-optimization`) and adding native code.
@@ -548,39 +598,112 @@ Current coverage: Xiaomi (1 partial), Samsung (4 intents all pre-Android 10), Hu
 
 **Regression risk after fork:** **MEDIUM** — hard-blocking on `isBackgroundRestricted` will catch real users whose phones are misconfigured; need a clear escape path (Settings deep link + retry) and field validation on a Samsung device known to background-restrict by default.
 
+#### C6 Deferred audiofocus plugin fork extension — iOS interruption without ShouldResume [open, scheduled next session]
+
+**Status:** scoped 2026-05-13, deferred (requires native iOS code change in the audiofocus fork; cannot republish this session). Surfaced by the audio-stack review on the same date.
+
+**Problem:**
+
+[AudioFocus.m:74–82](../cordova-plugin-audiofocus/src/ios/AudioFocus.m#L74-L82) only reactivates AVAudioSession and emits `AUDIOFOCUS_GAIN` when `AVAudioSessionInterruptionOptionShouldResume` is present on the interruption-end notification. Apple's docs say "the option may or may not be present" — it is typically **absent** after Siri, sometimes absent after a call, and routinely absent after alarms/timers.
+
+When the option is absent today:
+- `pauseAllPlayers()` already ran on `AUDIOFOCUS_LOSS`.
+- `#resume-overlay` is shown — but the walker is in their pocket, screen locked.
+- No subsequent event ever fires. Audio stays paused for the rest of the walk.
+- `document.resume` (foregrounding) calls `resumeAudioContext()` for Howler but does **not** reactivate AVAudioSession or unpause `PAUSED_PLAYERS`.
+
+**Resolution plan (next session):**
+
+In `cordova-plugin-audiofocus/src/ios/AudioFocus.m`, in the `AVAudioSessionInterruptionTypeEnded` branch:
+
+```objc
+// Current behaviour: only resume if iOS hints we should.
+// New behaviour: always attempt to reactivate the session; emit a soft GAIN
+// event so the JS layer can re-request focus on the next user gesture
+// (foregrounding, screen unlock, gpslost-overlay button) without the user
+// having to find the resume-overlay button.
+if (options & AVAudioSessionInterruptionOptionShouldResume) {
+    // existing path — emit hard AUDIOFOCUS_GAIN
+}
+else {
+    NSError *err = nil;
+    [session setActive:YES error:&err];
+    // New event type — soft signal, JS may auto-resume or wait for user gesture.
+    [self sendFocusChange:@"AUDIOFOCUS_GAIN_AVAILABLE"];
+}
+```
+
+**JS-side wiring (`www/app/assets/player.js`):**
+
+Add `AUDIOFOCUS_GAIN_AVAILABLE` branch to the `onFocusChange` switch:
+
+```js
+else if (focusState === "AUDIOFOCUS_GAIN_AVAILABLE") {
+    // iOS interruption ended without ShouldResume. Don't auto-resume blindly
+    // (the system explicitly told us not to), but allow the next user gesture
+    // to re-request focus cleanly. Tag the resume-overlay so the button click
+    // path does the right thing.
+    AUDIOFOCUS = 0;
+    TELEMETRY.log('audiofocus_gain_available', {paused: PAUSED_PLAYERS.length});
+    if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+}
+```
+
+Plus a `document.resume` handler retry: when the user unlocks the screen and `AUDIOFOCUS === 0 && PAUSED_PLAYERS.length > 0`, automatically call `requestAudioFocus()`. That'll re-activate the session and `resumeAllPlayers()` runs through the existing `AUDIOFOCUS_GAIN` callback.
+
+**Alternative (more aggressive):** in iOS plugin, on interruption end without ShouldResume, attempt `setActive:YES` AND emit hard `AUDIOFOCUS_GAIN` unconditionally if the activation succeeds. This auto-resumes audio in all cases. Risk: a user who explicitly invoked Siri and *wanted* audio to stay paused gets it resumed anyway. Lower risk for the Flanerie use case (sole-app walking experience) than for a general media player, but worth verifying field reaction.
+
+**Files to be modified:**
+
+- Fork → `~/Bakery/cordova-plugin-audiofocus/src/ios/AudioFocus.m`
+- `cordova-plugin-audiofocus/plugin.xml` (bump version)
+- `cordova-plugin-audiofocus/www/AudioFocus.js` (no change unless we expose the new event name)
+- `FlanerieAudioMap/www/app/assets/player.js` — handle the new event, add `document.resume` retry
+
+**Estimated effort:** ~30 min plugin + 15 min JS + iOS device test loop.
+
+**Regression risk after fork:** **LOW** — the new path only fires when the *old* path would silently fail. The conservative (`AUDIOFOCUS_GAIN_AVAILABLE` + manual retry) variant doesn't change behaviour for users whose iOS already includes ShouldResume.
+
 ---
 
 ## Recommended Execution Sequence
 
-**Ready to field-test now:**
-- P3.4 iOS NativeMediaPlayer — diagnostic suite passes ✅, locked-screen parcours walk pending
-- P0.1 stationary handler churn removed — field test pending on both platforms
-- P1.5c GPS-lost timeout unified at 30s — field test pending
-- P0.5 v2.4.0 GPS fork — deployed, field test pending on both platforms
-- C2 platform/plugin upgrades — configured, rebuild pending
-- P1.12 battery-opt bugs + manufacturer-tailored copy + OEM-kill heuristic (2026-05-13) — field test pending
-- P3.2 confirmgeo Toujours copy front-loaded + iOS Settings deep link + `confirmios` removal (2026-05-13)
-- P3.3b Android `ACCESS_BACKGROUND_LOCATION` hard-block (2026-05-13) — needs validation on a fresh Android 11+ install
-- P3.3c iOS motion permission hard-block (2026-05-13)
-- P3.3d mid-walk authorization + services + bg-location monitoring (2026-05-13)
+### Awaiting field validation (shipped, build pending or untested)
 
-**Next to implement (next session — cannot republish this session):**
-- **C5 Power optimization plugin fork** (scoped 2026-05-13): `isBackgroundRestricted` + `isPowerSaveMode` + standby bucket + updated OEM intent table + `RequestOptimizationsMenu` Java fix. Mid-walk `checkHealth()` extended to include background-restricted. Manufacturer-tailored copy already shipped in P1.12 — the fork unlocks the corresponding hard-block.
-- P0.3 / P0.5 Fix 1e: Android AlarmManager JS wakeup (deferred)
-- P1.5 full timer/listener audit (deferred from P1.5 partial)
-- P3.5 Plan B: native `getCurrentPosition()` during GPS tasks (if telemetry shows `_positionSec` staleness)
-- P3.5 Plan C: native plugin save on `applicationDidEnterBackground` / `onPause` (if Plan B insufficient)
+- **C2** platform/plugin upgrades — configured, rebuild pending (Android SDK 36 + cordova-ios 8 + plugins)
+- **P1.11b** audio stack hardening (2026-05-13) — iOS Howler-fallback gate, AUDIOFOCUS=-1 gate, KEEP_AVAUDIOSESSION alignment, 15s watchdog, distinctive vibration. **Requires cordova-plugin-media reinstall** for the install variable to take effect (see C4).
+- **P1.12** battery-opt: broken settings button fix, OEM-banner detection fix, manufacturer-tailored copy, mid-walk OEM-kill heuristic
+- **P3.2** confirmgeo Toujours copy front-loaded + iOS Settings deep link + `confirmios` page removed
+- **P3.3b** Android `ACCESS_BACKGROUND_LOCATION` hard-block — needs validation on a fresh Android 11+ install where the first dialog silently denies "Allow all the time"
+- **P3.3c** iOS motion permission hard-block
+- **P3.3d** mid-walk authorization + services + bg-location monitoring
+- **P3.4** iOS NativeMediaPlayer migration — diagnostic suite passes; locked-screen full-parcours walk still pending
+- **P0.1** stationary handler churn removed
+- **P0.5** v2.4.0 GPS fork (deployed)
+- **P1.5c** GPS-lost timeout unified at 30s
 
-**When Android GPS stability confirmed:**
-- P0.5 Fix 3 (DistanceFilterLocationProvider) or Fix 4 (FusedLocationProvider)
+### Next implementation session (cannot republish this session)
 
-**Background / lower priority:**
-- P0.2 background validation UX (currently bypassed)
-- P1.7 resume/version-safe state
-- P1.8 step progression audit
-- P1.15 GIVORS_V3 last-step investigation (requires server-side JSON)
-- P2.10 telemetry gaps (AVAudioSession snapshots, preload events)
-- C4 build checklist
+- **C5 Power optimization plugin fork** — `isBackgroundRestricted` hard-block, `isPowerSaveMode` soft warn, standby bucket telemetry, modern OEM intent table, fix `RequestOptimizationsMenu` inverted conditional. Unlocks the hard-block path for manufacturer-tailored copy already shipped in P1.12. Est. half a day.
+- **C6 Audiofocus plugin fork extension** — iOS interruption-end without `ShouldResume`: emit `AUDIOFOCUS_GAIN_AVAILABLE`, add `document.resume` retry in JS. Closes the silent-pause-forever failure after Siri / alarm. Est. ~45 min.
+- **P0.5 Fix 1e** Android AlarmManager JS wakeup (only if WebView-suspended-despite-FG-service shows up in telemetry)
+- **P3.5 Plan B** native `getCurrentPosition()` during GPS tasks (only if `_positionSec` staleness shows up)
+- **P3.5 Plan C** native plugin save on `applicationDidEnterBackground` / `onPause` (only if Plan B insufficient)
+
+### Conditional / not yet decided
+
+- **P0.5 Fix 3 (DistanceFilterLocationProvider)** or **Fix 4 (FusedLocationProvider)** — only if Android GPS reliability remains a field problem after v2.4.0
+- **P1.5** full timer/listener audit — only if leak symptoms surface
+
+### Low priority / accepted
+
+- **P0.2** background validation UX (currently bypassed — keep bypassed)
+- **P1.7** resume/version-safe state
+- **P1.8** step progression audit
+- **P1.15** GIVORS_V3 last-step investigation (requires server-side JSON)
+- **P2.10** telemetry gaps (AVAudioSession snapshots, preload events)
+- **C3** launcher cache-buster regex
+- **C4** build checklist — partially scoped under C4 already; full write-up still open
 
 ---
 
@@ -605,14 +728,19 @@ Current coverage: Xiaomi (1 partial), Samsung (4 intents all pre-Android 10), Hu
 ### Audio
 - Audio continues playing after screen lock on both platforms
 - Audio resumes correctly after phone call interruption (AudioFocus loss/gain)
-- Audio does not auto-resume on iOS when the interruption ends without `ShouldResume`
+- Audio does not auto-resume on iOS when the interruption ends without `ShouldResume` (today: stays paused indefinitely — closes with C6 fork)
+- iOS: trigger Siri mid-walk and dismiss it → audio likely stays paused (verifies the C6 failure mode is reproducible)
 - Transient notification/navigation prompts duck active audio and restore volume on gain
 - Step transition triggers correct audio (voice plays, not afterplay, on first entry)
 - Audio from previous step stops cleanly when entering next step zone
 - Lock phone during active audio playback, wait 2 minutes, unlock: verify audio still playing
 - Background the app for 5 minutes, foreground: verify AudioContext is running (not suspended)
 - Walk along a zone boundary for 30 seconds: verify no audio glitching or excessive load/unload
-- Verify vibration feedback fires on GPS loss and on audio focus loss (locked screen)
+- Verify vibration feedback: GPS loss is `[500, 200, 500]`; audio focus loss is `[300, 150, 300, 150, 300]` (triple pulse — distinct from GPS); audio focus gain is `[100, 80, 100]` (double pulse)
+- iOS: simulate `httpToNativePath()` returning null (e.g., unset `document.LOCALMEDIA_PATH_NATIVE` in console) → `checkaudio` must hard-fail with red error, accept button hidden
+- Both platforms: simulate `AUDIOFOCUS === -1` (audiofocus plugin disabled) → `checkaudio` must hard-fail with "module audio non disponible" copy
+- Voice → afterplay transition on iOS with locked screen: verify no audio gap (validates `KEEP_AVAUDIOSESSION_ALWAYS_ACTIVE=YES` propagated to runtime after plugin reinstall)
+- Large MP3 (>5MB) load + play: verify the 15s play-timeout watchdog doesn't trip; if it does, `audio_play_timeout` telemetry surfaces in the dashboard
 
 ### Data and startup
 - Start route with no data link after media preload
@@ -648,37 +776,25 @@ Current coverage: Xiaomi (1 partial), Samsung (4 intents all pre-Android 10), Hu
 
 Issues that exist in code but do not manifest on FLANERIE_ELYSEE. Track before conditions change.
 
-### `allSteps` global array leak on parcours rebuild
-- `allSteps` in `spot.js` is never cleared on `Parcours.build()`. Old Step references linger until full page reload.
-- Dormant: parcours don't change mid-walk. Fix: clear `allSteps = []` in `Parcours.clear()`.
-- Files: `www/app/assets/spot.js`, `www/app/assets/parcours.js`
-
 ### Inverted optional/mandatory step logic
-- `!(s._spot.optional === false)` in `spot.js` line ~495 returns optional steps but labels them `mandatory`. Dormant because FLANERIE_ELYSEE has `optional: false` everywhere.
+- `!(s._spot.optional === false)` in `spot.js:628` filters for optional steps but the variable is named `mandatory`. Used only to log a warning about previous unrealised steps. Dormant because FLANERIE_ELYSEE has `optional: false` everywhere.
 - Files: `www/app/assets/spot.js`
 
 ---
 
 ## Fixed Bugs (archive)
 
-Brief record of closed bugs for reference.
+Short bugs not tracked under a numbered P-section. Each P1.X / P3.X entry above is the authoritative record for items with a number.
 
-- **Double `done` emission in PlayerStep** — `_doneFired` guard in `startAfterplay()`. (`player.js`)
-- **iOS html5 seek/fade limitations** — resolved by NativeMediaPlayer migration; `Media.seekTo()` is reliable. (`player.js`)
-- **Dual silent players in parcours page** — redundant `testplayer` silent keepalive removed. (`pages.js`)
-- **`delete variable` no-op** — replaced with `testplayer = null`. (`pages.js`)
+- **iOS html5 seek/fade limitations** — resolved by NativeMediaPlayer migration (P3.4); `Media.seekTo()` is reliable. (`player.js`)
+- **Dual silent players in parcours page** — redundant `testplayer` silent keepalive removed; `testplayer` is now scoped to the `checkaudio` test only. (`pages.js`)
 - **Console.log HTML injection in dev panel** — `_logsAppend()` helper with `$('<span>').text()`. (`common.js`)
-- **`PlayerSimple._playRequested` stuck flag** — reset in `loaderror` / `playerror` handlers; 5s safety timeout added. (`player.js`)
+- **`PlayerSimple._playRequested` stuck flag** — reset in `loaderror` / `playerror` handlers; safety timeout added (was 5s, bumped to 15s in P1.11b). (`player.js`)
 - **Zone audio boundary thrashing** — `UNLOAD_EXTRA_HYSTERESIS = 10m` dead-band prevents oscillation at zone edge. (`spot.js`)
-- **P1.9a `setCoords()` ignores parameter** — fixed. (`parcours.js`)
-- **P1.9b `checkBGPosition()` wrong `this` context** — fixed. (`geoloc.js`)
-- **P1.14 Completed-step refire** — `_done` guard in `Step`. (`spot.js`)
-- **P1.16 PlayerStep double `done`** — `_doneFired` in `startAfterplay()`. (`player.js`)
-- **P1.17 Offlimit reentry restarted step** — detect current+paused and resume instead of re-firing. (`spot.js`, `player.js`, `parcours.js`)
 - **Audio loaderror infinite re-fire loop** — `PlayerStep.hasError()` + near-reload guard in `Spot.updatePosition()` blocks reload after loaderror, preventing state reset that triggered 1Hz re-fire. (`player.js`, `spot.js`)
 - **GPS drift re-fire during loading** — `_active` flag in `Step`: set on fire, cleared on done/clear; `!_active` added to fire condition. `step_refire_blocked` telemetry added. (`spot.js`)
 - **`step_skip_done` spam** — `_skipDoneLogged` flag limits emission to once per step completion. (`spot.js`)
-- **`allSteps` global leak on parcours rebuild** — `allSteps = []` added to `Parcours.clear()` as definitive reset after per-step `clear()` calls. (`parcours.js`)
+- **`allSteps` global leak on parcours rebuild** — `allSteps = []` added to `Parcours.clear()` after per-step `clear()` calls. Confirmed in `parcours.js:30`. (`parcours.js`)
 
 ---
 

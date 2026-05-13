@@ -1303,36 +1303,63 @@ PAGES['checkaudio'] = () => {
     // Use PlayerSimple so the test exercises the same backend (NativeMediaPlayer on iOS,
     // Howler on Android/browser) that will be used during the walk.
     testplayer = new PlayerSimple(true, 0)
+    var fatalReason = null;
+    function failAudio(reason, html) {
+        ok = false;
+        fatalReason = reason;
+        $('#checkaudio-accept').hide();
+        $('#checkaudio-help').show();
+        $('#checkaudio-desc').html(html).css('color', 'red');
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('checkaudio_fail', {reason});
+    }
     testplayer.on('loaderror', (src, error) => {
-        console.log('[AUDIO] loaderror', src, error)
-        ok = false
-        $('#checkaudio-accept').hide()
-        $('#checkaudio-help').hide()
-        $('#checkaudio-desc').text("Erreur de lecture audio. Votre appareil ne semble pas compatible...");
-        $('#checkaudio-desc').css('color', 'red');
+        console.log('[AUDIO] loaderror', src, error);
+        failAudio('loaderror', "Erreur de lecture audio. Votre appareil ne semble pas compatible...");
     })
     testplayer.on('playerror', (src, error) => {
-        console.log('[AUDIO] playerror', src, error)
-        ok = false
-        $('#checkaudio-accept').hide()
-        $('#checkaudio-help').hide()
-        $('#checkaudio-desc').text("Erreur de lecture audio. Votre appareil ne semble pas compatible...");
-        $('#checkaudio-desc').css('color', 'red');
+        console.log('[AUDIO] playerror', src, error);
+        failAudio('playerror', "Erreur de lecture audio. Votre appareil ne semble pas compatible...");
     })
     testplayer.on('play', (src) => { console.log('[AUDIO] OK!', src); })
 
+    // Gate 1: AudioFocus plugin failed to initialize. Without it, Android can lose
+    // audio routing silently mid-walk; on iOS the AVAudioSession category is also
+    // set via this plugin, so its absence means the session may not be in Playback mode.
+    if (typeof PLATFORM !== 'undefined' && (PLATFORM === 'android' || PLATFORM === 'ios') && AUDIOFOCUS === -1) {
+        failAudio('audiofocus_unavailable',
+            "Le module audio n'est pas disponible. L'application ne peut pas garantir une lecture continue.<br /><br />" +
+            "Demandez à un membre de l'équipe."
+        );
+    }
+
     console.log('[AUDIO] testing via PlayerSimple, basepath:', BASEURL+'/images/');
     testplayer.load(BASEURL+'/images/', {src: 'test.mp3', master: 1}, false)
+
+    // Gate 2 (iOS only): the test player fell back to Howler because httpToNativePath
+    // returned null — usually because LOCALMEDIA_PATH_NATIVE / LOCALAPP_PATH_NATIVE
+    // weren't captured. Howler cannot start playback from a background GPS callback
+    // on a locked iPhone, so the walk would die silently in the pocket.
+    if (ok && PLATFORM === 'ios' && (testplayer._isNativeFallback || IOS_NATIVE_FALLBACK_DETECTED)) {
+        failAudio('ios_native_fallback',
+            "Erreur de compatibilité audio (iOS).<br /><br />" +
+            "Demandez à un membre de l'équipe."
+        );
+    }
+
     testplayer.play(0)
 
-    TYPEWRITE('checkaudio-desc')
-        .pauseFor(4000)
-        .callFunction(() => {
-            if (ok) {
-                $('#checkaudio-accept').show()
-                $('#checkaudio-help').show()
-            }
-        })
+    // Skip the typewriter animation when a fatal gate already painted the red
+    // error — TYPEWRITE reads .text() (strips HTML) and would overwrite the error.
+    if (!fatalReason) {
+        TYPEWRITE('checkaudio-desc')
+            .pauseFor(4000)
+            .callFunction(() => {
+                if (ok) {
+                    $('#checkaudio-accept').show()
+                    $('#checkaudio-help').show()
+                }
+            })
+    }
 
     $('#checkaudio-accept').off().on('click', () => {
         testplayer.stop();
