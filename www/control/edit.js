@@ -198,17 +198,17 @@ function load() {
                         const header = $('<div>').addClass('edit-header').appendTo(li)
                         header.append($('<span>').addClass('badge bg-warning me-3').text(i))
                         header.append($('<span>').addClass('edit-media me-1').text(step.folder))
-                        // warning icon if any media in this step has issues (highest tier wins)
+                        // status icon in header: aggregated over all media in step
                         if (MEDIACHECK && step.media) {
-                            const stepIssues = Object.values(step.media)
-                                .filter(m => m.src && m.src !== '-')
-                                .map(m => MEDIACHECK[step.folder + '/' + m.src])
-                                .filter(e => e && !e.ok)
-                            const hasError = stepIssues.some(e => e.tier === 'error')
-                            const hasWarn  = stepIssues.some(e => e.tier === 'warn')
+                            const assigned = Object.values(step.media).filter(m => m.src && m.src !== '-')
+                            const entries  = assigned.map(m => MEDIACHECK[step.folder + '/' + m.src]).filter(e => e !== undefined)
+                            const hasError = entries.some(e => !e.ok && e.tier === 'error')
+                            const hasWarn  = entries.some(e => !e.ok && e.tier === 'warn')
                             if (hasError || hasWarn) {
                                 const icon = hasError ? 'bi-exclamation-triangle-fill text-danger' : 'bi-exclamation-triangle text-warning'
                                 header.append($('<i>').addClass('bi ' + icon + ' ms-1'))
+                            } else if (entries.length > 0 && entries.every(e => e.ok)) {
+                                header.append($('<i>').addClass('bi bi-check-circle-fill text-success ms-1').attr('title', 'Tous les fichiers sont compatibles'))
                             }
                         }
 
@@ -579,7 +579,8 @@ const MEDIA_ISSUE_LABELS = {
 function mediaWarnIcon(folder, filename) {
     if (!MEDIACHECK || !filename || filename === '-') return null
     const entry = MEDIACHECK[folder + '/' + filename]
-    if (!entry || entry.ok) return null
+    if (!entry) return null
+    if (entry.ok) return $('<i>').addClass('bi bi-check-circle-fill text-success ms-1').attr('title', 'Fichier compatible')
     const isError = entry.tier === 'error'
     const tips = entry.issues.map(i => {
         let label = MEDIA_ISSUE_LABELS[i] || i

@@ -168,7 +168,6 @@ REU 12 mai
 
 => Optimisation par défault vs Cycle de charge..
 
--> CBR / VBR / format check ! allow only MP3
 
 -> After crash: recupération position !
 
@@ -188,6 +187,7 @@ freeze on splash screen
 -> Interruption : continue even out, until back to a step zone
 
 
+OK CBR / VBR / format check ! allow only MP3
 OK Audio test initial: is supposed to loop 
 OK Alert Restart : confirmer la re-init
 OK on Restart: check update / check media / reinit all
