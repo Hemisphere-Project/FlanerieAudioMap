@@ -532,6 +532,12 @@ class Step extends Spot
 
     updatePosition(position) 
     {
+        // Keep audio loaded while this step is active — covers offlimit state, pause from
+        // interruption zone, and GPS drift — so resume/fire can trigger on return.
+        // Flag is cleared by the resume and fire paths below.
+        if (this._active && PARCOURS.currentStep() == this._index)
+            this._keepLoadedForUpcomingTrigger = true
+
         let inside = super.updatePosition(position)
         let borderDistance = this.distanceToBorder(position)
 
