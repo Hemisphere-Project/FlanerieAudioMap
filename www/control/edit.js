@@ -104,6 +104,10 @@ function fillZones(type, divID, mediaFolder) {
                     
                 })
 
+            // warning icon in body (header is hidden when active)
+            const zoneWarnBody = mediaWarnIcon(mediaFolder, zone.media.src)
+            if (zoneWarnBody) body.append(zoneWarnBody)
+
             // audio play/stop button
             const play = $('<button>').addClass('btn btn-sm btn-secondary btn-sm p-1 me-1').html('<i class="bi bi-play btn-play"></i>').click(() => z.player.toggle() )
             z.player.on('play', () => play.html('<i class="bi bi-pause btn-play"></i>'))
