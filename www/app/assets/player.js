@@ -783,7 +783,7 @@ class PlayerSimple extends EventEmitter
             this._playRequested = false
             clearTimeout(this._playRequestedTimeout)
         }
-        if (this._player.playing() || this._player.paused()) {
+        if (this._player.playing() || this._isUnderlyingPaused()) {
             this._player.stop()
         }
     }
@@ -841,7 +841,16 @@ class PlayerSimple extends EventEmitter
     }
 
     isPaused() {
-        return this._player && this._player.paused()
+        return this._isUnderlyingPaused()
+    }
+
+    // Howler's Howl has no public paused() — peek at the first sound's _paused
+    // flag. NativeMediaPlayer exposes paused() directly so prefer that when present.
+    _isUnderlyingPaused() {
+        if (!this._player) return false
+        if (typeof this._player.paused === 'function') return this._player.paused()
+        let sounds = this._player._sounds
+        return !!(sounds && sounds[0] && sounds[0]._paused && !sounds[0]._ended)
     }
 
     isPlaying() {
@@ -867,7 +876,7 @@ class PlayerSimple extends EventEmitter
         // Paused player (e.g. by AUDIOFOCUS_LOSS): can't fade, but must still
         // stop the underlying so a later AUDIOFOCUS_GAIN can't revive it.
         if (!this._player.playing()) {
-            if (this._player.paused()) this._player.stop()
+            if (this._isUnderlyingPaused()) this._player.stop()
             return
         }
 
