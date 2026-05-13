@@ -373,8 +373,11 @@ class Zone extends Spot
         this.player.load('/media/'+ this.pID +'/' + this._spot.folder + '/', this._spot.media)        
     }
 
-    updatePosition(position) 
+    updatePosition(position)
     {
+        if (this.player && this.player.isPlaying())
+            this._keepLoadedForUpcomingTrigger = true
+
         let inside = super.updatePosition(position)
         if (!this.player || !this.player.isLoaded()) return inside
 
@@ -437,10 +440,13 @@ class Offlimit extends Spot
         this.player.load('/media/'+ this.pID +'/' + this._spot.folder + '/', this._spot.media)        
     }
 
-    updatePosition(position) 
+    updatePosition(position)
     {
+        if (this.player && this.player.isPlaying())
+            this._keepLoadedForUpcomingTrigger = true
+
         let inside = super.updatePosition(position)
-        
+
         if (this.player && this.player.isLoaded()) {
             if (inside) this.player.resume()
             // no stop on exit — message loops until a step zone fades it out via pauseAudio
