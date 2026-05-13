@@ -12,6 +12,7 @@ import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import crypto from 'crypto';
 import { createStandaloneFlanerieChat } from 'flanerie-chat';
+import { parseFile } from 'music-metadata';
 
 // Simple Auth
 import { useSimpleAuth, requireAuth, requireAdmin, handleLogin, getUserRole, getGuestPassword, setGuestPassword } from './modules/simpleAuth.js';
@@ -884,8 +885,70 @@ app.get('/mediaList/:parcours', (req, res) => {
   res.json(media);
 });  
 
+// Standard MPEG Layer 3 bitrates in bps
+const MPEG_BITRATES = new Set([32,40,48,56,64,80,96,112,128,144,160,192,224,256,320].map(b => b * 1000));
+
+// Check all MP3 files in a parcours for mobile compatibility issues
+app.get('/mediaCheck/:parcours', async (req, res) => {
+  const mediaFolder = './media/' + req.params.parcours + '/';
+  if (!fs.existsSync(mediaFolder)) return res.json({});
+
+  // Collect all files as { key: "folder/file", path: "..." }
+  const files = [];
+  fs.readdirSync(mediaFolder).forEach(entry => {
+    const entryPath = mediaFolder + entry;
+    if (fs.lstatSync(entryPath).isDirectory()) {
+      fs.readdirSync(entryPath).forEach(file => {
+        if (!fs.lstatSync(entryPath + '/' + file).isDirectory())
+          files.push({ key: entry + '/' + file, path: entryPath + '/' + file });
+      });
+    } else {
+      files.push({ key: entry, path: entryPath });
+    }
+  });
+
+  const results = {};
+  await Promise.all(files.map(async ({ key, path: filePath }) => {
+    const ext = filePath.split('.').pop().toLowerCase();
+    if (ext !== 'mp3') {
+      results[key] = { ok: false, tier: 'error', issues: ['not_mp3'] };
+      return;
+    }
+    try {
+      const meta = await parseFile(filePath, { duration: false });
+      const issues = [];
+      const bitrate = meta.format.bitrate;
+      const profile = meta.format.codecProfile;
+
+      if (!bitrate) {
+        issues.push('bad_header');
+      } else {
+        if (profile === 'VBR') issues.push('vbr');
+        else if (profile === 'ABR') issues.push('abr');
+        if (bitrate && !MPEG_BITRATES.has(bitrate)) issues.push('nonstandard_bitrate');
+      }
+
+      const errorIssues = ['vbr', 'abr', 'not_mp3', 'bad_header', 'nonstandard_bitrate'];
+      const warnIssues = [];
+      if (bitrate > 256000 && !issues.includes('nonstandard_bitrate')) warnIssues.push('high_bitrate');
+
+      const allIssues = [...issues, ...warnIssues];
+      if (allIssues.length === 0) {
+        results[key] = { ok: true };
+      } else {
+        const tier = issues.some(i => errorIssues.includes(i)) ? 'error' : 'warn';
+        results[key] = { ok: false, tier, issues: allIssues, bitrate };
+      }
+    } catch {
+      results[key] = { ok: false, tier: 'error', issues: ['bad_header'] };
+    }
+  }));
+
+  res.json(results);
+});
+
 // Upload media file with folder argument from file argument
-app.post('/mediaUpload/:parcours/:folder/:name?', requireAuth, upload.single('file'), (req, res) => 
+app.post('/mediaUpload/:parcours/:folder/:name?', requireAuth, upload.single('file'), (req, res) =>
 {
   // Guest: can only upload to GUEST_ parcours
   if (req.userRole === 'guest') {

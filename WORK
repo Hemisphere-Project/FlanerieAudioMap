@@ -180,10 +180,12 @@ REU 12 mai
 
 -> Je suis perdu -> montre la carte + texte "Rejoins la zone de telle couleur"
 
--> review NO AUDIO situations
+-> review NO AUDIO situations (lost, audio playback error, file end, ...)
 
 -> first start (after install): 
 freeze on splash screen 
+
+-> Interruption : continue even out, until back to a step zone
 
 
 OK Audio test initial: is supposed to loop 
