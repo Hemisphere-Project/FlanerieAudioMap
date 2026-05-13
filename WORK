@@ -185,7 +185,7 @@ REU 12 mai
 -> first start (after install): 
 freeze on splash screen 
 
--> Audio test initial: is supposed to loop 
 
+OK Audio test initial: is supposed to loop 
 OK Alert Restart : confirmer la re-init
 OK on Restart: check update / check media / reinit all
