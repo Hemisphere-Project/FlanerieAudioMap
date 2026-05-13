@@ -647,11 +647,17 @@ class Step extends Spot
             
             // Play
             let action = this.player.isPaused() ? 'resume' : 'play'
+            let seekPos = 0
+            if (action === 'play' && wasCurrentStep && PARCOURS.state.resumeStepVoicePos > 0) {
+                seekPos = Math.max(0, PARCOURS.state.resumeStepVoicePos - 3)
+                PARCOURS.state.resumeStepVoicePos = 0
+            }
             telemetryLog('step_audio_trigger', {
                 step: this._index,
                 name: this._spot.name,
                 action: action,
                 was_current_step: wasCurrentStep,
+                resume_seek_pos: seekPos || undefined,
                 visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
                 distanceToCenter: this.distanceToCenter(position),
                 distanceToBorder: borderDistance,
@@ -661,7 +667,7 @@ class Step extends Spot
             })
             this._keepLoadedForUpcomingTrigger = false
             if (action === 'resume') this.player.resume()
-            else this.player.play()
+            else this.player.play(seekPos)
             PARCOURS.pauseAudio('offlimits')
 
             if (wasCurrentStep) {

@@ -169,8 +169,6 @@ REU 12 mai
 => Optimisation par défault vs Cycle de charge..
 
 
--> After crash: recupération position !
--> Check: si deepsleep -> resume at position quand on reveille le téléphone
 
 -> Out of zone: unload Area -> plus d'audio -> "GPS out" message et montrer la carte 
 
@@ -178,14 +176,18 @@ REU 12 mai
 
 -> Je suis perdu -> montre la carte + texte "Rejoins la zone de telle couleur"
 
--> review NO AUDIO situations (lost, audio playback error, file end, ...)
+-> review NO AUDIO situations (lost too far, audio playback error, file end, ..., after crash but hors zone)
 
 -> first start (after install): 
 freeze on splash screen 
 
+
+-> After crash: recupération position !
+-> Check: si deepsleep -> resume at position quand on reveille le téléphone
+
+
 OK Interruption : continue even out, until back to a step zone
 OK clean players: keep only voice and afterplay
-
 OK CBR / VBR / format check ! allow only MP3
 OK Audio test initial: is supposed to loop 
 OK Alert Restart : confirmer la re-init

@@ -50,8 +50,17 @@ class Parcours extends EventEmitter {
             medialoaded: false,
             mediaPack: [],
             mediaPackSize: 0,
-            mediaPackLoaded: 0
+            mediaPackLoaded: 0,
+            resumeStepVoicePos: 0
         };
+    }
+
+    snapshotVoicePosition() {
+        if (this.state.stepIndex < 0) return
+        let step = this.find('steps', this.state.stepIndex)
+        if (!step || !step.player || step.player.playstate !== 'play') return
+        let pos = step.player.voice.seek ? step.player.voice.seek() : 0
+        if (pos > 0) this.state.resumeStepVoicePos = pos
     }
 
     currentStep(s = null) {
@@ -404,7 +413,8 @@ class Parcours extends EventEmitter {
             console.warn('Cannot store parcours: not valid yet');
             return;
         }
-        try { localStorage.setItem('currentparcours', JSON.stringify(this.export(true))); } 
+        this.snapshotVoicePosition()
+        try { localStorage.setItem('currentparcours', JSON.stringify(this.export(true))); }
         catch (error) { console.error('Error storing parcours:', error); }
     }
 
@@ -476,12 +486,23 @@ class Parcours extends EventEmitter {
     // Start tracking with GEO
     startTracking() {
         this.state.geoMode = GEO.mode();
+        this._voicePosInterval = setInterval(() => this.store(), 10000)
+        this._pauseHandler = () => this.store()
+        document.addEventListener('pause', this._pauseHandler)
         this.store();
     }
 
     // Stop tracking with GEO
     stopTracking() {
         this.state.geoMode = null;
+        if (this._voicePosInterval) {
+            clearInterval(this._voicePosInterval)
+            this._voicePosInterval = null
+        }
+        if (this._pauseHandler) {
+            document.removeEventListener('pause', this._pauseHandler)
+            this._pauseHandler = null
+        }
     }
 
     // Give current geo mode

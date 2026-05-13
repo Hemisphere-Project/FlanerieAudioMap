@@ -904,13 +904,13 @@ class PlayerStep extends EventEmitter
         if (wasNotStop) this.emit('stop')
     }
 
-    play() {
+    play(seekPos=0) {
         console.log('PlayerStep play', this.playstate)
         if (this.playstate == 'afterplay') {
             this.afterplay.play()
         }
         else {
-            this.voice.play()
+            this.voice.play(seekPos)
         }
         let wasNotPlay = this.state !== this.playstate
         this.state = this.playstate
