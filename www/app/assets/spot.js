@@ -442,7 +442,9 @@ class Offlimit extends Spot
 
     updatePosition(position)
     {
-        if (this.player && this.player.isPlaying())
+        // Once loaded, keep alive regardless of distance — loops in the "nowhere"
+        // until a step zone explicitly fades it out via PARCOURS.pauseAudio.
+        if (this.player && this.player.isLoaded())
             this._keepLoadedForUpcomingTrigger = true
 
         let inside = super.updatePosition(position)

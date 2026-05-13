@@ -546,7 +546,7 @@ class PlayerSimple extends EventEmitter
             if (!this._player) return
             console.log('PlayerSimple end:', this._player._src)
             this._playRequested = false
-            this._isActive = false
+            if (!this._loop) this._isActive = false  // keep active so loop's next 'play' event isn't rejected
             this.emit('end', this._player._src)
             // console.log('PlayerSimple end:', this._player._src)
         })
