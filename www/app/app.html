@@ -64,13 +64,31 @@
             <h3 id="confirmgeo-title">Géolocalisation</h3>
             <div class="content">
                 <p id="confirmgeo-desc">
-                    L'application nécessite deux autorisations pour accéder à votre position précise en arrière plan afin de vous guider.<br /><br />
-                    Aucune informations n'est collectée ou transmise: la localisation sert uniquement à déclencher les audios du parcours.<br /><br />
+                    L'application a besoin de votre position en arrière plan pour vous guider pendant 45 minutes, téléphone en poche écran éteint.<br /><br />
+                    À l'écran suivant, choisissez <u>Toujours autoriser</u> (et non <i>Pendant l'utilisation</i>).<br /><br />
+                    Aucune donnée n'est transmise: la localisation sert uniquement à déclencher les audios.<br /><br />
                 </p>
                 <p id="confirmgeo-desc2"></p>
             </div>
-            <button id="confirmgeo-accept" class="btn btn-primary btn-page">J'accepte</button> 
+            <button id="confirmgeo-accept" class="btn btn-primary btn-page">J'accepte</button>
             <button id="confirmgeo-settings" class="btn btn-primary btn-page">Paramètres</button>
+        </div>
+
+        <div id="checkbgloc" class="page">
+            <h3 id="checkbgloc-title">Localisation en arrière plan</h3>
+            <p id="checkbgloc-desc">
+                Pour que la localisation fonctionne quand l'écran est éteint et le téléphone en poche, vous devez régler l'autorisation sur <u>Toujours autoriser</u>.<br /><br />
+                Réglages > Applications > Flanerie > Autorisations > Position > <u>Toujours autoriser</u>
+            </p>
+            <button id="checkbgloc-settings" class="btn btn-primary btn-page">Paramètres</button>
+            <button id="checkbgloc-retry" class="btn btn-primary btn-page" style="display:none;">J'ai autorisé</button>
+        </div>
+
+        <div id="checkmotion" class="page">
+            <h3 id="checkmotion-title">Capteur de mouvement</h3>
+            <p id="checkmotion-desc">Vérification du capteur de mouvement...</p>
+            <button id="checkmotion-settings" class="btn btn-primary btn-page" style="display:none;">Paramètres</button>
+            <button id="checkmotion-retry" class="btn btn-primary btn-page" style="display:none;">J'ai autorisé</button>
         </div>
 
         <div id="nogeo-auth" class="page">
@@ -165,15 +183,6 @@
             </div>
         </div>
 
-        <div id="confirmios" class="page">
-            <h3 id="confirmios-title">Géolocalisation</h3>
-            <p id="rdvios">ATTENTION: sur iPhone la localisation en veille ne fonctionne pas directement.<br /><br />
-                Vous devez régler vous même les paramètres de localisation de l'application sur "Toujours".<br /><br />
-                Réglages > Apps > Flanerie > Position > Toujours.<br /><br />
-            </p>
-            <!-- <button id="confirmios-settings" class="btn btn-primary btn-page">Réglages</button> -->
-            <button id="confirmios-accept" class="btn btn-primary btn-page">C'est compris</button>
-        </div>
 
         <div id="rdv" class="page">
             <div class="content">
@@ -255,6 +264,7 @@
 
         <div id="gpslost-overlay" style="display:none;">
             <p id="gpslost-overlay-desc">Signal GPS perdu.<br/><br/>Déplacez-vous vers un espace dégagé.<br/>La progression reprend automatiquement dès le retour du signal.</p>
+            <button id="gpslost-settings" class="btn btn-primary" style="display:none;">Paramètres</button>
             <button id="gpslost-resume" class="btn btn-primary">Continuer l'écoute sans GPS</button>
         </div>
 

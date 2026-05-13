@@ -618,8 +618,10 @@ class GeoLoc extends EventEmitter {
             BackgroundGeolocation.showLocationSettings();
         }
         else if (cordova.platformId == 'ios') {
-            alert('Réglages > Confidentialité > Services de localisation > Activez!');
-            // BackgroundGeolocation.showAppSettings();
+            // Apple removed support for `prefs:` deep-links to system pages, but
+            // openURL: UIApplicationOpenSettingsURLString still opens the app's own
+            // Settings page (Réglages > Flanerie) where Position can be toggled.
+            BackgroundGeolocation.showAppSettings();
         }
     }
 
@@ -645,6 +647,42 @@ class GeoLoc extends EventEmitter {
                 else reject('gps-no-location');
             });
         });
+    }
+
+    // Android only: BACKGROUND_LOCATION is granted only when the user picks
+    // "Allow all the time". The bg-geo plugin's checkStatus reports AUTHORIZED
+    // based on FINE/COARSE alone, so we verify the background tier here.
+    checkBackgroundLocationAndroid() {
+        return new Promise((resolve, reject) => {
+            if (typeof cordova === 'undefined' || cordova.platformId !== 'android') return resolve()
+            if (!cordova.plugins || !cordova.plugins.permissions) return resolve()
+            if (typeof device === 'undefined') return resolve()
+            let apiLevel = parseInt(device.version.split('.')[0], 10)
+            if (isNaN(apiLevel) || apiLevel < 10) return resolve() // < Android 10: BG permission does not exist
+            let perms = cordova.plugins.permissions
+            if (!perms.ACCESS_BACKGROUND_LOCATION) return resolve() // plugin too old: skip silently
+            perms.checkPermission(perms.ACCESS_BACKGROUND_LOCATION,
+                (s) => s.hasPermission ? resolve() : reject('android-bg-location-denied'),
+                (e) => { console.warn('[GEO] checkPermission(BG_LOCATION) failed:', e); resolve() }
+            )
+        })
+    }
+
+    // Best-effort one-shot health check: returns the bg-geo status snapshot
+    // and the Android background-location verdict so callers can branch on
+    // services/auth/bgloc independently.
+    checkHealth() {
+        return new Promise((resolve) => {
+            let out = { servicesEnabled: null, authorization: null, bgLocationOk: null }
+            if (typeof BackgroundGeolocation === 'undefined') return resolve(out)
+            BackgroundGeolocation.checkStatus((status) => {
+                out.servicesEnabled = !!status.locationServicesEnabled
+                out.authorization = status.authorization
+                this.checkBackgroundLocationAndroid()
+                    .then(() => { out.bgLocationOk = true; resolve(out) })
+                    .catch(() => { out.bgLocationOk = false; resolve(out) })
+            })
+        })
     }
 
     // Check auth
@@ -843,6 +881,9 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
         console.log('[INFO] BackgroundGeolocation service has been stopped');
         if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('bg_geo_stop', {intentional: backgroundGeolocIntentionalStop});
 
+        // Re-emit so the UI can count repeated unexpected stops (OEM kill heuristic).
+        if (typeof GEO !== 'undefined') GEO.emit('bgServiceStop', {intentional: backgroundGeolocIntentionalStop});
+
         // Only restart if the stop was not intentional (e.g. OS killed the service)
         if (!backgroundGeolocIntentionalStop) {
             console.log('[INFO] Unexpected stop — restarting BackgroundGeolocation');
@@ -917,6 +958,10 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
     });
 
     BackgroundGeolocation.on('activity', function(activity) {
+        if (!GEO.motionAuthorized) {
+            GEO.motionAuthorized = true;
+            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('motion_authorized', {type: activity.type});
+        }
         GEO.motionIsStationary = (activity.type === 'STILL');
         if (typeof TELEMETRY !== 'undefined')
             TELEMETRY.log('motion_activity', {type: activity.type, confidence: activity.confidence});

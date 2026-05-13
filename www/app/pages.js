@@ -37,6 +37,11 @@ var BATTOPT_TIMER = null;
 var BATTOPT_ATTEMPTS = 0;
 const BATTOPT_POLL_MS = 1500;
 const BATTOPT_MAX_ATTEMPTS = 10;
+var BGLOC_TIMER = null;
+const BGLOC_POLL_MS = 1500;
+var MOTION_TIMER = null;
+const MOTION_WAIT_MS = 8000;
+var GPSREVOKED = false;
 
 function clearWakeupNotification(clearPending = true)
 {
@@ -72,6 +77,22 @@ function clearBatteryOptCheck()
     BATTOPT_ATTEMPTS = 0;
 }
 
+function clearBgLocCheck()
+{
+    if (BGLOC_TIMER) {
+        clearTimeout(BGLOC_TIMER);
+        BGLOC_TIMER = null;
+    }
+}
+
+function clearMotionCheck()
+{
+    if (MOTION_TIMER) {
+        clearTimeout(MOTION_TIMER);
+        MOTION_TIMER = null;
+    }
+}
+
 PAGES_CLEANUP['parcours']           = () => {
     clearWakeupNotification();
     GPSLOST_PLAYER.stop();
@@ -79,6 +100,8 @@ PAGES_CLEANUP['parcours']           = () => {
 };
 PAGES_CLEANUP['checknotifications'] = () => clearNotificationPermissionCheck();
 PAGES_CLEANUP['checkbatteryopt']    = () => clearBatteryOptCheck();
+PAGES_CLEANUP['checkbgloc']         = () => clearBgLocCheck();
+PAGES_CLEANUP['checkmotion']        = () => clearMotionCheck();
 
 function PAGE(name, ...args)
 {
@@ -887,8 +910,10 @@ PAGES['confirmgeo'] = () => {
 PAGES['startgeo'] = () => {
     GEO.startGeoloc()
             .then(()=>{
-                if (PLATFORM == 'ios') PAGE('confirmios')
-                else if (PLATFORM == 'android') PAGE('checknotifications')
+                // iOS: AUTHORIZED here already implies "Toujours" (startGeoloc rejects on partial auth),
+                // so the old confirmios reminder is redundant — go straight to motion check.
+                if (PLATFORM == 'ios') PAGE('checkmotion')
+                else if (PLATFORM == 'android') PAGE('checkbgloc')
                 else PAGE('rdv')
             })
             .catch((e)=>{
@@ -897,9 +922,101 @@ PAGES['startgeo'] = () => {
             })
 }
 
-PAGES['confirmios'] = () => {
-    $('#confirmios-settings').off().on('click', () => GEO.showAppSettings())
-    $('#confirmios-accept').off().on('click', () => PAGE('rdv'))
+//
+// CHECK BACKGROUND LOCATION (Android 10+)
+// bg-geo's checkStatus reports AUTHORIZED based on FINE/COARSE alone, so a user
+// who picked "While using" passes startGeoloc — but BG tracking will die at lock.
+// Block startup here until ACCESS_BACKGROUND_LOCATION is granted.
+//
+PAGES['checkbgloc'] = () => {
+    clearBgLocCheck();
+    $('#checkbgloc-retry').hide().off();
+    $('#checkbgloc-settings').off().on('click', () => GEO.showAppSettings());
+
+    var attempts = 0;
+    var firstFail = true;
+
+    function queueRetry() {
+        $('#checkbgloc-retry').show().off().on('click', () => { clearBgLocCheck(); check(); });
+        clearBgLocCheck();
+        BGLOC_TIMER = setTimeout(check, BGLOC_POLL_MS);
+    }
+
+    function check() {
+        BGLOC_TIMER = null;
+        if (currentPage !== 'checkbgloc') return;
+
+        GEO.checkBackgroundLocationAndroid()
+            .then(() => {
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('bg_location', {granted: true, attempts});
+                PAGE('checknotifications');
+            })
+            .catch(() => {
+                attempts++;
+                if (firstFail) {
+                    firstFail = false;
+                    // First attempt: ask the system. Android 10 may show the dialog;
+                    // Android 11+ silently denies (must use Settings).
+                    if (cordova.plugins && cordova.plugins.permissions && cordova.plugins.permissions.ACCESS_BACKGROUND_LOCATION) {
+                        cordova.plugins.permissions.requestPermission(
+                            cordova.plugins.permissions.ACCESS_BACKGROUND_LOCATION,
+                            (s) => {
+                                if (s.hasPermission) check();
+                                else queueRetry();
+                            },
+                            () => queueRetry()
+                        );
+                        return;
+                    }
+                }
+                queueRetry();
+            });
+    }
+    check();
+}
+
+//
+// CHECK MOTION (iOS)
+// CMMotionActivityManager is started by bg-geo, but the auth prompt result is
+// not surfaced. Without motion events, stationary detection breaks and the
+// GPS-lost overlay fires spuriously during pocketed pauses. Hard-block until
+// the first 'activity' event arrives, with a Settings deep link as escape.
+//
+PAGES['checkmotion'] = () => {
+    clearMotionCheck();
+    $('#checkmotion-desc').text('Vérification du capteur de mouvement...');
+    $('#checkmotion-settings').hide().off().on('click', () => GEO.showAppSettings());
+    $('#checkmotion-retry').hide().off().on('click', () => { clearMotionCheck(); start = Date.now(); poll(); });
+
+    // Already received a motion event from a previous startGeoloc cycle? skip.
+    if (GEO.motionAuthorized) {
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('motion_check', {granted: true, waited_ms: 0});
+        return PAGE('rdv');
+    }
+
+    var start = Date.now();
+    var warningShown = false;
+    function poll() {
+        MOTION_TIMER = null;
+        if (currentPage !== 'checkmotion') return;
+        if (GEO.motionAuthorized) {
+            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('motion_check', {granted: true, waited_ms: Date.now() - start});
+            return PAGE('rdv');
+        }
+        if (!warningShown && Date.now() - start >= MOTION_WAIT_MS) {
+            warningShown = true;
+            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('motion_check', {granted: false, waited_ms: Date.now() - start});
+            $('#checkmotion-desc').html(
+                "Flanerie a besoin du capteur de mouvement pour détecter vos pauses pendant la marche.<br /><br />" +
+                "Sans cette autorisation, des fausses alertes \"GPS perdu\" se déclencheront en poche.<br /><br />" +
+                "Réglages > Flanerie > <u>Mouvement et forme</u>"
+            );
+            $('#checkmotion-settings').show();
+            $('#checkmotion-retry').show();
+        }
+        MOTION_TIMER = setTimeout(poll, warningShown ? 1000 : 500);
+    }
+    poll();
 }
 
 PAGES['checknotifications'] = () => {
@@ -979,11 +1096,76 @@ PAGES['checknotifications'] = () => {
     checkNotif();
 }
 
+// Manufacturer family detection — Doze whitelist alone is rarely enough on
+// OEM-modified Android. We show tailored Settings instructions per family.
+function batteryKillFamily() {
+    if (typeof device === 'undefined' || !device.manufacturer) return null;
+    var m = device.manufacturer.toLowerCase();
+    if (m.includes('samsung')) return 'samsung';
+    if (m.includes('xiaomi') || m.includes('redmi') || m.includes('poco')) return 'xiaomi';
+    if (m.includes('huawei')) return 'huawei';
+    if (m.includes('honor')) return 'honor';
+    if (m.includes('oneplus')) return 'oneplus';
+    if (m.includes('oppo') || m.includes('realme')) return 'oppo';
+    if (m.includes('vivo')) return 'vivo';
+    if (m.includes('asus')) return 'asus';
+    return null;
+}
+
+function batteryKillCopy(family) {
+    switch(family) {
+        case 'samsung': return {
+            title: 'Réglages Samsung',
+            steps:
+                "Maintenance > Batterie > Limites d'utilisation en arrière-plan > <u>Apps en veille profonde</u>: retirez Flanerie de la liste.<br /><br />" +
+                "Apps > Flanerie > Batterie: choisir <u>Non restreint</u>."
+        };
+        case 'xiaomi': return {
+            title: 'Réglages Xiaomi / Redmi / POCO',
+            steps:
+                "Sécurité > Autorisations > <u>Démarrage automatique</u>: activez Flanerie.<br /><br />" +
+                "Économiseur de batterie > Choisir des apps > Flanerie: <u>Pas de restrictions</u>.<br /><br />" +
+                "Verrouillez Flanerie dans les apps récentes (icône cadenas)."
+        };
+        case 'huawei':
+        case 'honor': return {
+            title: 'Réglages Huawei / Honor',
+            steps:
+                "Batterie > Lancement d'apps > Flanerie: passer en <u>Manuel</u>, puis activer <u>Démarrage automatique</u> + <u>Démarrage secondaire</u> + <u>Exécution en arrière-plan</u>."
+        };
+        case 'oneplus': return {
+            title: 'Réglages OnePlus',
+            steps:
+                "Batterie > Optimisation de la batterie > Flanerie: <u>Ne pas optimiser</u>.<br /><br />" +
+                "Batterie > Optimisation avancée: <u>Désactiver</u> l'optimisation en veille profonde si présente."
+        };
+        case 'oppo': return {
+            title: 'Réglages Oppo / Realme',
+            steps:
+                "Batterie > Optimisation de la batterie > Flanerie: <u>Ne pas optimiser</u>.<br /><br />" +
+                "Confidentialité > Démarrage > Flanerie: <u>Autoriser</u>."
+        };
+        case 'vivo': return {
+            title: 'Réglages Vivo',
+            steps:
+                "Batterie > Consommation en arrière-plan > Flanerie: <u>Haute priorité</u>.<br /><br />" +
+                "Démarrage automatique: activer Flanerie."
+        };
+        case 'asus': return {
+            title: 'Réglages Asus',
+            steps: "Gestionnaire de démarrage automatique > Flanerie: <u>Autorisé</u>."
+        };
+        default: return null;
+    }
+}
+
 //
 // CHECK BATTERY OPTIMIZATION (Android 6+ / API 23+)
 // Requires: snt1017/cordova-plugin-power-optimization
 // Hard-blocks startup until the app is whitelisted from Android battery optimization.
-// OEM-specific restrictions are detected via HaveProtectedAppsCheck() — no hardcoded list.
+// OEM-specific guidance is rendered up front based on Build.MANUFACTURER, since
+// Doze whitelist (the only thing the plugin can verify) is not enough on most
+// modern OEM Androids.
 //
 PAGES['checkbatteryopt'] = () => {
     if (DEVMODE) return PAGE('rdv');
@@ -997,21 +1179,41 @@ PAGES['checkbatteryopt'] = () => {
     if (apiLevel < 23) return PAGE('rdv');
 
     clearBatteryOptCheck();
+    var family = batteryKillFamily();
+    var oemCopy = family ? batteryKillCopy(family) : null;
 
-    $('#checkbatteryopt-settings').hide().off().on('click', () => plugin.RequestOptimizationsMenu());
-    $('#checkbatteryopt-oem-btn').hide().off().on('click', () => plugin.ProtectedAppCheck(true));
+    // The plugin's RequestOptimizationsMenu has an inverted conditional and only
+    // opens the system page when the app is already whitelisted — useless when
+    // we actually need it. Use bg-geo's showAppSettings (app details page) instead.
+    $('#checkbatteryopt-settings').hide().off().on('click', () => GEO.showAppSettings());
+    $('#checkbatteryopt-oem-btn').hide().off().on('click', () => {
+        // ProtectedAppCheck(true) fires the OEM intent if any is callable.
+        // If none (modern OEMs that no longer expose intents), fall back to app settings.
+        plugin.ProtectedAppCheck(true).catch(() => GEO.showAppSettings());
+    });
     $('#checkbatteryopt-retry').hide().off().on('click', () => { clearBatteryOptCheck(); check(); });
     $('#checkbatteryopt-oem').hide();
 
-    // Detect OEM-specific battery restriction layers (Samsung, Xiaomi, Huawei, etc.)
+    // Render manufacturer-tailored copy up front, before the user can fail.
+    if (oemCopy) {
+        $('#checkbatteryopt-oem').show().html('<b>' + oemCopy.title + '</b><br /><br />' + oemCopy.steps);
+        $('#checkbatteryopt-oem-btn').show();
+    }
+
+    // Also probe the plugin's intent table — covers a few older OEM activities
+    // not in our manufacturer match. Show the deep-link button if any are callable.
+    // bug-fix: HaveProtectedAppsCheck returns {skip_message, found_intent}, not a boolean.
     plugin.HaveProtectedAppsCheck()
-        .then(hasOEM => {
-            if (hasOEM && currentPage === 'checkbatteryopt') {
+        .then(result => {
+            if (!result || !result.found_intent) return;
+            if (currentPage !== 'checkbatteryopt') return;
+            if (!oemCopy) {
+                // Manufacturer not in our table but OS exposes an OEM activity: generic banner.
                 $('#checkbatteryopt-oem').show().text(
-                    'Votre téléphone a des réglages de batterie spécifiques. Ouvrez les paramètres fabricant et autorisez Flanerie en arrière-plan.'
+                    "Votre téléphone a des réglages de batterie spécifiques. Ouvrez les paramètres fabricant et autorisez Flanerie en arrière-plan."
                 );
-                $('#checkbatteryopt-oem-btn').show();
             }
+            $('#checkbatteryopt-oem-btn').show();
         })
         .catch(() => {});
 
@@ -1022,7 +1224,7 @@ PAGES['checkbatteryopt'] = () => {
 
         plugin.IsIgnoringBatteryOptimizations()
             .then(isIgnoring => {
-                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('battery_opt', { ignoring: isIgnoring, manufacturer: device.manufacturer, apiLevel });
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('battery_opt', { ignoring: isIgnoring, manufacturer: device.manufacturer, family, apiLevel });
                 if (isIgnoring) { PAGE('rdv'); return; }
 
                 // First failure: trigger native dialog (ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
@@ -1036,7 +1238,7 @@ PAGES['checkbatteryopt'] = () => {
                 if (BATTOPT_ATTEMPTS >= BATTOPT_MAX_ATTEMPTS) {
                     $('#checkbatteryopt-retry').show();
                     $('#checkbatteryopt-settings').show();
-                    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('battery_opt', { blocked: true, manufacturer: device.manufacturer });
+                    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('battery_opt', { blocked: true, manufacturer: device.manufacturer, family });
                     return;
                 }
                 BATTOPT_TIMER = setTimeout(check, BATTOPT_POLL_MS);
@@ -1546,6 +1748,89 @@ var GPSLOST_PLAYER = new PlayerSimple(true, 0);
 GPSLOST_PLAYER.load(BASEURL+'/images/', {src: 'gpslost.mp3', master: 1}, false);
 
 GEO.stateUpdateTimeout = 30 * 1000; // 30s on all platforms — must exceed the 15s native keepalive interval
+
+// Default GPS-lost copy (reset whenever we re-show the overlay for a transient signal loss).
+const GPSLOST_TEXT_DEFAULT = 'Signal GPS perdu.<br/><br/>Déplacez-vous vers un espace dégagé.<br/>La progression reprend automatiquement dès le retour du signal.';
+
+function setGpsLostOverlay(opts) {
+    opts = opts || {};
+    $('#gpslost-overlay-desc').html(opts.html || GPSLOST_TEXT_DEFAULT);
+    if (opts.settings) $('#gpslost-settings').show();
+    else $('#gpslost-settings').hide();
+    $('#gpslost-overlay').css('display', 'flex');
+}
+
+function showGpsRevokedOverlay(reason) {
+    if (currentPage !== 'parcours') return;
+    GPSREVOKED = true;
+    var html;
+    if (reason === 'services') {
+        html = "<b>GPS désactivé</b><br/><br/>La localisation a été coupée dans les réglages système. Réactivez-la pour continuer le parcours.";
+    } else {
+        html = "<b>Autorisation révoquée</b><br/><br/>Flanerie n'a plus accès à votre position. Ouvrez les paramètres et réactivez la localisation sur <u>Toujours autoriser</u>.";
+    }
+    TELEMETRY.log('gps_revoked', {reason, step: PARCOURS.currentStep()});
+    if (navigator.vibrate) navigator.vibrate([500, 200, 500, 200, 500]);
+    pauseAllPlayers();
+    GPSLOST_PLAYER.play();
+    setGpsLostOverlay({html, settings: true});
+}
+
+// Mid-walk health probe: when GPS goes lost, check whether services or auth
+// were toggled off in settings — those need a dedicated overlay, not just
+// "move to an open area".
+function probeGpsHealth() {
+    if (currentPage !== 'parcours') return;
+    if (typeof BackgroundGeolocation === 'undefined') return;
+    GEO.checkHealth().then((h) => {
+        if (h.servicesEnabled === false) return showGpsRevokedOverlay('services');
+        if (h.authorization !== null && h.authorization !== BackgroundGeolocation.AUTHORIZED) return showGpsRevokedOverlay('auth');
+        if (h.bgLocationOk === false) return showGpsRevokedOverlay('auth');
+    });
+}
+
+// Re-emitted by geoloc.js whenever the bg-geo plugin reports a non-AUTHORIZED status.
+GEO.on('authorizationChanged', (status) => {
+    console.warn('GEO authorizationChanged:', status);
+    if (currentPage !== 'parcours') return;
+    showGpsRevokedOverlay('auth');
+});
+
+// Mid-walk OEM-kill heuristic: count unexpected bg-geo service stops in a
+// rolling window. Two stops within 5 min strongly suggests the OEM battery
+// layer is killing the foreground service — escalate beyond a transient
+// GPS-lost overlay with manufacturer-tailored copy.
+var BG_STOP_HISTORY = [];
+const BG_STOP_WINDOW_MS = 5 * 60 * 1000;
+const BG_STOP_THRESHOLD = 2;
+
+function showBatteryKillOverlay() {
+    if (currentPage !== 'parcours') return;
+    GPSREVOKED = true;
+    var oem = batteryKillCopy(batteryKillFamily());
+    var body = oem
+        ? oem.steps
+        : "Ouvrez les paramètres et désactivez les restrictions de batterie pour Flanerie, puis revenez à l'application.";
+    var html = "<b>Restriction batterie détectée</b><br /><br />" +
+               "Votre téléphone interrompt l'application en arrière-plan.<br /><br />" +
+               body;
+    TELEMETRY.log('battery_kill_overlay', {family: batteryKillFamily(), manufacturer: (typeof device !== 'undefined' ? device.manufacturer : null), step: PARCOURS.currentStep()});
+    if (navigator.vibrate) navigator.vibrate([500, 200, 500, 200, 500]);
+    pauseAllPlayers();
+    GPSLOST_PLAYER.play();
+    setGpsLostOverlay({html, settings: true});
+}
+
+GEO.on('bgServiceStop', (info) => {
+    if (info && info.intentional) return;
+    if (currentPage !== 'parcours') return;
+    var now = Date.now();
+    BG_STOP_HISTORY = BG_STOP_HISTORY.filter(t => now - t < BG_STOP_WINDOW_MS);
+    BG_STOP_HISTORY.push(now);
+    TELEMETRY.log('bg_stop_repeated', {count: BG_STOP_HISTORY.length, windowMs: BG_STOP_WINDOW_MS, step: PARCOURS.currentStep()});
+    if (BG_STOP_HISTORY.length >= BG_STOP_THRESHOLD) showBatteryKillOverlay();
+});
+
 GEO.on('stateUpdate', (state) => {
     if (state == 'lost') {
         if (currentPage != 'parcours') return;                                  // only if on parcours page
@@ -1558,7 +1843,10 @@ GEO.on('stateUpdate', (state) => {
         if (navigator.vibrate) navigator.vibrate([500, 200, 500]);
         pauseAllPlayers();
         GPSLOST_PLAYER.play();
-        $('#gpslost-overlay').css('display', 'flex');
+        setGpsLostOverlay();
+        // Concurrent with the transient-loss overlay, probe system state.
+        // If GPS was revoked in settings, the probe escalates to the revoked overlay.
+        probeGpsHealth();
     }
     if (state == 'ok') {
         if (currentPage != 'parcours') return; // only if on parcours page
@@ -1566,6 +1854,7 @@ GEO.on('stateUpdate', (state) => {
         console.log('GEO position ok');
         TELEMETRY.log('gps_recovered', {step: PARCOURS.currentStep()});
         if (navigator.vibrate) navigator.vibrate([200]);
+        GPSREVOKED = false;
         GPSLOST_PLAYER.stop();
         resumeAllPlayers();
         $('#gpslost-overlay').hide();
@@ -1573,11 +1862,38 @@ GEO.on('stateUpdate', (state) => {
     console.log('GEO stateUpdate', state, currentPage, AUDIOFOCUS);
 })
 
+// Periodic mid-walk poll: catches the case where the user toggles services
+// or auth in settings without leaving GPS-lost yet (e.g., disable then re-enable
+// quickly). Cheap call, fires every 30s only while on the parcours page.
+setInterval(() => {
+    if (currentPage !== 'parcours') return;
+    if (GEO.mode() == 'simulate') return;
+    if (typeof BackgroundGeolocation === 'undefined') return;
+    GEO.checkHealth().then((h) => {
+        var revoked = (h.servicesEnabled === false) ||
+                      (h.authorization !== null && h.authorization !== BackgroundGeolocation.AUTHORIZED) ||
+                      (h.bgLocationOk === false);
+        if (revoked && !GPSREVOKED) {
+            showGpsRevokedOverlay(h.servicesEnabled === false ? 'services' : 'auth');
+        }
+        if (!revoked && GPSREVOKED) {
+            GPSREVOKED = false;
+            $('#gpslost-settings').hide();
+            // stateUpdate('ok') will hide the overlay when a fix arrives
+        }
+    });
+}, 30000);
+
 $('#gpslost-resume').on('click', () => {
     TELEMETRY.log('gps_force_resume', {step: PARCOURS.currentStep()});
     GPSLOST_PLAYER.stop();
     resumeAllPlayers();
     $('#gpslost-overlay').hide();
+})
+
+$('#gpslost-settings').on('click', () => {
+    TELEMETRY.log('gps_settings_open', {step: PARCOURS.currentStep()});
+    GEO.showAppSettings();
 })
 
 

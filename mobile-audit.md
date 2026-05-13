@@ -1,7 +1,7 @@
 # Mobile Audit Remediation Plan
 
 Date: 2026-04-27  
-Last updated: 2026-05-07 (iOS native media player migration — all diagnostic tests pass)  
+Last updated: 2026-05-13 (GPS auth workflow hardening + power-optimization bug fixes + deferred fork plan)  
 Scope: Cordova launcher + downloaded local webapp, GPS-triggered audio walk, locked-screen pocket usage, published parcours FLANERIE_ELYSEE  
 Plugin: [`cordova-background-geolocation-plugin`](https://github.com/Maigre/cordova-background-geolocation-plugin) v2.4.0 (Flanerie fork of HaylLtd v2.3.3)
 
@@ -67,10 +67,14 @@ Audio channel model per step (PlayerStep class):
 Page flow:
 ```
 title → intro → checkdata → select → preload → confirmload → load
-→ checkgeo → confirmgeo → startgeo → [confirmios|checknotifications]
+→ checkgeo → confirmgeo → startgeo
+→ [checkmotion (iOS) | checkbgloc (Android)]
+→ checknotifications (Android) → checkbatteryopt (Android)
 → rdv → checkaudio → checkbattery → [checkbackground (bypassed)] → sas
 → parcours → end
 ```
+
+Onboarding gates (post-2026-05-13): every page above hard-blocks until its check passes. The previous `confirmios` reminder page was removed — its purpose was redundant once `startGeoloc()` only resolves on `AUTHORIZED` (Always).
 
 ---
 
