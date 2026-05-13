@@ -925,7 +925,8 @@ app.get('/mediaCheck/:parcours', async (req, res) => {
       } else {
         if (profile === 'VBR') issues.push('vbr');
         else if (profile === 'ABR') issues.push('abr');
-        if (bitrate && !MPEG_BITRATES.has(bitrate)) issues.push('nonstandard_bitrate');
+        const isVariableBitrate = issues.includes('vbr') || issues.includes('abr');
+        if (!isVariableBitrate && !MPEG_BITRATES.has(bitrate)) issues.push('nonstandard_bitrate');
       }
 
       const errorIssues = ['vbr', 'abr', 'not_mp3', 'bad_header', 'nonstandard_bitrate'];

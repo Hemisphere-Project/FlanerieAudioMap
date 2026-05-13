@@ -568,7 +568,7 @@ const MEDIA_ISSUE_LABELS = {
     abr:               'ABR : débit variable, peut causer des problèmes de lecture',
     not_mp3:           'Format non supporté — MP3 uniquement',
     bad_header:        'En-tête illisible ou fichier corrompu',
-    nonstandard_bitrate: 'Débit non standard — risque d\'échec de lecture',
+    nonstandard_bitrate: 'Débit non standard (VBR probable) — risque d\'échec de lecture',
     high_bitrate:      'Débit élevé — fichier lourd, préférer ≤ 256 kbps',
 }
 
