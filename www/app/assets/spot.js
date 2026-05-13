@@ -442,9 +442,8 @@ class Offlimit extends Spot
         let inside = super.updatePosition(position)
         
         if (this.player && this.player.isLoaded()) {
-            
             if (inside) this.player.resume()
-            else this.player.stop()
+            // no stop on exit — message loops until a step zone fades it out via pauseAudio
         }
 
         return inside
@@ -468,10 +467,10 @@ class Step extends Spot
             this._spot.name = 'Etape '+index
 
         if (!this._spot.media) this._spot.media = {}
+        delete this._spot.media.music
+        delete this._spot.media.ambiant
+        delete this._spot.media.offlimit
         if (!('voice' in this._spot.media)) this._spot.media.voice = {src: '-', master: 1}
-        if (!('music' in this._spot.media)) this._spot.media.music = {src: '-', master: 1}
-        if (!('ambiant' in this._spot.media)) this._spot.media.ambiant = {src: '-', master: 1}
-        if (!('offlimit' in this._spot.media)) this._spot.media.offlimit = {src: '-', master: 1}
         if (!('afterplay' in this._spot.media)) this._spot.media.afterplay = {src: '-', master: 1}
 
         // player
@@ -542,9 +541,9 @@ class Step extends Spot
             this._skipDoneLogged = false
         }
 
-        // Handle Offlimit (if media exists) before generic fire logic, so reentry resumes
+        // Handle boundary crossing before generic fire logic, so reentry resumes
         // from the paused position instead of being treated as a fresh trigger.
-        if (PARCOURS.currentStep() == this._index && this._spot.media.offlimit.src !== '-') 
+        if (PARCOURS.currentStep() == this._index)
         {
             // If already in offlimit mode, only resume once safely back inside.
             if (this.player.isOfflimit()) {
@@ -592,6 +591,7 @@ class Step extends Spot
             })
             this._keepLoadedForUpcomingTrigger = false
             this.player.resume()
+            PARCOURS.pauseAudio('offlimits')
             return inside
         }
 
@@ -648,6 +648,7 @@ class Step extends Spot
             this._keepLoadedForUpcomingTrigger = false
             if (action === 'resume') this.player.resume()
             else this.player.play()
+            PARCOURS.pauseAudio('offlimits')
 
             if (wasCurrentStep) {
                 telemetryLog('step_refire_current', {

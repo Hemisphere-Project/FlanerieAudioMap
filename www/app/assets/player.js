@@ -862,24 +862,16 @@ class PlayerStep extends EventEmitter
     constructor() {
         super()
         this.voice   = new PlayerSimple()
-        this.music   = new PlayerSimple()
-        this.ambiant = new PlayerSimple(true)
-        this.offlimit = new PlayerSimple(true, 500)
         this.afterplay = new PlayerSimple(true)
-        this.state = 'off'       // play, afterplay, pause, stop, offlimit  
+        this.state = 'off'       // play, afterplay, pause, stop, offlimit
         this.playstate = 'play'  // play, afterplay
         this._doneFired = false
 
         this.voice.rewindOnPause(3000)
-        this.voice.on('end', () => { 
+        this.voice.on('end', () => {
             this.startAfterplay()
         })
 
-        this.music.rewindOnPause(3000)
-        this.music.on('end', () => { 
-            this.startAfterplay()
-        })
-        
         this.afterplay.rewindOnPause(3000)
     }
 
@@ -896,9 +888,6 @@ class PlayerStep extends EventEmitter
 
     load(basepath, media) {
         this.voice.load(basepath, media.voice)
-        this.music.load(basepath, media.music)
-        this.ambiant.load(basepath, media.ambiant)
-        this.offlimit.load(basepath, media.offlimit)
         this.afterplay.load(basepath, media.afterplay)
         this.playstate = 'play'
         this._doneFired = false
@@ -907,9 +896,6 @@ class PlayerStep extends EventEmitter
 
     clear() {
         this.voice.clear()
-        this.music.clear()
-        this.ambiant.clear()
-        this.offlimit.clear()
         this.afterplay.clear()
         let wasNotStop = this.state !== 'stop'
         this.playstate = 'play'
@@ -920,15 +906,11 @@ class PlayerStep extends EventEmitter
 
     play() {
         console.log('PlayerStep play', this.playstate)
-        this.offlimit.stop()
-        this.ambiant.play()
-
         if (this.playstate == 'afterplay') {
             this.afterplay.play()
         }
         else {
             this.voice.play()
-            this.music.play()
         }
         let wasNotPlay = this.state !== this.playstate
         this.state = this.playstate
@@ -937,9 +919,6 @@ class PlayerStep extends EventEmitter
 
     stop(d=-1) {
         this.voice.stopOut(d)
-        this.music.stopOut(d)
-        this.ambiant.stopOut(d)
-        this.offlimit.stopOut(d)
         this.afterplay.stopOut(d)
 
 
@@ -952,9 +931,6 @@ class PlayerStep extends EventEmitter
     pause() {
         if (!this.isPlaying()) return
         this.voice.pauseOut()
-        this.music.pauseOut()
-        this.ambiant.pauseOut()
-        this.offlimit.pauseOut()
         this.afterplay.pauseOut()
         let wasNotPause = this.state !== 'pause'
         this.state = 'pause'
@@ -965,14 +941,11 @@ class PlayerStep extends EventEmitter
     }
 
     resume() {
-
-        this.ambiant.resume()
         if (this.playstate == 'afterplay') {
             this.afterplay.resume()
         }
         else {
             this.voice.resume()
-            this.music.resume()
         }
 
         let wasNotPlay = this.state !== this.playstate
@@ -982,9 +955,6 @@ class PlayerStep extends EventEmitter
 
     volume(value) {
         this.voice.volume(value)
-        this.music.volume(value)
-        this.ambiant.volume(value)
-        this.offlimit.volume(value)
         this.afterplay.volume(value)
     }
 
@@ -993,24 +963,23 @@ class PlayerStep extends EventEmitter
     }
 
     isPlaying() {
-        return this.state == 'play' || this.state == 'afterplay'
+        return this.state == 'play' || this.state == 'afterplay' || this.state == 'offlimit'
     }
 
     isLoaded() {
-        return this.voice.isLoaded() && this.music.isLoaded() && this.ambiant.isLoaded() && this.offlimit.isLoaded() && this.afterplay.isLoaded()
+        return this.voice.isLoaded() && this.afterplay.isLoaded()
     }
 
     hasError() {
-        return !!(this.voice._loadError || this.music._loadError || this.ambiant._loadError ||
-                  this.offlimit._loadError || this.afterplay._loadError)
+        return !!(this.voice._loadError || this.afterplay._loadError)
     }
 
     isReady() {
-        return this.voice.isReady() && this.music.isReady() && this.ambiant.isReady() && this.offlimit.isReady() && this.afterplay.isReady()
+        return this.voice.isReady() && this.afterplay.isReady()
     }
 
     loadState() {
-        let states = [this.voice, this.music, this.ambiant, this.offlimit, this.afterplay].map(player => player.loadState())
+        let states = [this.voice, this.afterplay].map(player => player.loadState())
         if (states.every(state => state === 'loaded' || state === 'empty')) return 'loaded'
         if (states.every(state => state === 'unloaded' || state === 'empty')) return 'unloaded'
         return states.join(',')
@@ -1024,31 +993,13 @@ class PlayerStep extends EventEmitter
         return this.state == 'play'
     }
 
-    crossLimit(out=true) 
+    crossLimit(out=true)
     {
-        if (out && this.state == 'play') {
-            this.voice.pauseOut()
-            this.music.pauseOut()
-            this.offlimit.play()
-            this.state = 'offlimit'
-            this.emit('offlimit')
-        }
-        else if (out && this.state == 'afterplay') {
-            this.afterplay.pauseOut()
-            this.offlimit.play()
+        if (out && (this.state == 'play' || this.state == 'afterplay')) {
             this.state = 'offlimit'
             this.emit('offlimit')
         }
         else if (!out && this.state == 'offlimit') {
-            this.offlimit.stopOut()
-
-            if (this.playstate == 'afterplay') {
-                this.afterplay.resume()
-            }
-            else {
-                this.voice.resume()
-                this.music.resume()
-            }
             this.state = this.playstate
             this.emit('resume')
         }
