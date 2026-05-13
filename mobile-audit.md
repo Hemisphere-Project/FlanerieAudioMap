@@ -338,6 +338,36 @@ Acceptance:
 
 ### C: Cordova container findings
 
+#### P3.5 Voice position resume across app restart ✅ PARTIAL (2026-05-13)
+
+Step voice playback position is now saved to localStorage and restored (minus 3s rewind) when the user re-enters the step zone after a crash, force-quit, or deep sleep restart.
+
+**What was done:**
+- `state.resumeStepVoicePos` added to Parcours state (survives localStorage round-trip).
+- `snapshotVoicePosition()` reads the live voice seek position from the active step player (only when `playstate === 'play'`; afterplay restarts from 0 by design).
+- `store()` calls `snapshotVoicePosition()` before every localStorage write.
+- `startTracking()` adds two save triggers: 10s periodic store (foreground crash coverage) + `document.pause` listener (exact save at backgrounding moment).
+- GPS background callback (`_callbackPosition`): `PARCOURS.store()` called while JS is awake inside each background task window — ~1s cadence while backgrounded, closing the gap between `document.pause` and a system kill.
+- `PlayerStep.play(seekPos)` forwards seek to `PlayerSimple`; `Step.updatePosition()` consumes `resumeStepVoicePos` (one-time, zeroed on use) when `wasCurrentStep && action === 'play'`.
+
+**Scope:** Step voice only. Afterplay and all other player types (Zone, Offlimit) are unaffected.
+
+**Resume path when user is outside the zone at restart:** step silently waits; fire block only executes when `near() && inside` — the saved position is applied on re-entry.
+
+**Remaining gap — Plan B [RESEARCH-FIRST]:**
+
+`PARCOURS.store()` during a GPS callback reads `_positionSec`, which is updated by the 250ms poll setInterval. That interval is frozen when JS is suspended; it may or may not catch up when JS wakes for a GPS task (platform-dependent). To guarantee freshness: explicitly call `media.getCurrentPosition()` from within the GPS background task and update `resumeStepVoicePos` from the async native response before calling `store()`. Requires coupling geoloc.js → NativeMediaPlayer internal, cleanest via a new `PARCOURS.refreshVoicePositionFromNative(cb)` method.
+
+**Remaining gap — Plan C [RESEARCH-FIRST, native plugin work]:**
+
+If the system kills the app between GPS callbacks (no JS execution), the last GPS-triggered save is used — worst case 1–2s drift. To close this entirely: extend `cordova-plugin-media` with native hooks that write `AVAudioPlayer.currentTime` (iOS) or `MediaPlayer.getCurrentPosition()` (Android) directly to `NSUserDefaults` / `SharedPreferences` on `applicationDidEnterBackground` / `onPause`. On JS startup, read native storage and inject the value into `state.resumeStepVoicePos`. Fully JS-independent, survives any kill scenario.
+
+Files: `www/app/assets/parcours.js`, `www/app/assets/player.js`, `www/app/assets/spot.js`, `www/app/assets/geoloc.js`
+
+---
+
+### C: Cordova container findings
+
 #### C1 Audiofocus plugin ✅ DONE (2026-05-05, follow-up 2026-05-06)
 
 Upgraded to v1.2.0 in the fork (commit `69915be`), deployed to FlanerieCordova.
@@ -397,6 +427,8 @@ No reproducible build checklist or smoke-test script. Add a minimal one (Android
 **Next to implement:**
 - P0.3 / P0.5 Fix 1e: Android AlarmManager JS wakeup (deferred)
 - P1.5 full timer/listener audit (deferred from P1.5 partial)
+- P3.5 Plan B: native `getCurrentPosition()` during GPS tasks (if telemetry shows `_positionSec` staleness)
+- P3.5 Plan C: native plugin save on `applicationDidEnterBackground` / `onPause` (if Plan B insufficient)
 
 **When Android GPS stability confirmed:**
 - P0.5 Fix 3 (DistanceFilterLocationProvider) or Fix 4 (FusedLocationProvider)

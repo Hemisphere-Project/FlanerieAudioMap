@@ -483,6 +483,12 @@ class GeoLoc extends EventEmitter {
             if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_state', {state: 'ok'});
         }
         if (typeof TELEMETRY !== 'undefined') TELEMETRY.gps(position, telemetryMeta);
+
+        // Snapshot voice position while JS is awake inside the GPS background task window.
+        // Covers the gap between document.pause (backgrounding) and a potential system kill.
+        if (APP_VISIBILITY === 'background' && typeof PARCOURS !== 'undefined' && typeof PARCOURS.store === 'function') {
+            PARCOURS.store()
+        }
     }
 
     _callbackError(error) {
