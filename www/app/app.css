@@ -309,6 +309,28 @@ input[type=number].input-page::-webkit-outer-spin-button {
     margin: 0;
 }
 
+/* LOST state band — pinned to the top, leaves the map visible and usable
+   so the walker can navigate back to the repère. Lower z-index than the
+   full-screen overlays so GPS-lost / resume / revoked still take priority. */
+#lost-band {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 999;
+    background-color: rgba(198, 40, 40, 0.92);
+    color: #fff;
+    padding: 14px 18px;
+    text-align: center;
+    font-size: 0.95em;
+    line-height: 1.4;
+    display: none; /* overridden to flex by JS — kept here only for initial hide */
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+    pointer-events: none; /* map below stays interactive */
+}
+
 /* Diagnostic page */
 #diag-progress { font-size: 0.85em; color: #aaa; margin-bottom: 4px; text-align: center; }
 #diag-progress-detail { font-size: 0.8em; color: #8fb3c9; min-height: 1.2em; margin-bottom: 8px; text-align: center; }

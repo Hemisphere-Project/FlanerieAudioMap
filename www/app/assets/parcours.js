@@ -1,5 +1,15 @@
 var allSteps = [];
 
+// LOST thresholds (in metres of distanceToBorder) — hysteresis keeps the
+// state stable across noisy fixes. Exit is 0 so the band hides exactly when
+// the walker crosses into the zone, syncing with the resume-current branch
+// that fires audio on the same position tick.
+const LOST_ENTER_M = 50;
+const LOST_EXIT_M = 0;
+// Sustain window: only enter LOST after the walker has been beyond
+// LOST_ENTER_M continuously for this long. Filters single bad GPS fixes.
+const LOST_SUSTAIN_MS = 15000;
+
 class Parcours extends EventEmitter {
     constructor() {
         super()
@@ -51,8 +61,16 @@ class Parcours extends EventEmitter {
             mediaPack: [],
             mediaPackSize: 0,
             mediaPackLoaded: 0,
-            resumeStepVoicePos: 0
+            resumeStepVoicePos: 0,
+            // LOST state — true while the walker is too far from where they
+            // should be. Persisted via store() so a kill-and-relaunch wakes
+            // back up in LOST instead of silent.
+            lost: false,
+            lostSince: null
         };
+        // Sustain timer is local-only — on relaunch the GPS picture is fresh
+        // so we restart the accumulator rather than trusting a stale value.
+        this._lostBeyondSince = null;
     }
 
     snapshotVoicePosition() {
@@ -447,14 +465,89 @@ class Parcours extends EventEmitter {
         catch (error) { console.error('Error clearing parcours store:', error); }
     }
 
+    // LOST evaluation: decides whether the walker is too far from where they
+    // should be (active step if still narrating/afterplaying, otherwise next
+    // step). Emits 'lost' on entry and 'recover' on exit — UI/audio handlers
+    // in pages.js react. Distance gating uses LOST_ENTER_M / LOST_EXIT_M
+    // hysteresis plus a LOST_SUSTAIN_MS sustain timer to filter GPS noise.
+    evaluateLostState(position) {
+        // GPS-lost takes priority over LOST. During a signal-loss window the
+        // bg-geo plugin stops emitting positions, but if a stale position
+        // sneaks through we still don't want to enter LOST on top of the
+        // GPS-lost overlay. State.lost from a prior moment is preserved.
+        if (typeof GPSSIGNAL_OK !== 'undefined' && !GPSSIGNAL_OK) return;
+
+        let idx = this.state.stepIndex;
+        if (idx < 0) return; // not started — rdv page handles distance UX
+
+        let activeStep = this.find('steps', idx);
+        if (!activeStep) return;
+
+        let stepsCount = (this.spots.steps || []).length;
+        let target;
+        if (activeStep._active) {
+            target = activeStep;
+        } else if (idx + 1 < stepsCount) {
+            target = this.find('steps', idx + 1);
+        } else {
+            // Last step done — no LOST.
+            return;
+        }
+        if (!target) return;
+
+        let distance = target.distanceToBorder(position);
+
+        if (this.state.lost) {
+            if (distance < LOST_EXIT_M) {
+                this.state.lost = false;
+                this.state.lostSince = null;
+                this._lostBeyondSince = null;
+                this.store();
+                this.emit('recover', { target, distance });
+            }
+            return;
+        }
+
+        // Not currently LOST — check entry.
+        if (distance <= LOST_ENTER_M) {
+            this._lostBeyondSince = null;
+            return;
+        }
+
+        // Beyond threshold. Don't accumulate while stationary — same gate as
+        // GPS-lost: a pocketed walker isn't actually wandering.
+        if (typeof GEO !== 'undefined' && GEO.motionIsStationary) return;
+
+        if (!this._lostBeyondSince) {
+            this._lostBeyondSince = Date.now();
+            return;
+        }
+        if (Date.now() - this._lostBeyondSince < LOST_SUSTAIN_MS) return;
+
+        this.state.lost = true;
+        this.state.lostSince = Date.now();
+        this._lostBeyondSince = null;
+        this.store();
+        this.emit('lost', { target, distance });
+    }
+
     update(position) {
         if (this.state.geoMode === null) return;
+
+        // LOST gate runs first — when active, it suppresses all spot processing
+        // (offlimits masked, zones can't re-trigger on re-crossing, steps can't
+        // re-fire). Distance tracking for recovery continues via evaluateLostState.
+        this.evaluateLostState(position);
+        if (this.state.lost) {
+            this.telemetryRouteProbe(position, false);
+            return;
+        }
 
         let offlimit = false;
 
         // process offlimits
         if (this.spots['offlimits']) {
-            this.spots['offlimits'].map(s => { 
+            this.spots['offlimits'].map(s => {
                 let inside = s.updatePosition(position);
                 if (inside) offlimit = true;
             });

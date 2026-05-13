@@ -488,7 +488,10 @@
             || !hasOwn(session, 'heartbeatRecoveries')
             || !hasOwn(session, 'gpsLostCount')
             || !hasOwn(session, 'audioErrors')
-            || !hasOwn(session, 'uniqueStepCount');
+            || !hasOwn(session, 'uniqueStepCount')
+            || !hasOwn(session, 'userLostCount')
+            || !hasOwn(session, 'voiceFailCount')
+            || !hasOwn(session, 'afterplayFallbackCount');
     }
 
     function mergeSessionSummaryFromDetail(session, data) {
@@ -511,6 +514,12 @@
         coalesceMetric(session, 'heartbeatRecoveries', metrics.heartbeatRecoveries);
         coalesceMetric(session, 'gpsLostCount', metrics.gpsLost);
         coalesceMetric(session, 'audioErrors', metrics.audioErrors);
+        coalesceMetric(session, 'userLostCount', metrics.userLost);
+        coalesceMetric(session, 'userRecoveredCount', metrics.userRecovered);
+        coalesceMetric(session, 'lostRecoveryMedianMs', metrics.lostRecoveryMedianMs);
+        coalesceMetric(session, 'voiceFailCount', metrics.voiceFail);
+        coalesceMetric(session, 'afterplayFallbackCount', metrics.afterplayFallback);
+        coalesceMetric(session, 'audiofocusRetryCount', metrics.audiofocusRetry);
 
         session._hydrationComplete = true;
     }
@@ -1196,6 +1205,26 @@
             return sum + (Number(event.data && event.data.rejectedSamples) || 0);
         }, 0);
 
+        // LOST recovery: pair user_lost with the next user_recovered, median delta.
+        var lostRecoveryDeltas = [];
+        var pendingLost = null;
+        events.forEach(function(event) {
+            if (event.type === 'user_lost') pendingLost = event;
+            else if (event.type === 'user_recovered' && pendingLost) {
+                var delta = Number(event.t) - Number(pendingLost.t);
+                if (Number.isFinite(delta) && delta >= 0) lostRecoveryDeltas.push(delta);
+                pendingLost = null;
+            }
+        });
+        var lostRecoveryMedianMs = null;
+        if (lostRecoveryDeltas.length) {
+            var sortedDeltas = lostRecoveryDeltas.slice().sort(function(a, b) { return a - b; });
+            var mid = Math.floor(sortedDeltas.length / 2);
+            lostRecoveryMedianMs = sortedDeltas.length % 2 ? sortedDeltas[mid] : (sortedDeltas[mid - 1] + sortedDeltas[mid]) / 2;
+        }
+
+        var afterplayFallbacks = events.filter(function(event) { return event.type === 'step_afterplay_fallback'; });
+
         return {
             finalStep: getRouteProbeFinalStep(events),
             uniqueSteps: uniqueSteps.length,
@@ -1209,7 +1238,13 @@
             heartbeatRecoveries: events.filter(function(event) { return event.type === 'gps_heartbeat_ok'; }).length,
             gpsLost: events.filter(function(event) { return event.type === 'gps_state' && event.data && event.data.state === 'lost'; }).length,
             audioErrors: events.filter(function(event) { return event.type === 'audio_loaderror' || event.type === 'audio_playerror'; }).length,
-            resumeCount: events.filter(function(event) { return event.type === 'session_resume'; }).length
+            resumeCount: events.filter(function(event) { return event.type === 'session_resume'; }).length,
+            userLost: events.filter(function(event) { return event.type === 'user_lost'; }).length,
+            userRecovered: events.filter(function(event) { return event.type === 'user_recovered'; }).length,
+            lostRecoveryMedianMs: lostRecoveryMedianMs,
+            voiceFail: events.filter(function(event) { return event.type === 'step_voice_failed'; }).length,
+            afterplayFallback: afterplayFallbacks.length,
+            audiofocusRetry: events.filter(function(event) { return event.type === 'audiofocus_auto_retry'; }).length
         };
     }
 
@@ -1237,7 +1272,12 @@
             ['Rejected fixes', metrics.rejectedFixes],
             ['Heartbeat ok', metrics.heartbeatRecoveries],
             ['GPS lost', metrics.gpsLost],
-            ['Audio errors', metrics.audioErrors]
+            ['Audio errors', metrics.audioErrors],
+            ['User lost', metrics.userLost],
+            ['Recovery ~med', metrics.lostRecoveryMedianMs == null ? '-' : Math.round(metrics.lostRecoveryMedianMs / 1000) + 's'],
+            ['Voice fail', metrics.voiceFail],
+            ['Afterplay fb', metrics.afterplayFallback],
+            ['AudioFocus retry', metrics.audiofocusRetry]
         ];
 
         return items.map(function(item) {

@@ -154,6 +154,7 @@
                 <p>Choisissez un parcours:</p>
                 <ul id="select-parcours"></ul>
                 <button id="select-diagnostic" class="dev btn btn-primary btn-page" style="margin-top:30px;">Diagnostic appareil</button>
+                <button id="select-tools" class="dev btn btn-primary btn-page" style="margin-top:10px;">Outils dev</button>
             </div>
         </div>
 
@@ -254,6 +255,20 @@
             </div>
         </div>
 
+        <div id="tools" class="page">
+            <h2>Outils dev</h2>
+            <div class="content" id="tools-content">
+                <button id="tools-force-lost" class="btn btn-primary btn-page">Forcer LOST</button>
+                <button id="tools-clear-lost" class="btn btn-primary btn-page">Sortir de LOST</button>
+                <button id="tools-force-voice-fail" class="btn btn-primary btn-page">Voix HS sur étape courante</button>
+                <button id="tools-force-afterplay-fallback" class="btn btn-primary btn-page">Afterplay générique sur étape courante</button>
+                <button id="tools-show-resume-overlay" class="btn btn-primary btn-page">Overlay reprise audio</button>
+                <button id="tools-snapshot" class="btn btn-primary btn-page">Snapshot état</button>
+                <pre id="tools-output" style="margin-top:20px; max-height:30vh; overflow:auto; font-size:0.75em; text-align:left; white-space:pre-wrap; word-break:break-word;"></pre>
+                <button id="tools-back" class="btn btn-primary btn-page" style="margin-top:20px;">Retour</button>
+            </div>
+        </div>
+
         <div id="sidepanel" class="dev">
             <h4 id="logs-title">LOGS</h4>
             <div id="logs"></div>
@@ -267,6 +282,10 @@
             <p id="gpslost-overlay-desc">Signal GPS perdu.<br/><br/>Déplacez-vous vers un espace dégagé.<br/>La progression reprend automatiquement dès le retour du signal.</p>
             <button id="gpslost-settings" class="btn btn-primary" style="display:none;">Paramètres</button>
             <button id="gpslost-resume" class="btn btn-primary">Continuer l'écoute sans GPS</button>
+        </div>
+
+        <div id="lost-band" style="display:none;">
+            <span>Vous vous êtes éloigné — retournez vers le repère sur la carte.</span>
         </div>
 
     </div>

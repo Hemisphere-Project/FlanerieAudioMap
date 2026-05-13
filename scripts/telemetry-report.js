@@ -67,6 +67,29 @@ function average(values) {
     return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
+function median(values) {
+    if (!values.length) return null;
+    const sorted = [...values].sort((left, right) => left - right);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+// Pair each user_lost with the next user_recovered in the same session and
+// return the deltas in ms. Unmatched user_lost (session ended while LOST) is dropped.
+function lostRecoveryDeltas(events) {
+    const deltas = [];
+    let pendingLost = null;
+    for (const event of events) {
+        if (event.type === 'user_lost') pendingLost = event;
+        else if (event.type === 'user_recovered' && pendingLost) {
+            const delta = Number(event.t) - Number(pendingLost.t);
+            if (Number.isFinite(delta) && delta >= 0) deltas.push(delta);
+            pendingLost = null;
+        }
+    }
+    return deltas;
+}
+
 function getSessionDay(session) {
     const source = session.startTime || (session.events && session.events[0] && session.events[0].t ? new Date(session.events[0].t).toISOString() : null);
     if (!source) return null;
@@ -102,6 +125,20 @@ function summarizeSession(session) {
     const heartbeatRecoveries = events.filter(event => event.type === 'gps_heartbeat_ok').length;
     const gpsLostCount = events.filter(event => event.type === 'gps_state' && event.data && event.data.state === 'lost').length;
     const audioErrors = events.filter(event => event.type === 'audio_loaderror' || event.type === 'audio_playerror').length;
+    const userLostCount = events.filter(event => event.type === 'user_lost').length;
+    const userRecoveredCount = events.filter(event => event.type === 'user_recovered').length;
+    const lostRecoveryMs = lostRecoveryDeltas(events);
+    const voiceFailCount = events.filter(event => event.type === 'step_voice_failed').length;
+    const afterplayFallbackEvents = events.filter(event => event.type === 'step_afterplay_fallback');
+    const afterplayFallbackCount = afterplayFallbackEvents.length;
+    const afterplayFallbackNoSrc = afterplayFallbackEvents.filter(event => event.data && event.data.reason === 'no_src').length;
+    const afterplayFallbackLoadError = afterplayFallbackEvents.filter(event => event.data && event.data.reason === 'loaderror').length;
+    const audiofocusRetryEvents = events.filter(event => event.type === 'audiofocus_auto_retry');
+    const audiofocusRetryCount = audiofocusRetryEvents.length;
+    const audiofocusRetryMaxAttempt = audiofocusRetryEvents.reduce((max, event) => {
+        const attempt = Number(event.data && event.data.attempt) || 0;
+        return attempt > max ? attempt : max;
+    }, 0);
     const startMs = events[0] ? events[0].t : (session.startTime ? Date.parse(session.startTime) : null);
     const endMs = events.length > 0 ? events[events.length - 1].t : startMs;
 
@@ -127,6 +164,15 @@ function summarizeSession(session) {
         gpsLostCount,
         audioErrors,
         resumeCount: events.filter(event => event.type === 'session_resume').length,
+        userLostCount,
+        userRecoveredCount,
+        lostRecoveryMedianMs: median(lostRecoveryMs),
+        voiceFailCount,
+        afterplayFallbackCount,
+        afterplayFallbackNoSrc,
+        afterplayFallbackLoadError,
+        audiofocusRetryCount,
+        audiofocusRetryMaxAttempt,
     };
 }
 
@@ -144,7 +190,7 @@ function loadSessions(dirPath) {
 }
 
 function printTable(rows) {
-    const headers = ['Session', 'Parcours', 'Date', 'Device', 'Dur', 'Step', 'GPS', 'AvgAcc', 'MaxGap', 'Sleep', 'Stale', 'Reject', 'Audio'];
+    const headers = ['Session', 'Parcours', 'Date', 'Device', 'Dur', 'Step', 'GPS', 'AvgAcc', 'MaxGap', 'Sleep', 'Stale', 'Reject', 'Audio', 'Lost', 'Rec~', 'VFail', 'ApFb'];
     const body = rows.map(row => [
         row.sessionId,
         row.parcoursName || row.parcoursId || '-',
@@ -159,6 +205,10 @@ function printTable(rows) {
         String(row.staleCallbacks),
         String(row.rejectedFixes),
         String(row.audioErrors),
+        String(row.userLostCount),
+        row.lostRecoveryMedianMs == null ? '-' : formatDuration(row.lostRecoveryMedianMs),
+        String(row.voiceFailCount),
+        String(row.afterplayFallbackCount),
     ]);
 
     const widths = headers.map((header, index) => Math.max(header.length, ...body.map(row => row[index].length)));

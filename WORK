@@ -161,6 +161,27 @@ Couleur Current / Next zone
 
 REU 12 mai
 
+
+
+
+// TEST
+OK Out of zone: unload Area -> plus d'audio -> "GPS out" message et montrer la carte 
+
+-> Je suis perdu -> montre la carte + texte "Rejoins la zone de telle couleur"
+
+
+// STARTED, to continue
+-> review NO AUDIO situations (lost too far, audio playback error, file end, ..., after crash but hors zone)
+
+-> first start (after install): freeze on splash screen 
+
+// NEEDS www/app/images/afterplay.mp3 
+OK Laters: -> "You are late" message = afterplay generalisé -> quand étape audio terminé 
+
+
+// TEST After crash/quit: recupération position !
+OK Check: si deepsleep -> resume at position quand on reveille le téléphone
+
 OK BUT NOW NEEDS A FORK (for power):
 // check Settings -> Application -> :
     - GPS auth (always ? while using app ?)
@@ -168,24 +189,6 @@ OK BUT NOW NEEDS A FORK (for power):
     - Battery restriction (Android ?)
 
 // Optimisation par défault vs Cycle de charge..
-
-
-
--> Out of zone: unload Area -> plus d'audio -> "GPS out" message et montrer la carte 
-
--> Laters: -> "You are late" message = afterplay generalisé -> quand étape audio terminé 
-
--> Je suis perdu -> montre la carte + texte "Rejoins la zone de telle couleur"
-
--> review NO AUDIO situations (lost too far, audio playback error, file end, ..., after crash but hors zone)
-
--> first start (after install): 
-freeze on splash screen 
-
-
-TEST After crash: recupération position !
-OK Check: si deepsleep -> resume at position quand on reveille le téléphone
-
 
 OK Interruption : continue even out, until back to a step zone
 OK clean players: keep only voice and afterplay

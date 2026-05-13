@@ -96,7 +96,10 @@ function clearMotionCheck()
 PAGES_CLEANUP['parcours']           = () => {
     clearWakeupNotification();
     GPSLOST_PLAYER.stop();
+    LOST_PLAYER.stop();
+    RESUME_PLAYER.stop();
     $('#gpslost-overlay').hide();
+    $('#lost-band').hide();
 };
 PAGES_CLEANUP['checknotifications'] = () => clearNotificationPermissionCheck();
 PAGES_CLEANUP['checkbatteryopt']    = () => clearBatteryOptCheck();
@@ -229,8 +232,9 @@ PAGES['select'] = (list) => {
     // Only one parcours => click it
     if (list.length == 1) select.querySelector('li').click();
 
-    // DEV: diagnostic button
+    // DEV: diagnostic + tools buttons
     $('#select-diagnostic').off().on('click', () => PAGE('diagnostic'));
+    $('#select-tools').off().on('click', () => PAGE('tools'));
 }
 
 //
@@ -742,6 +746,133 @@ PAGES['diagnostic'] = () => {
 
     // Start the runner
     runner.start()
+}
+
+//
+// TOOLS (devmode only)
+//
+PAGES['tools'] = () => {
+    if (!DEVMODE) return PAGE('select');
+
+    let $out = $('#tools-output');
+    $out.text('');
+    function appendOutput(line) {
+        let ts = new Date().toLocaleTimeString();
+        $out.append('[' + ts + '] ' + line + '\n');
+        $out.scrollTop($out[0].scrollHeight);
+    }
+
+    function activeStep() {
+        if (typeof PARCOURS === 'undefined' || !PARCOURS.spots || !PARCOURS.spots.steps) return null;
+        let idx = PARCOURS.currentStep();
+        if (idx < 0) return null;
+        return PARCOURS.find('steps', idx);
+    }
+
+    function nextStep() {
+        if (typeof PARCOURS === 'undefined' || !PARCOURS.spots || !PARCOURS.spots.steps) return null;
+        let idx = PARCOURS.currentStep();
+        let candidate = idx < 0 ? 0 : idx + 1;
+        return PARCOURS.find('steps', candidate);
+    }
+
+    // Force LOST: synthesize the same event evaluateLostState would emit.
+    // Reuses the lost handler so band, vibration, audio gates all fire.
+    $('#tools-force-lost').off().on('click', () => {
+        let target = activeStep() && activeStep()._active ? activeStep() : nextStep();
+        if (!target) { appendOutput('force-lost: no target step (parcours not started?)'); return; }
+        if (PARCOURS.state.lost) { appendOutput('force-lost: already LOST'); return; }
+        PARCOURS.state.lost = true;
+        PARCOURS.state.lostSince = Date.now();
+        PARCOURS._lostBeyondSince = null;
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('tools_force_lost', {step: PARCOURS.currentStep(), target: target._index});
+        PARCOURS.emit('lost', {target, distance: 999});
+        appendOutput('force-lost: emitted (target=' + target._spot.name + ')');
+    });
+
+    // Sortir de LOST: synthesize recover. Skips distance check.
+    $('#tools-clear-lost').off().on('click', () => {
+        if (!PARCOURS.state.lost) { appendOutput('clear-lost: not LOST'); return; }
+        PARCOURS.state.lost = false;
+        PARCOURS.state.lostSince = null;
+        PARCOURS._lostBeyondSince = null;
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('tools_clear_lost', {step: PARCOURS.currentStep()});
+        PARCOURS.emit('recover', {target: null, distance: 0});
+        appendOutput('clear-lost: emitted recover');
+    });
+
+    // Force voice failure on the active step: emit playerror directly on the
+    // step's voice player. Fix B's handler in PlayerStep will route through
+    // startAfterplay so the LATE fallback can be observed end-to-end.
+    $('#tools-force-voice-fail').off().on('click', () => {
+        let s = activeStep();
+        if (!s || !s.player || !s.player.voice) { appendOutput('force-voice-fail: no active step'); return; }
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('tools_force_voice_fail', {step: s._index});
+        // Synthesize what PlayerSimple emits on a real failure.
+        s.player.voice.emit('playerror', s.player.voice._src(), 'forced-by-tools');
+        appendOutput('force-voice-fail: emitted playerror on step ' + s._index + ' (' + s._spot.name + ')');
+    });
+
+    // Force afterplay fallback: flip the step's afterplay to default and play it.
+    // Useful to validate the DEFAULT_AFTERPLAY_PLAYER routing without breaking
+    // the parcours' real afterplay data.
+    $('#tools-force-afterplay-fallback').off().on('click', () => {
+        let s = activeStep();
+        if (!s || !s.player) { appendOutput('force-afterplay: no active step'); return; }
+        if (typeof DEFAULT_AFTERPLAY_PLAYER === 'undefined' || !DEFAULT_AFTERPLAY_PLAYER.isLoaded()) {
+            appendOutput('force-afterplay: DEFAULT_AFTERPLAY_PLAYER not loaded (images/afterplay.mp3 missing?)');
+            return;
+        }
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('tools_force_afterplay_fallback', {step: s._index});
+        // Stop whatever's currently playing on this step, then route to default.
+        if (s.player.voice) s.player.voice.stop();
+        if (s.player.afterplay) s.player.afterplay.stop();
+        s.player._defaultAfterplayActive = true;
+        s.player.playstate = 'afterplay';
+        s.player.state = 'afterplay';
+        DEFAULT_AFTERPLAY_PLAYER.stop();
+        DEFAULT_AFTERPLAY_PLAYER.play();
+        appendOutput('force-afterplay: routed step ' + s._index + ' to DEFAULT_AFTERPLAY_PLAYER');
+    });
+
+    // Show resume overlay: simulate AUDIOFOCUS_LOSS so the periodic-retry
+    // logic (Fix G) can be observed. Stay on the tools page and wait ~60s
+    // — the retry interval allows currentPage === 'tools' in devmode.
+    $('#tools-show-resume-overlay').off().on('click', () => {
+        AUDIOFOCUS = 0;
+        $('#resume-overlay').css('display', 'flex');
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('tools_show_resume_overlay', {});
+        appendOutput('resume-overlay: shown, AUDIOFOCUS=0 — retry should fire in ~60s');
+    });
+
+    // Snapshot: dump enough state to debug a stuck walker.
+    $('#tools-snapshot').off().on('click', () => {
+        let s = activeStep();
+        let n = nextStep();
+        let snap = {
+            currentPage: typeof currentPage !== 'undefined' ? currentPage : null,
+            AUDIOFOCUS: typeof AUDIOFOCUS !== 'undefined' ? AUDIOFOCUS : null,
+            GPSSIGNAL_OK: typeof GPSSIGNAL_OK !== 'undefined' ? GPSSIGNAL_OK : null,
+            GPSREVOKED: typeof GPSREVOKED !== 'undefined' ? GPSREVOKED : null,
+            DEVMODE: DEVMODE,
+            parcoursState: PARCOURS.state,
+            activeStep: s ? {
+                index: s._index,
+                name: s._spot.name,
+                active: s._active,
+                done: s._done,
+                playerState: s.player ? s.player.state : null,
+                playstate: s.player ? s.player.playstate : null,
+                defaultAfterplay: s.player ? s.player._defaultAfterplayActive : null,
+            } : null,
+            nextStep: n ? { index: n._index, name: n._spot.name } : null,
+            playersPlaying: (typeof ALL_PLAYERS !== 'undefined' ? ALL_PLAYERS : []).filter(p => p.isPlaying()).map(p => p._src()),
+            pausedPlayers: (typeof PAUSED_PLAYERS !== 'undefined' ? PAUSED_PLAYERS : []).map(p => p._src()),
+        };
+        appendOutput(JSON.stringify(snap, null, 2));
+    });
+
+    $('#tools-back').off().on('click', () => PAGE('select'));
 }
 
 //
@@ -1622,7 +1753,17 @@ PAGES['parcours'] = () => {
         $('#parcours-run').show()
         // TYPEWRITE('parcours-run')
         updateStepsMarkers()
-    }    
+
+        // Audio cue so the walker isn't dropped into silence while GPS warms up
+        // or while they walk back into the active step zone. Map is already
+        // visible on resume (the hide-on-first-fire path is gated by !isResume).
+        if (RESUME_PLAYER.isLoaded()) RESUME_PLAYER.play()
+
+        // LOST state restored from a prior session: paint the band and start
+        // the loop immediately. evaluateLostState will fire 'recover' on the
+        // next position tick if the walker already came back into range.
+        if (PARCOURS.state.lost) applyLostUI()
+    }
 
     // SIMULATION: set GEO position to 10m from parcours start
     if (GEO.mode() == 'simulate') 
@@ -1650,6 +1791,9 @@ PAGES['end'] = () => {
     PARCOURS.stopAudio();
     GPSLOST_PLAYER.stop();
     SILENT_PLAYER.stop();
+    LOST_PLAYER.stop();
+    RESUME_PLAYER.stop();
+    clearLostUI();
     if (testplayer) { testplayer.stop(); testplayer.clear(); testplayer = null; }
 
     var ending = true
@@ -1737,6 +1881,10 @@ $('#parcours-rearm').click(() => {
         PARCOURS.info.name || PARCOURS.info.file || PARCOURS.info.id || ''
     );
     PARCOURS.currentStep(-2) // Reset current step
+    PARCOURS.state.lost = false
+    PARCOURS.state.lostSince = null
+    PARCOURS._lostBeyondSince = null
+    clearLostUI()
     PARCOURS.startTracking()
     PARCOURS.stopAudio()
 
@@ -1768,6 +1916,80 @@ $('#logs-title').on('click', (e) => {
         sidebar.style.transform = 'translateY(0px)';
         $('#logs').scrollTop($('#logs')[0].scrollHeight)
     }
+});
+
+// LATE state fallback: shared loop played when a step's voice ends but the
+// step has no afterplay (or its afterplay file failed to load). Silently
+// silent if images/afterplay.mp3 isn't bundled — PlayerStep.startAfterplay
+// gates on isLoaded() before routing here.
+var DEFAULT_AFTERPLAY_PLAYER = new PlayerSimple(true, 0);
+DEFAULT_AFTERPLAY_PLAYER.load(BASEURL+'/images/', {src: 'afterplay.mp3', master: 1}, false);
+
+// RESUME cue: short one-shot played on app relaunch so the walker hears
+// something while GPS warms up / they walk back into the active zone.
+// Silently silent if images/resume.mp3 isn't bundled.
+var RESUME_PLAYER = new PlayerSimple(false, 0);
+RESUME_PLAYER.load(BASEURL+'/images/', {src: 'resume.mp3', master: 1}, false);
+
+// LOST state: looped message while the walker is too far from the active /
+// next step. Silently silent if images/youlost.mp3 isn't bundled.
+var LOST_PLAYER = new PlayerSimple(true, 0);
+LOST_PLAYER.load(BASEURL+'/images/', {src: 'youlost.mp3', master: 1}, false);
+
+// Tracks current GEO signal state (mirrors GEO.on('stateUpdate')). LOST is
+// gated on this — GPS-lost takes priority and suppresses the LOST band while
+// the bg-geo plugin reports no usable fix.
+var GPSSIGNAL_OK = true;
+
+// LOST state UI helpers — split out so the resume path can repaint the band
+// on a kill-and-relaunch without duplicating the entry handler's audio gates.
+function applyLostUI() {
+    $('#lost-band').css('display', 'flex');
+    if (typeof LOST_PLAYER !== 'undefined' && LOST_PLAYER.isLoaded()) LOST_PLAYER.play();
+}
+function clearLostUI() {
+    if (typeof LOST_PLAYER !== 'undefined') LOST_PLAYER.stop();
+    $('#lost-band').hide();
+}
+
+PARCOURS.on('lost', (info) => {
+    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('user_lost', {
+        step: PARCOURS.currentStep(),
+        target_index: info && info.target ? info.target._index : null,
+        target_name: info && info.target ? info.target._spot.name : null,
+        distance: info ? Math.round(info.distance) : null,
+    });
+    if (navigator.vibrate) navigator.vibrate([200, 100, 200, 100, 600]);
+
+    // Pause the active step's audio (voice or afterplay) — store() in
+    // evaluateLostState already snapshotted the voice position above.
+    let activeStep = PARCOURS.find('steps', PARCOURS.currentStep());
+    if (activeStep && activeStep.player && activeStep.player.isPlaying()) {
+        activeStep.player.pause();
+    }
+
+    // Stop interruption zones outright (Re-crossing while LOST must not re-trigger
+    // them — Parcours.update early-returns during LOST so that's automatic, but
+    // we also kill any audio currently playing).
+    PARCOURS.stopAudio('zones');
+
+    // LOST masks offlimit: silence offlimit loops too.
+    PARCOURS.stopAudio('offlimits');
+
+    applyLostUI();
+});
+
+PARCOURS.on('recover', (info) => {
+    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('user_recovered', {
+        step: PARCOURS.currentStep(),
+        distance: info ? Math.round(info.distance) : null,
+    });
+    if (navigator.vibrate) navigator.vibrate([200, 80, 200]);
+
+    clearLostUI();
+
+    // Active-step resume + next-step fire are handled by Step.updatePosition's
+    // own branches on the next position tick (the LOST gate is now off).
 });
 
 // GPS LOST
@@ -1860,6 +2082,15 @@ GEO.on('bgServiceStop', (info) => {
 
 GEO.on('stateUpdate', (state) => {
     if (state == 'lost') {
+        // GPS-lost takes priority over LOST. Always suppress the LOST band /
+        // loop, even if the UX gates below skip the gpslost overlay — the
+        // signal is unreliable, so we must not let LOST run on top.
+        GPSSIGNAL_OK = false;
+        if (PARCOURS.state.lost) {
+            $('#lost-band').hide();
+            LOST_PLAYER.stop();
+        }
+
         if (currentPage != 'parcours') return;                                  // only if on parcours page
         if (GEO.mode() == 'simulate') return;                                   // not in simulate mode
         if (PARCOURS.currentStep() == PARCOURS.spots.steps.length - 1) return;  // not if last step
@@ -1876,6 +2107,16 @@ GEO.on('stateUpdate', (state) => {
         probeGpsHealth();
     }
     if (state == 'ok') {
+        GPSSIGNAL_OK = true;
+        // Drop any stale sustain timestamp — a value from before the signal
+        // dropped would let LOST fire on the very first recovered tick instead
+        // of giving the walker a fresh window to get back on course.
+        PARCOURS._lostBeyondSince = null;
+        // If LOST was active going into the GPS-lost window, repaint the
+        // band+loop now that GPS is back. evaluateLostState will exit LOST on
+        // the next position tick if the walker is already in range.
+        if (PARCOURS.state.lost && currentPage === 'parcours') applyLostUI();
+
         if (currentPage != 'parcours') return; // only if on parcours page
         if (AUDIOFOCUS == 0) return;
         console.log('GEO position ok');
@@ -1910,6 +2151,35 @@ setInterval(() => {
         }
     });
 }, 30000);
+
+// Periodic re-request of AUDIOFOCUS while the resume overlay is still up.
+// Some Android OEMs (and occasionally iOS) drop the AUDIOFOCUS_GAIN callback
+// after a transient loss, leaving the walker silent in their pocket with no
+// way to recover unless they look at the screen and tap. We re-ask once a
+// minute and vibrate the first few attempts to nudge them.
+var AUDIOFOCUS_RETRY_COUNT = 0;
+setInterval(() => {
+    // Allow the tools page in devmode so the show-resume-overlay test fires
+    // its retry without forcing the tester onto a live parcours.
+    if (currentPage !== 'parcours' && !(DEVMODE && currentPage === 'tools')) return;
+    if (typeof AUDIOFOCUS === 'undefined' || AUDIOFOCUS !== 0) {
+        AUDIOFOCUS_RETRY_COUNT = 0;
+        return;
+    }
+    if (!$('#resume-overlay').is(':visible')) {
+        AUDIOFOCUS_RETRY_COUNT = 0;
+        return;
+    }
+    if (GPSREVOKED) return; // revoked overlay takes priority
+
+    AUDIOFOCUS_RETRY_COUNT++;
+    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audiofocus_auto_retry', {attempt: AUDIOFOCUS_RETRY_COUNT});
+    if (AUDIOFOCUS_RETRY_COUNT <= 3 && navigator.vibrate) navigator.vibrate([300, 100, 300, 100, 300]);
+
+    if (typeof requestAudioFocus === 'function') {
+        requestAudioFocus().catch((e) => console.warn('[AudioFocus] auto-retry failed:', e));
+    }
+}, 60000);
 
 $('#gpslost-resume').on('click', () => {
     TELEMETRY.log('gps_force_resume', {step: PARCOURS.currentStep()});

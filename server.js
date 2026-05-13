@@ -385,6 +385,26 @@ function summarizeTelemetrySessionData(data) {
     return Number.isFinite(value) ? sum + value : sum;
   }, 0);
 
+  // LOST recovery deltas — pair each user_lost with the next user_recovered.
+  const lostRecoveryDeltas = [];
+  let pendingLost = null;
+  for (const event of events) {
+    if (event.type === 'user_lost') pendingLost = event;
+    else if (event.type === 'user_recovered' && pendingLost) {
+      const delta = Number(event.t) - Number(pendingLost.t);
+      if (Number.isFinite(delta) && delta >= 0) lostRecoveryDeltas.push(delta);
+      pendingLost = null;
+    }
+  }
+  let lostRecoveryMedianMs = null;
+  if (lostRecoveryDeltas.length > 0) {
+    const sorted = [...lostRecoveryDeltas].sort((left, right) => left - right);
+    const mid = Math.floor(sorted.length / 2);
+    lostRecoveryMedianMs = sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  }
+
+  const afterplayFallbackEvents = events.filter(event => event.type === 'step_afterplay_fallback');
+
   return {
     finalStep,
     uniqueStepCount: uniqueSteps.size,
@@ -398,7 +418,15 @@ function summarizeTelemetrySessionData(data) {
     rejectedFixes: rejectedFromSummary || events.filter(event => event.type === 'gps_trigger_rejected').length,
     heartbeatRecoveries: events.filter(event => event.type === 'gps_heartbeat_ok').length,
     gpsLostCount: events.filter(event => event.type === 'gps_state' && event.data && event.data.state === 'lost').length,
-    audioErrors: events.filter(event => event.type === 'audio_loaderror' || event.type === 'audio_playerror').length
+    audioErrors: events.filter(event => event.type === 'audio_loaderror' || event.type === 'audio_playerror').length,
+    userLostCount: events.filter(event => event.type === 'user_lost').length,
+    userRecoveredCount: events.filter(event => event.type === 'user_recovered').length,
+    lostRecoveryMedianMs,
+    voiceFailCount: events.filter(event => event.type === 'step_voice_failed').length,
+    afterplayFallbackCount: afterplayFallbackEvents.length,
+    afterplayFallbackNoSrc: afterplayFallbackEvents.filter(event => event.data && event.data.reason === 'no_src').length,
+    afterplayFallbackLoadError: afterplayFallbackEvents.filter(event => event.data && event.data.reason === 'loaderror').length,
+    audiofocusRetryCount: events.filter(event => event.type === 'audiofocus_auto_retry').length
   };
 }
 
@@ -458,7 +486,15 @@ function buildSessionSummary(data) {
     rejectedFixes: summary.rejectedFixes,
     heartbeatRecoveries: summary.heartbeatRecoveries,
     gpsLostCount: summary.gpsLostCount,
-    audioErrors: summary.audioErrors
+    audioErrors: summary.audioErrors,
+    userLostCount: summary.userLostCount,
+    userRecoveredCount: summary.userRecoveredCount,
+    lostRecoveryMedianMs: summary.lostRecoveryMedianMs,
+    voiceFailCount: summary.voiceFailCount,
+    afterplayFallbackCount: summary.afterplayFallbackCount,
+    afterplayFallbackNoSrc: summary.afterplayFallbackNoSrc,
+    afterplayFallbackLoadError: summary.afterplayFallbackLoadError,
+    audiofocusRetryCount: summary.audiofocusRetryCount
   };
 }
 
