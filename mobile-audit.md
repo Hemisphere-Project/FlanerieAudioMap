@@ -229,11 +229,27 @@ Files: `www/app/app.html`, `www/app/pages.js`
 
 Files: `www/app/assets/player.js`, `www/app/assets/geoloc.js`
 
-#### P1.12 Android battery optimization guidance ✅ DONE (2026-05-05)
+#### P1.12 Android battery optimization guidance ✅ DONE (2026-05-05), hardened (2026-05-13)
 
-Blocking page `checkbatteryopt` inserted between `checknotifications` and `rdv` on Android. Calls `RequestOptimizations()` directly on first failure (native system dialog). Auto-polls 10× / 15s, then shows manual fallback buttons. OEM-specific restrictions detected and surfaced (non-blocking advisory). DEVMODE bypasses.
+Blocking page `checkbatteryopt` inserted between `checknotifications` and `rdv` on Android. Calls `RequestOptimizations()` directly on first failure (native system dialog). Auto-polls 10× / 15s, then shows manual fallback buttons. DEVMODE bypasses.
 
-Files: `www/app/app.html`, `www/app/pages.js`
+**Bugs fixed (2026-05-13):**
+
+- The "Paramètres batterie" button used `plugin.RequestOptimizationsMenu()`, whose Java implementation has an inverted conditional (`if (pm.isIgnoringBatteryOptimizations(...))`) so the settings page opens only when the app is already whitelisted — i.e., never when the user needs it. Replaced with `GEO.showAppSettings()` which opens app details on both Android and iOS via the bg-geo plugin. The plugin bug remains and is now in the fork backlog (see "Deferred plugin fork — power optimization").
+- `HaveProtectedAppsCheck()` returns a JSON object `{skip_message, found_intent}` but the JS treated it as a boolean — the OEM banner showed on every device regardless of whether an OEM intent was actually callable. Fixed to check `result.found_intent`.
+- The `skipProtectedAppCheck` SharedPreferences flag (sticky after first call) is now irrelevant because banner gating no longer reads it.
+
+**Manufacturer-tailored guidance added (2026-05-13):**
+
+`batteryKillFamily()` reads `device.manufacturer` and maps to: Samsung, Xiaomi/Redmi/POCO, Huawei/Honor, OnePlus, Oppo/Realme, Vivo, Asus. `batteryKillCopy(family)` returns French Settings steps per family (Samsung "Apps en veille profonde", Xiaomi "Démarrage automatique" + "Pas de restrictions" + lock in recents, Huawei "Lancement d'apps manuel", etc.). Doze whitelist alone is rarely sufficient on OEM-modified Android — the tailored block is now rendered up front rather than after first failure.
+
+**OEM-kill mid-walk heuristic (2026-05-13):**
+
+`geoloc.js` re-emits the bg-geo `'stop'` event as `GEO.emit('bgServiceStop', {intentional})`. `pages.js` keeps a 5-minute rolling window: 2 unexpected stops trigger `showBatteryKillOverlay()`, which reuses the GPS-lost overlay DOM with "Restriction batterie détectée" + manufacturer-tailored Settings steps + Settings deep link. Telemetry: `bg_stop_repeated`, `battery_kill_overlay`.
+
+Files: `www/app/app.html`, `www/app/pages.js`, `www/app/assets/geoloc.js`
+
+Regression risk: **LOW** — the JS-only changes are additive; the broken plugin call was already failing silently.
 
 #### P1.13 Page exit cleanup system ✅ DONE (2026-05-05)
 
@@ -295,15 +311,59 @@ Intentionally low-security client-side gate — acceptable because the team is p
 
 `UIBackgroundModes: location + audio + processing` present in `FlanerieCordova/config.xml`. `KeepAVAudioSessionAlwaysActive: YES` prevents `CDVSound.m` from resetting the session category between NativeMediaPlayer tracks.
 
-#### P3.2 iOS location permission progression ✅ DONE (2026-05-06)
+#### P3.2 iOS location permission progression ✅ DONE (2026-05-06), hardened (2026-05-13)
 
 iOS 13+ no longer shows "Always" in the initial dialog. `confirmgeo` now detects `AUTHORIZED_FOREGROUND` immediately and shows the "need Always" guidance + Settings button without requiring the user to tap "J'accepte" first.
 
-Files: `www/app/pages.js`
+**Front-loaded copy (2026-05-13):** `confirmgeo` first-pass description now spells out "Toujours autoriser" before the user clicks J'accepte and triggers the system dialog. Previously the "Toujours" guidance only appeared after the first failed attempt.
+
+**iOS Settings deep link fixed (2026-05-13):** `GEO.showLocationSettings()` on iOS previously called `alert()` with a text path; now calls `BackgroundGeolocation.showAppSettings()` which opens the app's own Settings page via `UIApplicationOpenSettingsURLString`. The legacy `prefs:` URL deep-link to system pages remains deprecated and is not used.
+
+**`confirmios` page removed (2026-05-13):** the post-`startgeo` reminder page is unreachable in any state where it would be useful — `startGeoloc()` already rejects unless `AUTHORIZED` (Always), so by the time the user reached `confirmios` they had already configured Always. Replaced with direct route to `checkmotion`.
+
+Files: `www/app/pages.js`, `www/app/app.html`, `www/app/assets/geoloc.js`
 
 #### P3.3 Android 14+ foreground service type ✅ VERIFIED DONE (2026-05-05)
 
 `FOREGROUND_SERVICE_LOCATION` permission and `android:foregroundServiceType="location"` service declaration already present via the background geolocation plugin's `plugin.xml`.
+
+#### P3.3b Android ACCESS_BACKGROUND_LOCATION hard-block ✅ DONE (2026-05-13)
+
+**Problem:** the bg-geo Android facade's `hasPermissions()` only checks `ACCESS_COARSE_LOCATION` + `ACCESS_FINE_LOCATION`, so a user who picks "While using app" on the system dialog passes `startGeoloc()` with `AUTHORIZED`. On Android 11+ the first dialog no longer offers "Allow all the time"; the user must flip it in Settings. Result before fix: walk silently dies the moment the screen locks.
+
+**Resolution:** new blocking page `checkbgloc` inserted between `startgeo` and `checknotifications` on Android. `GEO.checkBackgroundLocationAndroid()` uses `cordova-plugin-android-permissions` to verify `ACCESS_BACKGROUND_LOCATION`. On Android < 10 the check resolves immediately (permission doesn't exist). First failure triggers `requestPermission()` (may show the system dialog on Android 10, silently denies on 11+); persistent denial polls every 1.5s with a Settings deep link + "J'ai autorisé" retry. No skip button.
+
+Files: `www/app/app.html`, `www/app/pages.js`, `www/app/assets/geoloc.js`
+
+Regression risk: **LOW** — Android < 10 skipped automatically; existing AUTHORIZED-only users (already granted via reinstall) pass instantly.
+
+#### P3.3c iOS motion permission hard-block ✅ DONE (2026-05-13)
+
+**Problem:** the bg-geo plugin starts `CMMotionActivityManager` opportunistically during `start`, which surfaces the iOS Motion auth dialog. The result was not checked. If the user denies, `GEO.motionIsStationary` stays false, the stationary-detection guard in the GPS-lost handler is defeated, and pocketed pauses during the walk trigger spurious "GPS perdu" overlays + audio cues.
+
+**Resolution:** new blocking page `checkmotion` inserted after `startgeo` on iOS. `geoloc.js` now sets `GEO.motionAuthorized = true` on the first `activity` event from the bg-geo plugin. `pages.js` polls for that flag with an 8s soft window — if no event by then, the page renders insistent copy ("Réglages > Flanerie > Mouvement et forme") + Settings deep link + "J'ai autorisé" retry button. Polling continues forever; granting Motion in Settings and returning to the app auto-advances within ~1s. No skip button.
+
+Telemetry: `motion_authorized` (first activity event), `motion_check` (granted/denied + waited_ms).
+
+Files: `www/app/app.html`, `www/app/pages.js`, `www/app/assets/geoloc.js`
+
+Regression risk: **LOW** — granted users skip immediately (event arrives in < 1s typically). 8s wait is conservative.
+
+#### P3.3d Mid-walk authorization + services monitoring ✅ DONE (2026-05-13)
+
+**Problem:** if the user toggled location off in Settings, revoked the app's auth, or downgraded to "While using" *during* the 45-min walk, the app had no signal until the 30s GPS-lost timeout fired, and even then the recovery copy was generic ("Move to an open area") — useless when the actual fix is to re-grant auth in Settings.
+
+**Resolution:**
+
+- `GEO.checkHealth()` helper returns `{servicesEnabled, authorization, bgLocationOk}` in one call.
+- `BackgroundGeolocation.on('authorization', ...)` re-emits as `GEO.emit('authorizationChanged', status)`; the pages.js listener shows a dedicated "Autorisation révoquée" overlay during the walk.
+- `probeGpsHealth()` fires on every `stateUpdate('lost')` and escalates the transient GPS-lost overlay to "GPS désactivé" / "Autorisation révoquée" copy with a Settings button when the cause is system-level.
+- 30s periodic poll while on the parcours page catches Settings-toggle reversals (user disables then re-enables auth without leaving GPS-lost). When health re-passes, the `GPSREVOKED` flag clears and the next `stateUpdate('ok')` hides the overlay.
+- Shared `setGpsLostOverlay()` / `showGpsRevokedOverlay()` / `showBatteryKillOverlay()` all reuse the existing `#gpslost-overlay` DOM with a new `#gpslost-settings` Settings button that opens app details via `GEO.showAppSettings()`.
+
+Telemetry: `gps_revoked` (reason: services|auth), `gps_settings_open`.
+
+Files: `www/app/app.html` (added `#gpslost-settings`), `www/app/pages.js`, `www/app/assets/geoloc.js`
 
 #### P3.4 iOS locked-screen GPS-triggered audio start ✅ DONE (2026-05-07)
 
@@ -417,6 +477,77 @@ Android SDK 36 + Build Tools 36.0.0 must be installed via SDK Manager first.
 
 No reproducible build checklist or smoke-test script. Add a minimal one (Android debug build + iOS prepare in Xcode) before the next platform upgrade.
 
+#### C5 Deferred plugin fork — power optimization [open, scheduled next session]
+
+**Status:** scoped 2026-05-13, deferred (cannot republish the app this session). The JS-only fixes for known bugs and manufacturer-tailored copy are already shipped under P1.12 — this entry covers what requires forking `cordova-plugin-power-optimization` (currently `github:snt1017/cordova-plugin-power-optimization`) and adding native code.
+
+**Why fork:**
+
+The current plugin handles only Doze (`ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`) and a stale OEM intent list. Everything else that actually kills a foreground service on modern Android is invisible to it. For a 45-min locked-pocket walk, the biggest unhandled signals are stock-Android background restriction and OEM-specific sleep features (Samsung "Apps en veille profonde", Xiaomi autostart, etc.).
+
+**Java methods to add:**
+
+| Method | API | Purpose |
+|---|---|---|
+| `IsBackgroundRestricted()` | 28+ | `ActivityManager.isBackgroundRestricted()` — single biggest missing signal; user toggled "Restrict background activity" → FG service killed at lock within seconds |
+| `IsPowerSaveMode()` | universal | `PowerManager.isPowerSaveMode()` — phone-wide battery saver; soft warning, user may need it |
+| `GetStandbyBucket()` | 28+ | `UsageStatsManager.getAppStandbyBucket()` — `RESTRICTED`/`RARE` buckets throttle aggressively |
+| `IsAutoRevokeWhitelisted()` | 30+ | `PackageManager.isAutoRevokeWhitelisted()` — hibernation watch (long-tail) |
+| `RequestAutoRevokeWhitelist()` | 30+ | `Intent.ACTION_AUTO_REVOKE_PERMISSIONS` |
+| `GetManufacturer()` | universal | `Build.MANUFACTURER` + `Build.MODEL` — already available via `cordova-plugin-device` but useful for plugin self-tests |
+| `OpenAppDetailsSettings()` | universal | `ACTION_APPLICATION_DETAILS_SETTINGS` — universal fallback when OEM intents fail |
+| `RequestOptimizationsMenu()` **FIX** | 23+ | Existing method's `if (pm.isIgnoringBatteryOptimizations(...))` conditional is inverted — opens settings page only when already whitelisted. Either remove the guard or invert it. JS fix already in P1.12 (button now bypasses to `showAppSettings()`), so this is cleanup. |
+
+**OEM intent table expansion (`Constants.java`):**
+
+Current coverage: Xiaomi (1 partial), Samsung (4 intents all pre-Android 10), Huawei, LeTV, Meizu. Missing: OnePlus, Oppo, Realme, Vivo, Honor, modern Samsung. Add intents from `dontkillmyapp.com` as starting list:
+
+- Samsung One UI 4+: `com.samsung.android.lool/.battery.app.power.AppSleepingActivity` and `com.samsung.android.sm/.SmartManagerDashBoardActivity`
+- OnePlus: `com.oneplus.security/.com.oneplus.security.chainlaunch.view.ChainLaunchAppListActivity`
+- Oppo/Realme: `com.coloros.safecenter/.startupapp.StartupAppListActivity`
+- Vivo: `com.vivo.permissionmanager/.activity.BgStartUpManagerActivity`
+- Honor: `com.hihonor.systemmanager/.startupmgr.ui.StartupNormalAppListActivity` (and the legacy `com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity` for pre-split Honor)
+
+**JS wrappers (`www/PowerOptimization.js`):** add corresponding promise-returning exports for each new method.
+
+**UX integration in `pages.js` (`checkbatteryopt`) once fork is live:**
+
+1. **Hard-block on `isBackgroundRestricted() === true`** — render specific copy ("Activité en arrière-plan restreinte: ouvrez Réglages > Apps > Flanerie > Batterie > Non restreint") + Settings button. Re-poll until cleared.
+2. **Soft-warn on `isPowerSaveMode() === true`** — show advisory banner ("Économiseur de batterie actif — peut interrompre la marche"). Continue, do not block. Telemetry only on user choice.
+3. **Telemetry on `getAppStandbyBucket()`** — log bucket once during onboarding. No UX impact for a single walk.
+4. **Optional: pre-check during onboarding even before `checkbatteryopt`** to fail fast.
+
+**Mid-walk integration:**
+
+- Add `isBackgroundRestricted()` to the existing 30s `checkHealth()` poll (currently checks services + auth + bg-location). If it flips true mid-walk, escalate to `showBatteryKillOverlay()` immediately rather than waiting for two unexpected bg-geo `'stop'` events.
+
+**Hard-block gate map (target state after fork):**
+
+| Layer | Today | After fork |
+|---|---|---|
+| Doze whitelist | hard-block ✅ | hard-block ✅ |
+| Background restricted | not detected ❌ | **hard-block** |
+| Battery saver | not detected ❌ | soft warn |
+| Standby bucket | not detected ❌ | telemetry only |
+| Auto-revoke / hibernation | not detected ❌ | skip (long-tail, irrelevant for a single walk) |
+| Samsung Sleeping apps | OEM-banner advisory | hard-block + manufacturer-tailored copy (text already shipped in P1.12) |
+| Other OEM autostart | OEM-banner advisory (stale intents) | hard-block + updated intent table + tailored copy |
+
+**Files to be modified:**
+
+- Fork → `~/Bakery/cordova-plugin-power-optimization/` (match the existing pattern with `cordova-plugin-audiofocus` and `cordova-background-geolocation-plugin`)
+- `src/android/PowerOptimization.java` — add 7 methods, fix `RequestOptimizationsMenu` conditional
+- `src/android/Constants.java` — extend OEM intent table
+- `www/PowerOptimization.js` — add JS wrappers
+- `plugin.xml` — bump version, add new permissions if any (none needed for the queries themselves; `PACKAGE_USAGE_STATS` would be required for `getAppStandbyBucket()` accurate bucket — but the API works without it, just returns `STANDBY_BUCKET_ACTIVE` by default; leave permission optional)
+- `FlanerieCordova/package.json` — point dependency at the fork
+- `FlanerieAudioMap/www/app/pages.js` — wire new gates in `checkbatteryopt`, extend mid-walk health probe
+- `FlanerieAudioMap/www/app/app.html` — add restricted-state copy slots if needed
+
+**Estimated effort:** half a day. Most of it is Java boilerplate + OEM-intent research; UX wiring is incremental on top of P1.12.
+
+**Regression risk after fork:** **MEDIUM** — hard-blocking on `isBackgroundRestricted` will catch real users whose phones are misconfigured; need a clear escape path (Settings deep link + retry) and field validation on a Samsung device known to background-restrict by default.
+
 ---
 
 ## Recommended Execution Sequence
@@ -427,8 +558,14 @@ No reproducible build checklist or smoke-test script. Add a minimal one (Android
 - P1.5c GPS-lost timeout unified at 30s — field test pending
 - P0.5 v2.4.0 GPS fork — deployed, field test pending on both platforms
 - C2 platform/plugin upgrades — configured, rebuild pending
+- P1.12 battery-opt bugs + manufacturer-tailored copy + OEM-kill heuristic (2026-05-13) — field test pending
+- P3.2 confirmgeo Toujours copy front-loaded + iOS Settings deep link + `confirmios` removal (2026-05-13)
+- P3.3b Android `ACCESS_BACKGROUND_LOCATION` hard-block (2026-05-13) — needs validation on a fresh Android 11+ install
+- P3.3c iOS motion permission hard-block (2026-05-13)
+- P3.3d mid-walk authorization + services + bg-location monitoring (2026-05-13)
 
-**Next to implement:**
+**Next to implement (next session — cannot republish this session):**
+- **C5 Power optimization plugin fork** (scoped 2026-05-13): `isBackgroundRestricted` + `isPowerSaveMode` + standby bucket + updated OEM intent table + `RequestOptimizationsMenu` Java fix. Mid-walk `checkHealth()` extended to include background-restricted. Manufacturer-tailored copy already shipped in P1.12 — the fork unlocks the corresponding hard-block.
 - P0.3 / P0.5 Fix 1e: Android AlarmManager JS wakeup (deferred)
 - P1.5 full timer/listener audit (deferred from P1.5 partial)
 - P3.5 Plan B: native `getCurrentPosition()` during GPS tasks (if telemetry shows `_positionSec` staleness)
@@ -451,10 +588,17 @@ No reproducible build checklist or smoke-test script. Add a minimal one (Android
 
 ### GPS and lifecycle
 - Android 13+ fresh install: grant/deny location and notifications in different orders
+- Android 11+ fresh install: pick "While using app" on the first dialog → `checkbgloc` must hard-block with Settings deep link; granting "Allow all the time" in Settings and returning must auto-advance
 - Android device with battery saver enabled
 - Android device left stationary for several minutes mid-walk
+- Android device with "Restrict background activity" toggled in Settings → walk should fail at lockscreen today; after C5 fork: `checkbatteryopt` hard-blocks
+- Samsung device with default "Apps en veille profonde" auto-add behaviour: verify the tailored copy is shown and Settings link works
+- Mid-walk: toggle location services off in shade → "GPS désactivé" overlay must appear within 30s; re-enable → overlay must auto-clear at next fix
+- Mid-walk: revoke location auth via app Settings → "Autorisation révoquée" overlay must appear; re-grant → overlay must auto-clear
+- Two unexpected bg-geo `'stop'` events within 5 min (force-stop the service via adb on Android) → battery-kill overlay must appear with manufacturer-tailored copy
 - iPhone with location set to `While Using` then changed to `Always`
-- iPhone left stationary: verify no false "GPS lost" audio cue
+- iPhone fresh install: deny motion auth → `checkmotion` must hard-block with Settings deep link; granting in Settings and returning must auto-advance within ~1s
+- iPhone left stationary: verify no false "GPS lost" audio cue (depends on motion auth granted)
 - Lock phone during parcours and keep it in pocket for extended time
 - Resume after accidental app foreground/background transitions
 
