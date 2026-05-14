@@ -1745,8 +1745,8 @@ PAGES['parcours'] = () => {
     $('#parcours-run').hide()
 
     // "Je suis perdu·e" button toggles the recovery map. Always visible during
-    // the walk — the visual state (amber idle / dark "✕ Retour à l'écoute" when
-    // map is open) is driven by openMapForRecovery / closeMapForRecovery.
+    // the walk — the label flips between "Je suis perdu·e" and "Retour à
+    // l'écoute", driven by openMapForRecovery / closeMapForRecovery.
     $('#parcours-lost').show().off().on('click', () => {
         if (MAP_RECOVERY_OPEN) closeMapForRecovery({source: 'manual_dismiss'});
         else openMapForRecovery({source: 'manual'});
@@ -1994,7 +1994,16 @@ function clearLostUI() {
 var MAP_RECOVERY_OPEN = false;
 var LOST_DISTANCE_LISTENER = null;
 var LOST_DISTANCE_LAST = null;
-var PEEK_BANNER_TIMER = null;
+
+// Instruction text under the map. Always ends with "Rejoignez la zone bleue
+// claire."; prefixed with "Vous semblez un peu perdu." while LOST is active.
+function updateMapInstruction() {
+    let lost = PARCOURS.state && PARCOURS.state.lost;
+    let prefix = lost ? 'Vous semblez un peu perdu. ' : '';
+    $('#map-instruction-text').html(
+        prefix + 'Rejoignez la zone <b class="zone-color-target">bleue claire</b>.'
+    );
+}
 
 function fitTargetBounds() {
     if (!document.MAP) return;
@@ -2017,19 +2026,19 @@ function fitTargetBounds() {
 }
 
 function updateLostDistance(position) {
+    let $d = $('#map-instruction-distance');
     let target = PARCOURS.lostTarget();
-    if (!target) { $('#lost-distance').hide(); return; }
+    if (!target) { $d.text(''); return; }
     let pos = position || GEO.lastPosition;
-    if (!pos || !pos.coords) { $('#lost-distance-text').text('→ — m'); return; }
+    if (!pos || !pos.coords) { $d.text('→ — m'); return; }
 
     let d = Math.round(target.distanceToBorder(pos));
-    $('#lost-distance-text').text('→ ' + d + ' m');
+    $d.text('→ ' + d + ' m');
 
     // Trend coloring: green if shrinking, red if growing, neutral otherwise.
-    let band = $('#lost-distance');
     if (LOST_DISTANCE_LAST !== null) {
-        if (d < LOST_DISTANCE_LAST - 1) band.removeClass('is-receding').addClass('is-approaching');
-        else if (d > LOST_DISTANCE_LAST + 1) band.removeClass('is-approaching').addClass('is-receding');
+        if (d < LOST_DISTANCE_LAST - 1) $d.removeClass('is-receding').addClass('is-approaching');
+        else if (d > LOST_DISTANCE_LAST + 1) $d.removeClass('is-approaching').addClass('is-receding');
     }
     LOST_DISTANCE_LAST = d;
 }
@@ -2037,7 +2046,7 @@ function updateLostDistance(position) {
 function startLostDistanceUpdater() {
     if (LOST_DISTANCE_LISTENER) return;
     LOST_DISTANCE_LAST = null;
-    $('#lost-distance').removeClass('is-approaching is-receding').show();
+    $('#map-instruction-distance').removeClass('is-approaching is-receding');
     updateLostDistance(); // paint once immediately
     LOST_DISTANCE_LISTENER = (pos) => updateLostDistance(pos);
     GEO.on('position', LOST_DISTANCE_LISTENER);
@@ -2049,21 +2058,7 @@ function stopLostDistanceUpdater() {
         LOST_DISTANCE_LISTENER = null;
     }
     LOST_DISTANCE_LAST = null;
-    $('#lost-distance').hide().removeClass('is-approaching is-receding');
-}
-
-function showPeekBanner() {
-    if (PEEK_BANNER_TIMER) clearTimeout(PEEK_BANNER_TIMER);
-    $('#peek-banner').css({display: 'flex', opacity: 1});
-    PEEK_BANNER_TIMER = setTimeout(() => {
-        $('#peek-banner').css('opacity', 0);
-        PEEK_BANNER_TIMER = setTimeout(() => $('#peek-banner').hide(), 500);
-    }, 4000);
-}
-
-function hidePeekBanner() {
-    if (PEEK_BANNER_TIMER) { clearTimeout(PEEK_BANNER_TIMER); PEEK_BANNER_TIMER = null; }
-    $('#peek-banner').hide();
+    $('#map-instruction-distance').removeClass('is-approaching is-receding');
 }
 
 function openMapForRecovery(opts) {
@@ -2074,7 +2069,7 @@ function openMapForRecovery(opts) {
     if (typeof TELEMETRY !== 'undefined' && !alreadyOpen) TELEMETRY.log('map_opened', {source: opts.source || 'unknown'});
 
     $('#parcours-map').css('opacity', 1);
-    $('#parcours-lost').addClass('is-active').text('✕ Retour à l\'écoute');
+    $('#parcours-lost').text('Retour à l\'écoute');
 
     if (document.MAP) {
         try { document.MAP.dragging.enable(); } catch(e) {}
@@ -2088,13 +2083,9 @@ function openMapForRecovery(opts) {
     }
 
     fitTargetBounds();
+    updateMapInstruction();
+    $('#map-instruction').show();
     startLostDistanceUpdater();
-
-    // Manual peek shows an ephemeral banner so the walker knows what to do.
-    // LOST state has its own band (with audio loop), so we suppress the peek
-    // banner there to avoid two top banners.
-    if (opts.source === 'manual') showPeekBanner();
-    else hidePeekBanner();
 }
 
 function closeMapForRecovery(opts) {
@@ -2104,7 +2095,7 @@ function closeMapForRecovery(opts) {
     if (typeof TELEMETRY !== 'undefined' && wasOpen) TELEMETRY.log('map_closed', {source: opts.source || 'unknown'});
 
     $('#parcours-map').css('opacity', 0);
-    $('#parcours-lost').removeClass('is-active').text('📍 Je suis perdu·e');
+    $('#parcours-lost').text('Je suis perdu·e');
 
     if (document.MAP) {
         try { document.MAP.dragging.disable(); } catch(e) {}
@@ -2119,7 +2110,7 @@ function closeMapForRecovery(opts) {
     }
 
     stopLostDistanceUpdater();
-    hidePeekBanner();
+    $('#map-instruction').hide();
 }
 
 PARCOURS.on('lost', (info) => {
