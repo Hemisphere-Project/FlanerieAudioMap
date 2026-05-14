@@ -514,8 +514,12 @@ class PlayerSimple extends EventEmitter
 
     load(basepath, media, usemediapath = true) {
         this._media = media
-        
+
         if (!media || !media.src || media.src == '-') return
+
+        // Default master gain — a media object from parcours JSON may omit it,
+        // which would make volume() compute _volume * undefined = NaN.
+        if (typeof media.master !== 'number') media.master = 1
 
         if (usemediapath && document.LOCALMEDIA_PATH) {
             let localpath = document.LOCALMEDIA_PATH.split('/')

@@ -1,14 +1,22 @@
 var allSteps = [];
 
-// LOST thresholds (in metres of distanceToBorder) — hysteresis keeps the
-// state stable across noisy fixes. Exit is 0 so the band hides exactly when
-// the walker crosses into the zone, syncing with the resume-current branch
-// that fires audio on the same position tick.
+// LOST entry threshold (metres of distanceToBorder to the nearest reachable
+// step). Recovery is not a distance threshold — the walker exits LOST when
+// they are back INSIDE any reachable step (see evaluateLostState), which
+// syncs the band hiding with the position tick that resumes/fires audio.
 const LOST_ENTER_M = 50;
-const LOST_EXIT_M = 0;
 // Sustain window: only enter LOST after the walker has been beyond
 // LOST_ENTER_M continuously for this long. Filters single bad GPS fixes.
 const LOST_SUSTAIN_MS = 15000;
+
+// A step is mandatory unless it is explicitly marked optional. The editor
+// creates new steps with { optional: false }, so an absent flag is treated as
+// mandatory too — the safer default for a guided walk (don't let walkers skip
+// steps unless a step is explicitly opted out). Drives both reachableSteps()
+// and the Step.updatePosition sequential fire-gate (see P1.25 / former P1.8).
+function isStepMandatory(step) {
+    return !step || !step._spot || step._spot.optional !== true;
+}
 
 class Parcours extends EventEmitter {
     constructor() {
@@ -134,7 +142,9 @@ class Parcours extends EventEmitter {
     }
 
     find(type, index) {
-        return this.spots[type].find(s => s._index === index);
+        let list = this.spots[type];
+        if (!list) return undefined;
+        return list.find(s => s._index === index);
     }
 
     select(type, index, exclusive = true) {
@@ -487,35 +497,77 @@ class Parcours extends EventEmitter {
         catch (error) { console.error('Error clearing parcours store:', error); }
     }
 
-    // Returns the single step the walker should be aiming for right now —
-    // used by both the LOST gate and the map marker painter so they always
-    // agree on which zone is highlighted on the map.
-    //   - null if the parcours is finished (last step done)
-    //   - step 0 if the walk hasn't started yet (rendezvous target)
-    //   - the step at stepIndex while its audio is not yet complete
-    //   - otherwise the next step in sequence
+    // The ordered set of steps the walker may legitimately resume into right
+    // now. Steps are meant to be near-contiguous, so when the walker drifts
+    // (LOST) they should be able to catch back up at:
+    //   - the active step, if its audio isn't complete yet (`_done` false)
+    //   - the next step in sequence
+    //   - any later step, as long as every step strictly before it is optional
+    //     (a mandatory step is a hard stop — reachable, but can't be skipped)
     //
     // Keys off `_done`, NOT `_active`: `_active` is an in-memory runtime flag
-    // that resets to false on a quit/resume, which would wrongly point the
-    // walker at the next step even though they still have to resume the
-    // current one. `_done` correctly stays false across a resume until the
-    // step's audio has actually finished.
-    lostTarget() {
-        let idx = this.state.stepIndex;
+    // that resets on a quit/resume; `_done` correctly stays false across a
+    // resume until the step's audio has actually finished.
+    //
+    // This single helper drives both LOST recovery (evaluateLostState) and the
+    // Step.updatePosition sequential fire-gate, so the two always agree on
+    // "which step can the walker be in".
+    reachableSteps() {
         let steps = this.spots.steps || [];
-        if (!steps.length) return null;
-        if (idx < 0) return this.find('steps', 0);
-        let currentStep = this.find('steps', idx);
-        if (currentStep && !currentStep._done) return currentStep;
-        if (idx + 1 < steps.length) return this.find('steps', idx + 1);
-        return null;
+        if (!steps.length) return [];
+        let idx = this.state.stepIndex;
+
+        // Not started yet — only step 0 is reachable (the rendezvous target).
+        if (idx < 0) {
+            let s0 = this.find('steps', 0);
+            return s0 ? [s0] : [];
+        }
+
+        let out = [];
+
+        // Active step, if its audio isn't done yet.
+        let cur = this.find('steps', idx);
+        if (cur && !cur._done) out.push(cur);
+
+        // Walk forward: include each step; stop after the first mandatory one.
+        for (let k = idx + 1; k < steps.length; k++) {
+            let step = this.find('steps', k);
+            if (!step) continue;
+            out.push(step);
+            if (isStepMandatory(step)) break;
+        }
+        return out;
     }
 
-    // LOST evaluation: decides whether the walker is too far from where they
-    // should be (active step if still narrating/afterplaying, otherwise next
-    // step). Emits 'lost' on entry and 'recover' on exit — UI/audio handlers
-    // in pages.js react. Distance gating uses LOST_ENTER_M / LOST_EXIT_M
-    // hysteresis plus a LOST_SUSTAIN_MS sustain timer to filter GPS noise.
+    // The single step the walker should aim for right now — the nearest of the
+    // reachable set. Used by the LOST distance UI and the map marker painter.
+    // Falls back to the first reachable step when there's no position fix yet.
+    //   - null if the parcours is finished (last step done) or has no steps
+    lostTarget() {
+        let reachable = this.reachableSteps();
+        if (!reachable.length) return null;
+        let pos = (typeof GEO !== 'undefined') ? GEO.lastPosition : null;
+        if (!pos || !pos.coords) return reachable[0];
+        let best = reachable[0];
+        let bestD = best.distanceToBorder(pos);
+        for (let i = 1; i < reachable.length; i++) {
+            let d = reachable[i].distanceToBorder(pos);
+            if (d < bestD) { bestD = d; best = reachable[i]; }
+        }
+        return best;
+    }
+
+    // LOST evaluation.
+    //   Entry: the walker has been further than LOST_ENTER_M from the NEAREST
+    //     reachable step (see reachableSteps()) for a sustained LOST_SUSTAIN_MS.
+    //     Measuring against the nearest reachable step means heading toward a
+    //     step past an optional one is not wrongly flagged.
+    //   Exit: the walker is back INSIDE any reachable step — they've caught up.
+    //     update() then resumes and Step.updatePosition's own branches resume
+    //     the active step or fire the step they walked into.
+    // Emits 'lost' on entry and 'recover' on exit — UI/audio handlers in
+    // pages.js react. The stationary gate and the GPSSIGNAL_OK gate filter
+    // pocketed pauses and GPS-signal-loss windows.
     evaluateLostState(position) {
         // GPS-lost takes priority over LOST. During a signal-loss window the
         // bg-geo plugin stops emitting positions, but if a stale position
@@ -525,24 +577,31 @@ class Parcours extends EventEmitter {
 
         if (this.state.stepIndex < 0) return; // not started — rdv page handles distance UX
 
-        let target = this.lostTarget();
-        if (!target) return; // last step done or no parcours
-
-        let distance = target.distanceToBorder(position);
+        let reachable = this.reachableSteps();
+        if (!reachable.length) return; // last step done or no parcours
 
         if (this.state.lost) {
-            if (distance < LOST_EXIT_M) {
+            // Recover as soon as the walker is inside ANY reachable step.
+            let caughtUp = reachable.find(s => s.inside(position));
+            if (caughtUp) {
                 this.state.lost = false;
                 this.state.lostSince = null;
                 this._lostBeyondSince = null;
                 this.store();
-                this.emit('recover', { target, distance });
+                this.emit('recover', { target: caughtUp, distance: caughtUp.distanceToBorder(position) });
             }
             return;
         }
 
-        // Not currently LOST — check entry.
-        if (distance <= LOST_ENTER_M) {
+        // Not currently LOST — check entry against the NEAREST reachable step.
+        let nearest = reachable[0];
+        let nearestD = nearest.distanceToBorder(position);
+        for (let i = 1; i < reachable.length; i++) {
+            let d = reachable[i].distanceToBorder(position);
+            if (d < nearestD) { nearestD = d; nearest = reachable[i]; }
+        }
+
+        if (nearestD <= LOST_ENTER_M) {
             this._lostBeyondSince = null;
             return;
         }
@@ -561,11 +620,21 @@ class Parcours extends EventEmitter {
         this.state.lostSince = Date.now();
         this._lostBeyondSince = null;
         this.store();
-        this.emit('lost', { target, distance });
+        this.emit('lost', { target: nearest, distance: nearestD });
     }
 
     update(position) {
         if (this.state.geoMode === null) return;
+
+        // Only process positions while the walker is actually on the parcours
+        // page. On a kill+relaunch resume, state.geoMode is restored as 'gps'
+        // (it is persisted) before the walker has navigated back to parcours —
+        // without this gate, steps could fire and play audio under an
+        // onboarding page (checkmotion / checkbgloc / ...), and the
+        // fire/done/enter/leave handlers (registered inside PAGES['parcours'])
+        // wouldn't be attached yet. geoMode stays persisted because checkgeo
+        // still reads geomode() for the DEVMODE simulate-resume convenience.
+        if (typeof currentPage !== 'undefined' && currentPage !== 'parcours') return;
 
         // LOST gate runs first — when active, it suppresses all spot processing
         // (offlimits masked, zones can't re-trigger on re-crossing, steps can't

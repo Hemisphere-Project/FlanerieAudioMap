@@ -1,7 +1,8 @@
 # Mobile Audit Remediation Plan
 
 Original: 2026-04-27  
-Last updated: 2026-05-13 (LOST state machine P1.18, voice/afterplay fallback P1.19, RESUME cue P1.20, AUDIOFOCUS auto-retry P1.21, devmode tools page P1.22, paused() crash fix; Architecture Summary + telemetry list aligned with current code)  
+Last updated: 2026-05-14 (Round 2 codebase review: resume `update()` gate P1.23, `init()` no-op listener removal P1.24, LOST↔afterplay/step-progression unification P1.25, GPS stop on walk end P1.26, duplicate `step_done` guard P1.27, page-exit cleanup gaps P1.28, recovery map on default-afterplay P1.29, defensive hardening cluster P2.12, telemetry session key P2.13, resume gate fast-path P2.14, structural refactors P3.6, server resilience C7)  
+Previous: 2026-05-13 (LOST state machine P1.18, voice/afterplay fallback P1.19, RESUME cue P1.20, AUDIOFOCUS auto-retry P1.21, devmode tools page P1.22, paused() crash fix; Architecture Summary + telemetry list aligned with current code)  
 Scope: Cordova launcher + downloaded local webapp, GPS-triggered audio walk, locked-screen pocket usage, published parcours FLANERIE_ELYSEE  
 Plugin: [`cordova-background-geolocation-plugin`](https://github.com/Maigre/cordova-background-geolocation-plugin) v2.4.0 (Flanerie fork of HaylLtd v2.3.3)
 
@@ -209,9 +210,11 @@ Files: `www/app/pages.js`, `www/app/app.html`
 
 Deferred. Any serialization change breaks existing stored parcours and needs a migration path. Revisit after P0 lifecycle work is stable.
 
-#### P1.8 Step progression logic audit [RESEARCH-FIRST]
+#### P1.8 Step progression logic audit ✅ DONE (2026-05-14, via P1.25) [RESEARCH-FIRST]
 
-Known: `!(s._spot.optional === false)` in `spot.js` is inverted logic — names the result `mandatory` but filters for optional steps. Dormant because FLANERIE_ELYSEE has `optional: false` on all steps. Do not change without a full walk-through validation.
+Known: `!(s._spot.optional === false)` in `spot.js` is inverted logic — names the result `mandatory` but filters for optional steps. Dormant because FLANERIE_ELYSEE has `optional: false` on all steps.
+
+**Round 2 confirmation (2026-05-14):** the inversion is total — for an all-mandatory parcours the gate is *entirely dead* (a walker could skip a mandatory step), and with optional steps it blocks wrongly. The concrete fix is dropping the `!`: `s._spot.optional === false`. This is now scoped together with the LOST recovery model under **P1.25** (the two must stay consistent: "which steps can the walker resume into" drives both the fire-gate and LOST recovery). Still requires full walk-through validation.
 
 Files: `www/app/assets/spot.js`
 
@@ -346,6 +349,8 @@ Files: `www/app/assets/parcours.js` (LOST_ENTER_M / LOST_EXIT_M / LOST_SUSTAIN_M
 
 Regression risk: **MEDIUM** — first JS state on top of every position update. Validate that a normal walk does not enter LOST during stops at zone boundaries (motionIsStationary gate covers pocket cases but not slow walking near 50m). Tune `LOST_ENTER_M` / `LOST_SUSTAIN_MS` if false positives surface in telemetry.
 
+**Round 2 follow-up (2026-05-14):** `lostTarget()` keys off `_done`, which flips true the instant voice ends and afterplay *starts* — so the entire afterplay phase already targets the *next* step. A walker correctly walking from step N to a step N+1 that is >50m away trips LOST mid-afterplay. Recovery is also single-target (`distanceToBorder(lostTarget()) < 0`), which doesn't match the operational model where steps are near-contiguous and a walker may legitimately catch back at the active, next, or any later step whose intervening steps are optional. Reworked under **P1.25**.
+
 #### P1.19 Voice failure + afterplay fallback ✅ DONE (2026-05-13)
 
 Two failure modes that previously left the walker in silence are now self-healing.
@@ -392,6 +397,100 @@ Files: `www/app/pages.js` (`PAGES['tools']`), `www/app/app.html` (`#tools` page 
 
 ---
 
+### P1 (Round 2 — codebase review 2026-05-14)
+
+These came out of a full read of `www/app` + `server.js` against the operational model. None is a P0-class production blocker, but P1.23–P1.25 are correctness issues with real field impact.
+
+#### P1.23 Resume — `Parcours.update()` runs before the parcours page ✅ DONE (2026-05-14) [TEST-FIRST]
+
+**Problem:** `state.geoMode` is persisted by `store()` and restored by `restore()→build()`. On a kill-and-relaunch mid-walk it comes back as `'gps'`, so `Parcours.update()` stops being gated the moment GPS starts at `startgeo` — several onboarding pages before the walker reaches `parcours` (`checkmotion` alone polls up to 8s, then `checkbgloc` / `checknotifications` / `checkbatteryopt`). During that window `Step.updatePosition` can fire a step and start playing audio under an onboarding page, while the `fire` / `done` / `enter` / `leave` handlers (registered *inside* `PAGES['parcours']`) aren't attached yet — map markers, `step_fire` telemetry, and the RESUME cue desync.
+
+**Resolution:** `Parcours.update()` now early-returns unless `currentPage === 'parcours'` (`typeof` guard for load-order safety). `geoMode` is left persisted — `checkgeo` still reads `geomode()` for the DEVMODE simulate-resume convenience, and with the page gate in place a restored `geoMode` is harmless (the normal flow already only sets `geoMode` via `startTracking()` on the parcours page).
+
+Files: `www/app/assets/parcours.js`
+
+Regression risk: **MEDIUM** — touches the single position-processing entry point. Validate a real kill+relaunch walk: audio must not start before the parcours page, and the resume branch must still pick up correctly. Also re-verify simulate mode (positions still only matter once on the parcours page).
+
+#### P1.24 `GeoLoc.init()` no-op `removeAllListeners()` ✅ DONE (2026-05-14) [SAFE-TODAY]
+
+**Problem:** `EventEmitter.removeAllListeners(event)` does `delete this._events[event]`. `init()` calls it with **no argument** → `delete this._events[undefined]` → does nothing, despite the comment "unbind all events". Today this is accidentally load-bearing: `stateUpdate` / `authorizationChanged` / `bgServiceStop` survive `init()`, which is what's needed. But the day anyone "fixes" `removeAllListeners()` to standard Node semantics (clear-all when no arg), `init()` silently wipes GPS-lost / revoked / battery-kill detection.
+
+**Resolution:** remove the `this.removeAllListeners()` call from `init()` (it does nothing useful). If a real reset is ever wanted, clear only the events `init` owns by name.
+
+Files: `www/app/assets/geoloc.js`
+
+Regression risk: **LOW** — removing a no-op.
+
+#### P1.25 LOST ↔ afterplay / step-progression unification ✅ DONE (2026-05-14, awaiting field validation) [RESEARCH-FIRST]
+
+Supersedes the Round 2 follow-ups on **P1.18** and folds in **P1.8**. The operational model: step triggers are near-contiguous; when LOST fires everything else stops and waits for the walker to re-enter the active step, the next step, or any later step whose intervening steps are optional, to catch back up with the voice.
+
+**Three coupled problems:**
+
+1. **LOST competes with afterplay.** `lostTarget()` keyed off `_done`, true the moment afterplay starts — so the whole afterplay phase targeted the next step. A walker correctly walking toward a next step >50m away tripped LOST mid-afterplay; the afterplay was paused and `LOST_PLAYER` played (silent today — `youlost.mp3` is the `_youlost.mp3` placeholder), dropping a correctly-progressing walker into silence. Resolved operationally: steps are near-contiguous, so the normal afterplay walk stays well inside `LOST_ENTER_M` of the next step — LOST now only fires on genuine wandering, and the entry distance is measured against the *nearest reachable* step (not a single `_done`-derived target).
+2. **Recovery was single-target.** `evaluateLostState` exited LOST only when `distanceToBorder(lostTarget()) < LOST_EXIT_M` for one resolved target. It now exits when the walker is `inside` *any reachable step*.
+3. **The sequential gate was inverted (P1.8).** `!(s._spot.optional === false)` collected optional steps under the name `mandatory` — for an all-mandatory parcours the gate was dead; with optional steps it blocked wrongly.
+
+**Resolution (implemented):**
+
+- New `Parcours.reachableSteps()`: the ordered set the walker may legitimately resume into — the active step if `!_done`, the next step, and each subsequent step reachable only as long as every step before it is optional (a mandatory step is reachable but a hard stop). This single helper drives both LOST recovery and the `Step.updatePosition` fire-gate, keeping them consistent.
+- New `isStepMandatory(step)` predicate (parcours.js, used by both files): a step is mandatory unless explicitly `optional: true`. The editor creates new steps with `optional: false`, so an **absent flag is treated as mandatory** — the safer default for a guided walk (this is a deliberate refinement of the original `s._spot.optional === false` fix). FLANERIE_ELYSEE is unaffected (all steps explicitly `optional: false`).
+- `evaluateLostState` entry now measures distance to the *nearest reachable step*; recovery emits `recover` when the walker is `inside` any reachable step; `update()` then resumes and `Step.updatePosition` resumes the active step or fires the one they walked into.
+- `LOST_EXIT_M` removed — recovery is "inside any reachable step", not a distance threshold.
+- `lostTarget()` (cyan map marker + distance readout) now returns the *nearest* reachable step (falls back to the first reachable when there's no fix yet).
+- `Step.updatePosition` sequential fire-gate rewritten to block on `isStepMandatory` (was the inverted P1.8 logic).
+- LOST entry behaviour ("everything stops") was already correct in the `on('lost')` handler — kept (it pauses the active step incl. default-afterplay-routed players, stops zones, stops offlimits).
+
+Files: `www/app/assets/parcours.js`, `www/app/assets/spot.js`
+
+Regression risk: **MEDIUM-HIGH** — changes the core step-progression and LOST-recovery logic. Requires a full walk-through with at least one optional step and a deliberate >50m drift, plus the existing P1.18 validation matrix. Specifically verify: (a) a normal inter-step afterplay walk does not trip LOST; (b) recovery works by entering the active step, the next step, and a later step past an optional one; (c) the fire-gate now actually blocks skipping a mandatory step.
+
+#### P1.26 GPS service + tracking not stopped on walk end ✅ DONE (2026-05-14) [TEST-FIRST]
+
+**Problem:** `PAGES['end']` stops audio but never calls `PARCOURS.stopTracking()`, and nothing calls `BackgroundGeolocation.stop()`. Unless `info.cutoff` is configured, the native location foreground service *and* `Parcours.update()` processing run indefinitely after `end` — battery drain after the walk is over.
+
+**Resolution:** new `GeoLoc.stopGeoloc()` clears the navigator watch, sets `backgroundGeolocIntentionalStop = true` (so `on('stop')` doesn't auto-restart), calls `BackgroundGeolocation.stop()`, and sets `runMode = 'off'`. `PAGES['end']` now calls `PARCOURS.stopTracking()` + `GEO.stopGeoloc()`; the `info.cutoff` timeout path also calls `GEO.stopGeoloc()` (it previously did only the `stopTracking()` half).
+
+Files: `www/app/pages.js`, `www/app/assets/geoloc.js`
+
+Regression risk: **LOW** — end-of-walk only. Verify the native foreground-service notification disappears at `end` and at the `cutoff` timeout.
+
+#### P1.27 Duplicate `step_done` emission ✅ DONE (2026-05-14) [SAFE-TODAY]
+
+**Problem:** `Step.updatePosition`'s "stop all other steps" loop calls `s.emit('done', s)` directly on any previously-playing step — but that step already emitted `done` when its voice ended. The `Parcours` `done` handler re-runs (`stepDone = true`, `store()`) and `pages.js` logs a second `step_done` telemetry event per step, bypassing `PlayerStep._doneFired`.
+
+**Resolution:** guard on `Step._done` before re-emitting (only emit `done` for a step that hadn't already completed), or stop the player without re-emitting.
+
+Files: `www/app/assets/spot.js`
+
+Regression risk: **LOW** — telemetry/data-quality only.
+
+#### P1.28 Page-exit cleanup gaps ✅ DONE (2026-05-14) [SAFE-TODAY]
+
+**Problem:**
+- The `CHECKGEO` interval set in `PAGES['checkgeo']` is never cleared — it runs for the whole app lifetime updating `#gps-status` / `#gps-precision` (DOM elements that live in the *parcours* page).
+- `PARCOURS.on('fire' | 'done' | 'enter' | 'leave')` are registered *inside* `PAGES['parcours']` and never removed. Safe today (the page is entered once per app load) but a latent accumulation bug if re-entry is ever allowed — and inconsistent with `lost` / `recover`, which are already registered once at module scope.
+
+**Done (Batch A):** `PAGES_CLEANUP['checkgeo']` added — clears + nulls `CHECKGEO` on page exit.
+
+**Done (Batch D):** the parcours `fire`/`done`/`enter`/`leave` handlers are now registered through a tracked `onParcours(event, fn)` helper that pushes each into the module-level `PARCOURS_PAGE_HANDLERS` list. `PAGES_CLEANUP['parcours']` detaches them all on page exit, and `PAGES['parcours']` defensively clears any survivors before re-registering — so handlers can never stack on a re-entry. The permanent module-scope `lost` / `recover` handlers are intentionally left out of the tracked list.
+
+Files: `www/app/pages.js`
+
+Regression risk: **LOW**.
+
+#### P1.29 Recovery map auto-opens on default-afterplay fallback ✅ DONE (2026-05-14) [TEST-FIRST]
+
+**Problem:** when a step has no afterplay (or its afterplay failed to load) the `DEFAULT_AFTERPLAY_PLAYER` "you are late" loop plays (P1.19). That is itself a signal the walker may be lost/late, but the recovery map stays hidden — the walker has no visual cue to get back on route.
+
+**Resolution:** `DEFAULT_AFTERPLAY_PLAYER.on('play', …)` in `pages.js` calls `openMapForRecovery({source: 'default_afterplay'})` when `currentPage === 'parcours'` (the guard keeps it off the devmode tools page). `PlayerSimple` emits `play` once per explicit `play()` call, so this fires when the fallback kicks in, not on loop iterations. Telemetry: reuses `map_opened` with `source: 'default_afterplay'`.
+
+Files: `www/app/pages.js`
+
+Regression risk: **LOW** — only fires on the already-degraded missing-afterplay path. Verify with the devmode tools "Afterplay générique sur étape courante" button (note: that button forces it from the `tools` page where the guard suppresses the map — trigger via a real missing-afterplay step on the parcours page to see the map open).
+
+---
+
 ### P2: Supportability and observability
 
 #### P2.9 Public endpoint exposure [SAFE-TODAY]
@@ -429,6 +528,37 @@ Files: `www/app/assets/telemetry.js`, `www/app/pages.js`, `www/app/assets/geoloc
 #### P2.11 SAS waiting buffer [SAFE-TODAY]
 
 Intentionally low-security client-side gate — acceptable because the team is present at walk start. Only revisit if the operational process changes.
+
+#### P2.12 Defensive hardening cluster ✅ DONE (2026-05-14) [SAFE-TODAY]
+
+Small robustness fixes found in the Round 2 read — none currently reachable in a healthy FLANERIE_ELYSEE walk, but all are latent crashes / `NaN` traps:
+
+- **`Spot.updatePosition` null-deref ordering** — `let hasError = typeof this.player.hasError === 'function' && …` reads `this.player.hasError` *before* the `if (this.player && …)` guard on the next line. Reorder so the guard actually guards.
+- **`Parcours.find()` throws on a missing spot type** — `this.spots[type].find(...)` with no `|| []`, while `lostTarget()` / `prewarmUpcomingStep()` defensively guard. `PAGES['rdv']` and `updateStepsMarkers` call `find('steps', 0)` / `spots.steps.forEach` unguarded — a stepless parcours crashes the page. Make `find` defensive or guard callers.
+- **`Zone` "Objet" crossfade `NaN` for polygon zones** — `vol = 1 - distanceToCenter / this._spot.radius`; for a polygon `_spot.radius` is an array → `volume(NaN)`. Guard for the numeric-radius case.
+- **`PlayerSimple.master(undefined)` → `NaN` volume** — if a media object from parcours JSON lacks `master`, `volume()` computes `_volume * undefined`. Default `master` to 1 in `load()`.
+
+Files: `www/app/assets/spot.js`, `www/app/assets/parcours.js`, `www/app/assets/player.js`
+
+Regression risk: **LOW**.
+
+#### P2.13 Telemetry session keyed by parcours name, not `pID` ✅ DONE (2026-05-14) [SAFE-TODAY]
+
+`TELEMETRY.start` is called with `PARCOURS.info.file || PARCOURS.info.id || PARCOURS.info.name` — but `info` (from the parcours JSON) only carries `name`; `file`/`id` are undefined. So sessions resume-match and group server-side on the human-readable name instead of the stable `pID`. Use `PARCOURS.pID`.
+
+Files: `www/app/pages.js`
+
+Regression risk: **LOW** — but note existing sessions keyed by name won't resume-match after the change (acceptable: session resume is best-effort).
+
+#### P2.14 Resume re-runs onboarding gates ✅ DONE (2026-05-14) [SAFE-TODAY]
+
+On kill+relaunch mid-walk the flow still passes through `checkmotion` / `checkbgloc` / `checknotifications` / `checkbatteryopt`. `checkbgloc` / `checknotifications` / `checkbatteryopt` each already self-fast-path: they run a cheap native check and advance immediately when the permission is still held — no change needed. The one real friction was `checkmotion`, which hard-blocks waiting for the first `activity` event because `GEO.motionAuthorized` resets on every reload.
+
+**Resolution:** `checkmotion` detects the resume branch (`PARCOURS.valid() && currentStep() >= 0`) and, instead of hard-blocking with the 8s warning escalation, gives a `MOTION_RESUME_GRACE_MS` (3s) grace then proceeds to `rdv`. Motion was already validated before the walk started, and a genuine mid-walk revocation is caught by the P3.3d health monitoring. Telemetry: `motion_check {granted:false, resumed:true}` when the grace path is taken.
+
+Files: `www/app/pages.js`
+
+Regression risk: **LOW** — only the resume branch is affected; first-run motion gating is unchanged.
 
 ---
 
@@ -550,6 +680,18 @@ Step voice playback position is now saved to localStorage and restored (minus 3s
 If the system kills the app between GPS callbacks (no JS execution), the last GPS-triggered save is used — worst case 1–2s drift. To close this entirely: extend `cordova-plugin-media` with native hooks that write `AVAudioPlayer.currentTime` (iOS) or `MediaPlayer.getCurrentPosition()` (Android) directly to `NSUserDefaults` / `SharedPreferences` on `applicationDidEnterBackground` / `onPause`. On JS startup, read native storage and inject the value into `state.resumeStepVoicePos`. Fully JS-independent, survives any kill scenario.
 
 Files: `www/app/assets/parcours.js`, `www/app/assets/player.js`, `www/app/assets/spot.js`, `www/app/assets/geoloc.js`
+
+#### P3.6 Structural refactors ✅ PARTIAL (2026-05-14) [SAFE-TODAY]
+
+Code-health items with no behaviour change — done while the Round 2 batches are open:
+
+- **`allSteps` declared twice as a global ✅ DONE.** The duplicate `var allSteps = []` in `spot.js` was removed; it is now declared once in `parcours.js` (which loads first) and shared. Both files still reassign it (filter on add/remove, `[]` on `Parcours.clear()`), documented at the declaration site.
+- **`initMap` relies on sloppy-mode `this === window` ✅ DONE.** `this.markerPosition` / `this.zoomTimeout` / `this.zoomPaused` replaced with a proper per-call `mapState` local object; the position-marker and wheel-zoom closures now close over it.
+- **Module-load `.load()` of the global keepalive players [DEFERRED]** (`SILENT_PLAYER`, `DEFAULT_AFTERPLAY_PLAYER`, `RESUME_PLAYER`, `LOST_PLAYER`, `GPSLOST_PLAYER`) runs at `pages.js` parse time. On iOS this depends on the launcher having set `LOCALAPP_PATH_NATIVE` *before* `pages.js` parses; if that ordering ever slips, `IOS_NATIVE_FALLBACK_DETECTED` goes sticky-true and `checkaudio` fails on every iOS device (see P1.11b / P3.4). Needs a verification of launcher ordering against the FlanerieCordova container (not in this repo) before deciding whether to defer the `.load()` calls to `deviceready` — left open pending that check.
+
+Files: `www/app/assets/parcours.js`, `www/app/assets/spot.js`, `www/app/assets/map.js`
+
+Regression risk: **LOW** — pure refactor; smoke-test the full page flow (map renders, position marker tracks, steps register).
 
 ---
 
@@ -741,9 +883,29 @@ Plus a `document.resume` handler retry: when the user unlocks the screen and `AU
 
 **Regression risk after fork:** **LOW** — the new path only fires when the *old* path would silently fail. The conservative (`AUDIOFOCUS_GAIN_AVAILABLE` + manual retry) variant doesn't change behaviour for users whose iOS already includes ShouldResume.
 
+#### C7 Server resilience ✅ PARTIAL (2026-05-14) [SAFE-TODAY]
+
+Server-side issues found in the Round 2 read of `server.js`. The operational context (trusted small team, P2.9 already accepts public-endpoint exposure) keeps these low priority, but C7.1 has a real availability impact.
+
+- **C7.1 — one corrupt parcours JSON breaks `/list` for everyone. ✅ DONE (2026-05-14).** `/list` previously `JSON.parse`d every file in `./parcours/` with no per-file try/catch; a single malformed file 500s the endpoint → the app's `checkdata` → `nodata` → infinite 2s retry loop for *all* users. Now wrapped in try/catch with skip-with-log on a corrupt or `info`-less file (matching what the telemetry list endpoints already do).
+- **C7.2 — `/telemetry-push` rewrites the whole session file every flush. [DEFERRED]** Read → parse → concat → write the entire session JSON every 30s per session → O(n²) write amplification over a 45-min walk. (Corrected from the initial Round 2 note: there is *no* lost-event race — Node's event loop is single-threaded and the handler's `readFileSync` → `concat` → `writeFileSync` is fully synchronous, so two same-session pushes can't interleave.) The real fix is append-only NDJSON per session, but that is a storage-format migration that needs every reader updated in lockstep (`scripts/telemetry-report.js`, the `/telemetry/*` endpoints in `server.js`, `www/control/telemetry.html`) plus on-disk migration of existing sessions — out of scope for a "no behaviour change" batch. Left as a standalone follow-up; current write amplification is tolerable at the operational scale (a handful of concurrent walkers).
+
+Files: `server.js`
+
+Regression risk: **LOW** — C7.1 is a pure try/catch wrap.
+
 ---
 
 ## Recommended Execution Sequence
+
+### Round 2 implementation (2026-05-14) — ✅ code complete, awaiting field validation
+
+All four batches implemented in one session. JS syntax-checked; no behavioural field test yet.
+
+- **Batch A — Safe correctness** ✅ DONE: **P1.24** (`init()` no-op listener removed), **P1.27** (duplicate `step_done` guarded), **P1.28** (`CHECKGEO` cleanup), **P2.12** (defensive hardening cluster: `Spot.updatePosition` guard, `Parcours.find`, polygon Objet volume, `master` default), **P2.13** (telemetry session keyed on `pID`), **C7.1** (`/list` corrupt-file resilience).
+- **Batch B — Resume / lifecycle** ✅ DONE (needs a real kill+relaunch walk): **P1.23** (`update()` gated to `currentPage === 'parcours'`), **P1.26** (`GEO.stopGeoloc()` on walk end + cutoff), **P2.14** (`checkmotion` resume grace).
+- **Batch C — Step / LOST logic** ✅ DONE (needs full walk-through): **P1.25** (`reachableSteps()` + `isStepMandatory()`, LOST entry vs nearest reachable, recovery into any reachable step, `LOST_EXIT_M` removed) + **P1.8** (inverted-optional fire-gate fixed). **P1.29** (recovery map auto-opens on `DEFAULT_AFTERPLAY_PLAYER` play) shipped with this batch.
+- **Batch D — Structural refactor** ✅ MOSTLY DONE: **P3.6** (single `allSteps` owner ✅, `initMap` `mapState` ✅, defer global player `.load()` — deferred pending FlanerieCordova launcher-ordering check), **P1.28** parcours-handler teardown ✅. **C7.2** (telemetry NDJSON write model) left deferred — a storage-format migration needing all readers updated in lockstep, out of scope for a no-behaviour-change batch.
 
 ### Awaiting field validation (shipped, build pending or untested)
 
@@ -780,7 +942,7 @@ Plus a `document.resume` handler retry: when the user unlocks the screen and `AU
 
 - **P0.2** background validation UX (currently bypassed — keep bypassed)
 - **P1.7** resume/version-safe state
-- **P1.8** step progression audit
+- **P1.8** step progression audit — folded into **P1.25** (Round 2, Batch C)
 - **P1.15** GIVORS_V3 last-step investigation (requires server-side JSON)
 - **P2.10** telemetry gaps (AVAudioSession snapshots, preload events)
 - **C3** launcher cache-buster regex

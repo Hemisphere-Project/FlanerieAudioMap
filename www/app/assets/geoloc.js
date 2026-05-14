@@ -574,8 +574,13 @@ class GeoLoc extends EventEmitter {
     init(mode) {
         console.log('Init geoloc: ', mode);
 
-        // unbind all events
-        this.removeAllListeners();
+        // NOTE: previously called this.removeAllListeners() here ("unbind all
+        // events") — but EventEmitter.removeAllListeners() with no argument is
+        // a no-op (it does `delete this._events[undefined]`). The call did
+        // nothing and removing it is intentional: the GEO listeners registered
+        // by pages.js (stateUpdate / authorizationChanged / bgServiceStop) and
+        // map.js (position) must survive an init(). parcours.js clears its own
+        // 'position' listener explicitly by name in build().
 
         // stop existing geoloc
         if (this.watchId) navigator.geolocation.clearWatch(this.watchId);
@@ -748,6 +753,24 @@ class GeoLoc extends EventEmitter {
         });
 
    }
+
+    // Stop real geoloc — used at walk end (and at the info.cutoff timeout) so
+    // the native foreground location service (Android) / location updates
+    // (iOS) don't keep running and draining battery after the parcours.
+    // Sets backgroundGeolocIntentionalStop first so the on('stop') handler
+    // does not auto-restart the service.
+    stopGeoloc() {
+        if (this.watchId) {
+            navigator.geolocation.clearWatch(this.watchId);
+            this.watchId = null;
+        }
+        if (typeof BackgroundGeolocation !== 'undefined' && BackgroundGeolocation) {
+            backgroundGeolocIntentionalStop = true;
+            try { BackgroundGeolocation.stop(); }
+            catch (e) { console.warn('[GEO] stopGeoloc failed:', e); }
+        }
+        this.runMode = 'off';
+    }
 
     checkPosition() {
         return checkBGPosition()

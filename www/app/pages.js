@@ -10,6 +10,11 @@ var DEVMODE = localStorage.getItem('devmode') == 'true' || false;
 //
 var noSleep = null;
 var CHECKGEO = null;
+// PARCOURS event handlers registered by PAGES['parcours'] — tracked so they
+// can be torn down on page exit (and not stacked on a page re-entry). The
+// module-scope lost/recover handlers are NOT in here — those are intentionally
+// permanent.
+var PARCOURS_PAGE_HANDLERS = [];
 
 // BATTERY STATUS
 var BATTERY = 0
@@ -41,6 +46,11 @@ var BGLOC_TIMER = null;
 const BGLOC_POLL_MS = 1500;
 var MOTION_TIMER = null;
 const MOTION_WAIT_MS = 8000;
+// On a resume (kill+relaunch mid-walk) motion was already validated before the
+// walk started; GEO.motionAuthorized just resets to undefined on every reload.
+// Don't hard-block a pocketed walker — give a short grace, then proceed.
+// A genuine mid-walk revocation is caught by the P3.3d health monitoring.
+const MOTION_RESUME_GRACE_MS = 3000;
 var GPSREVOKED = false;
 
 function clearWakeupNotification(clearPending = true)
@@ -102,11 +112,20 @@ PAGES_CLEANUP['parcours']           = () => {
     $('#lost-band').hide();
     // Close the recovery map cleanly so the next visit starts from a known state.
     if (typeof closeMapForRecovery === 'function') closeMapForRecovery({source: 'page_exit'});
+    // Detach the parcours-page PARCOURS handlers so a re-entry doesn't stack them.
+    PARCOURS_PAGE_HANDLERS.forEach(h => PARCOURS.off(h.event, h.fn));
+    PARCOURS_PAGE_HANDLERS = [];
 };
 PAGES_CLEANUP['checknotifications'] = () => clearNotificationPermissionCheck();
 PAGES_CLEANUP['checkbatteryopt']    = () => clearBatteryOptCheck();
 PAGES_CLEANUP['checkbgloc']         = () => clearBgLocCheck();
 PAGES_CLEANUP['checkmotion']        = () => clearMotionCheck();
+PAGES_CLEANUP['checkgeo']           = () => {
+    // The CHECKGEO interval only paints #gps-status / #gps-precision, which
+    // live in the parcours page DOM — leaving it running for the whole app
+    // lifetime is pure waste.
+    if (CHECKGEO) { clearInterval(CHECKGEO); CHECKGEO = null; }
+};
 
 function PAGE(name, ...args)
 {
@@ -1139,6 +1158,9 @@ PAGES['checkmotion'] = () => {
         return PAGE('rdv');
     }
 
+    // Resume path: don't hard-block — short grace then proceed (see MOTION_RESUME_GRACE_MS).
+    var isResume = PARCOURS.valid() && PARCOURS.currentStep() >= 0;
+
     var start = Date.now();
     var warningShown = false;
     function poll() {
@@ -1148,7 +1170,11 @@ PAGES['checkmotion'] = () => {
             if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('motion_check', {granted: true, waited_ms: Date.now() - start});
             return PAGE('rdv');
         }
-        if (!warningShown && Date.now() - start >= MOTION_WAIT_MS) {
+        if (isResume && Date.now() - start >= MOTION_RESUME_GRACE_MS) {
+            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('motion_check', {granted: false, resumed: true, waited_ms: Date.now() - start});
+            return PAGE('rdv');
+        }
+        if (!isResume && !warningShown && Date.now() - start >= MOTION_WAIT_MS) {
             warningShown = true;
             if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('motion_check', {granted: false, waited_ms: Date.now() - start});
             $('#checkmotion-desc').html(
@@ -1654,8 +1680,18 @@ PAGES['parcours'] = () => {
         });
     }
 
+    // Register PARCOURS handlers via onParcours so PAGES_CLEANUP['parcours']
+    // can detach them. Clear any that survived first (defensive against a
+    // missed cleanup / page re-entry) so handlers never stack.
+    PARCOURS_PAGE_HANDLERS.forEach(h => PARCOURS.off(h.event, h.fn));
+    PARCOURS_PAGE_HANDLERS = [];
+    function onParcours(event, fn) {
+        PARCOURS.on(event, fn);
+        PARCOURS_PAGE_HANDLERS.push({event: event, fn: fn});
+    }
+
     // ON step fire: show next
-    PARCOURS.on('fire', (s, meta = {}) => {
+    onParcours('fire', (s, meta = {}) => {
         if (s._type != 'steps') return
         if (!meta.refire) TELEMETRY.log('step_fire', {step: s._index, name: s._spot.name});
         updateStepsMarkers()
@@ -1687,6 +1723,7 @@ PAGES['parcours'] = () => {
                 if (PARCOURS.currentStep() + 1 == PARCOURS.spots.steps.length) {
                     console.log('LAST STEP: cut GPS');
                     PARCOURS.stopTracking()
+                    GEO.stopGeoloc()
                 }
             }, PARCOURS.info.cutoff * 1000); // seconds
         }
@@ -1695,7 +1732,7 @@ PAGES['parcours'] = () => {
     })
 
     // ON step done: hide
-    PARCOURS.on('done', (s) => {
+    onParcours('done', (s) => {
         if (s._type != 'steps') return
         TELEMETRY.log('step_done', {step: s._index, name: s._spot.name});
         // Repaint markers so the next step picks up the cyan target before
@@ -1714,7 +1751,7 @@ PAGES['parcours'] = () => {
 
     // Safety: if last step fires but done never comes (audio load failure), end after 5 minutes
     var walkEndTimeout = null;
-    PARCOURS.on('fire', function onLastStepFire(s) {
+    onParcours('fire', function onLastStepFire(s) {
         if (s._type != 'steps') return
         if (s._index + 1 == PARCOURS.spots.steps.length) {
             walkEndTimeout = setTimeout(() => {
@@ -1729,10 +1766,10 @@ PAGES['parcours'] = () => {
     })
 
     // Offlimit telemetry
-    PARCOURS.on('enter', (s) => {
+    onParcours('enter', (s) => {
         if (s._type === 'offlimits') TELEMETRY.log('offlimit_enter', {name: s._spot.name, step: PARCOURS.currentStep()});
     })
-    PARCOURS.on('leave', (s) => {
+    onParcours('leave', (s) => {
         if (s._type === 'offlimits') TELEMETRY.log('offlimit_leave', {name: s._spot.name, step: PARCOURS.currentStep()});
     })
 
@@ -1754,9 +1791,12 @@ PAGES['parcours'] = () => {
 
     // Activate Parcours
     PARCOURS.startTracking()
+    // Key the telemetry session on the stable pID (the parcours file id), not
+    // info.name — info carries only {name,status,coords,cutoff}, so file/id are
+    // always undefined and sessions would otherwise group by human name.
     TELEMETRY.start(
-        PARCOURS.info.file || PARCOURS.info.id || PARCOURS.info.name || '',
-        PARCOURS.info.name || PARCOURS.info.file || PARCOURS.info.id || ''
+        PARCOURS.pID || PARCOURS.info.name || '',
+        PARCOURS.info.name || PARCOURS.pID || ''
     );
 
     // First RUN — paint step 0 as the single cyan target (matches updateStepsMarkers).
@@ -1807,6 +1847,11 @@ PAGES['parcours'] = () => {
 // END
 //
 PAGES['end'] = () => {
+
+    // Walk is over — stop position processing AND the native GPS service so it
+    // doesn't keep draining battery in the background after the parcours.
+    PARCOURS.stopTracking();
+    GEO.stopGeoloc();
 
     // Cleanup: stop all background audio
     PARCOURS.stopAudio();
@@ -1898,8 +1943,8 @@ $('#parcours-rearm').click(() => {
     console.log('REARM');
     TELEMETRY.restart(
         'rearm_button',
-        PARCOURS.info.file || PARCOURS.info.id || PARCOURS.info.name || '',
-        PARCOURS.info.name || PARCOURS.info.file || PARCOURS.info.id || ''
+        PARCOURS.pID || PARCOURS.info.name || '',
+        PARCOURS.info.name || PARCOURS.pID || ''
     );
     PARCOURS.currentStep(-2) // Reset current step
     PARCOURS.state.lost = false
@@ -1945,6 +1990,16 @@ $('#logs-title').on('click', (e) => {
 // gates on isLoaded() before routing here.
 var DEFAULT_AFTERPLAY_PLAYER = new PlayerSimple(true, 0);
 DEFAULT_AFTERPLAY_PLAYER.load(BASEURL+'/images/', {src: 'afterplay.mp3', master: 1}, false);
+
+// P1.29 — when the generic "you are late" afterplay loop kicks in, the step
+// had no afterplay of its own: a soft signal the walker may be lost or behind.
+// Surface the recovery map so they get a visual cue back onto the route. The
+// currentPage guard keeps this off the devmode tools page.
+DEFAULT_AFTERPLAY_PLAYER.on('play', () => {
+    if (currentPage === 'parcours' && typeof openMapForRecovery === 'function') {
+        openMapForRecovery({source: 'default_afterplay'});
+    }
+});
 
 // RESUME cue: short one-shot played on app relaunch so the walker hears
 // something while GPS warms up / they walk back into the active zone.

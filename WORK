@@ -120,14 +120,12 @@ X BUG: in edit listen audio broken !
 X on name edit -> prevent flyto
 x En DEV: afficher les sorties de route sur la carte
 
-- BUG: notif -> disable audio ducking (to be tested to be sure silent notif DOES it stuff !)
+X BUG: notif -> disable audio ducking (to be tested to be sure silent notif DOES it stuff !)
 - mettre un fade de sortie sur les étapes => après Tarare ?
 
-- BUG: Crash quand relance d'appli manuel (dé-instace notif interne ?)
+x BUG: Crash quand relance d'appli manuel (dé-instace notif interne ?)
 
-- Chitchatter -> instance sur infomaniak
-
-- EDIT: Etape numerotation commence à 0
+x EDIT: Etape numerotation commence à 0
 - AMBIANCE: loop option / fade out time réglagble
 - EDIT: hysteresis store value (volume inc)
 - EDIT: point d'insert nouvelle etape (éviter d'ajouter en dernier)
@@ -143,7 +141,6 @@ VISIO 29 avril 2026
 
 CHAT:
 - Infomaniak Maintenance page sur hébergement nodejs => Support Ticket / Main GZ+KXKM + Fallback Infomaniak ?
-- Transistor SDK background-GPS
 OK Je suis perdu -> bouton plus visible , carte + Rejoins la zone = texte explicatif, c'est ton GPS qui est out, essaie de rejoindre la prochaine étape
     --- Attention niveau de zoom = garder la prochaine étape dans le champs
     --- Permettre le dezoom 
@@ -151,7 +148,7 @@ OK Je suis perdu -> bouton plus visible , carte + Rejoins la zone = texte explic
     --- GPS precision
 => Message global t'es perdu ! si hit the wall (no audio) -> si OFFAudio loop, 
 don't trigger offlimits to allow reenter the Parcours, wait for next step
-- review inside / near (distance to Center / border) / Step updatePosition -> when hit the wall ? 
+OK review inside / near (distance to Center / border) / Step updatePosition -> when hit the wall ? 
 
 Couleur Current / Next zone
 

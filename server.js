@@ -631,7 +631,20 @@ app.get('/list', (req, res) => {
   fs.readdirSync(parcoursFolder).forEach(file => {
     if (!file.endsWith('.json')) return;
     const parcoursFileName = file.split('.json')[0];
-    const parcoursContent = JSON.parse(fs.readFileSync(parcoursFolder + file, 'utf8'));
+
+    // Skip-with-log on a corrupt file: a single bad JSON must not 500 the
+    // whole endpoint — that would put every app into the nodata retry loop.
+    let parcoursContent;
+    try {
+      parcoursContent = JSON.parse(fs.readFileSync(parcoursFolder + file, 'utf8'));
+    } catch (e) {
+      console.warn('[/list] skipping corrupt parcours file:', file, e.message);
+      return;
+    }
+    if (!parcoursContent || !parcoursContent.info) {
+      console.warn('[/list] skipping parcours file without info:', file);
+      return;
+    }
 
     // Guest filtering: only GUEST_ prefixed, non-archived
     if (role === 'guest') {
