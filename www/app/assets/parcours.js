@@ -470,15 +470,21 @@ class Parcours extends EventEmitter {
     // agree on which zone is highlighted on the map.
     //   - null if the parcours is finished (last step done)
     //   - step 0 if the walk hasn't started yet (rendezvous target)
-    //   - the active step if narration/afterplay is still running there
+    //   - the step at stepIndex while its audio is not yet complete
     //   - otherwise the next step in sequence
+    //
+    // Keys off `_done`, NOT `_active`: `_active` is an in-memory runtime flag
+    // that resets to false on a quit/resume, which would wrongly point the
+    // walker at the next step even though they still have to resume the
+    // current one. `_done` correctly stays false across a resume until the
+    // step's audio has actually finished.
     lostTarget() {
         let idx = this.state.stepIndex;
         let steps = this.spots.steps || [];
         if (!steps.length) return null;
         if (idx < 0) return this.find('steps', 0);
-        let activeStep = this.find('steps', idx);
-        if (activeStep && activeStep._active) return activeStep;
+        let currentStep = this.find('steps', idx);
+        if (currentStep && !currentStep._done) return currentStep;
         if (idx + 1 < steps.length) return this.find('steps', idx + 1);
         return null;
     }

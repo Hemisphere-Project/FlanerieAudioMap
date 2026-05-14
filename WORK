@@ -167,7 +167,6 @@ REU 12 mai
 // TEST
 OK Out of zone: unload Area -> plus d'audio -> "GPS out" message et montrer la carte 
 
--> Je suis perdu -> montre la carte + texte "Rejoins la zone de telle couleur"
 
 
 // STARTED, to continue
@@ -190,6 +189,7 @@ OK BUT NOW NEEDS A FORK (for power):
 
 // Optimisation par défault vs Cycle de charge..
 
+OK Je suis perdu -> montre la carte + texte "Rejoins la zone de telle couleur"
 OK Interruption : continue even out, until back to a step zone
 OK clean players: keep only voice and afterplay
 OK CBR / VBR / format check ! allow only MP3
