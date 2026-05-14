@@ -2032,7 +2032,9 @@ function updateLostDistance(position) {
     let pos = position || GEO.lastPosition;
     if (!pos || !pos.coords) { $d.text('→ — m'); return; }
 
-    let d = Math.round(target.distanceToBorder(pos));
+    // distanceToBorder is negative when the walker is already inside the zone —
+    // clamp to 0 so the indicator never shows a meaningless negative value.
+    let d = Math.max(0, Math.round(target.distanceToBorder(pos)));
     $d.text('→ ' + d + ' m');
 
     // Trend coloring: green if shrinking, red if growing, neutral otherwise.
