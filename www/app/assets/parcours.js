@@ -589,10 +589,23 @@ class Parcours extends EventEmitter {
 
     // Start tracking with GEO
     startTracking() {
+        // Idempotent: clear any prior interval/listeners so a parcours-page
+        // re-entry doesn't stack duplicate timers and handlers.
+        this.stopTracking();
         this.state.geoMode = GEO.mode();
-        this._voicePosInterval = setInterval(() => this.store(), 10000)
+        // 5s periodic snapshot — tight enough that a crash loses at most a few
+        // seconds of voice progress.
+        this._voicePosInterval = setInterval(() => this.store(), 5000)
+        // Cordova app-background (real device).
         this._pauseHandler = () => this.store()
         document.addEventListener('pause', this._pauseHandler)
+        // Page-hide / tab-hide — the only signal a desktop browser reload emits.
+        // Without this, a reload never triggers a final store() and the resume
+        // position is stuck at whatever the last 5s tick captured.
+        this._hideHandler = () => { if (document.visibilityState === 'hidden') this.store(); }
+        this._pageHideHandler = () => this.store()
+        document.addEventListener('visibilitychange', this._hideHandler)
+        window.addEventListener('pagehide', this._pageHideHandler)
         this.store();
     }
 
@@ -606,6 +619,14 @@ class Parcours extends EventEmitter {
         if (this._pauseHandler) {
             document.removeEventListener('pause', this._pauseHandler)
             this._pauseHandler = null
+        }
+        if (this._hideHandler) {
+            document.removeEventListener('visibilitychange', this._hideHandler)
+            this._hideHandler = null
+        }
+        if (this._pageHideHandler) {
+            window.removeEventListener('pagehide', this._pageHideHandler)
+            this._pageHideHandler = null
         }
     }
 
