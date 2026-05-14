@@ -861,6 +861,22 @@ class PlayerSimple extends EventEmitter
         return (this._player !== null && !this._loadError) || (this._media && this._media.src == '-')
     }
 
+    // seek([seconds]) — getter/setter in seconds, proxied to the underlying
+    // Howl / NativeMediaPlayer. Without this, snapshotVoicePosition() in
+    // parcours.js could never read a position and resume-with-progress (P3.5)
+    // silently always restarted the step from 0.
+    // Howler's no-arg seek() returns the Howl object itself in some states —
+    // guard with typeof so callers always get a clean number.
+    seek(seconds) {
+        if (!this._player) return 0
+        if (seconds === undefined) {
+            let p = this._player.seek()
+            return (typeof p === 'number' && !isNaN(p)) ? p : 0
+        }
+        this._player.seek(seconds)
+        return this
+    }
+
     rewindOnPause(value = -1) {
         this._rewindOnPause = value
     }
