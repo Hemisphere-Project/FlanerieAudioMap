@@ -62,6 +62,11 @@ class Parcours extends EventEmitter {
             mediaPackSize: 0,
             mediaPackLoaded: 0,
             resumeStepVoicePos: 0,
+            // True once the step at stepIndex has completed its audio. Persisted
+            // because Step._done is in-memory only — without this, a reload
+            // points the LOST target back at the finished step instead of the
+            // next one. Reset to false whenever a new step becomes current.
+            stepDone: false,
             // LOST state — true while the walker is too far from where they
             // should be. Persisted via store() so a kill-and-relaunch wakes
             // back up in LOST instead of silent.
@@ -84,6 +89,7 @@ class Parcours extends EventEmitter {
     currentStep(s = null) {
         if (s !== null) {
             this.state.stepIndex = s;
+            this.state.stepDone = false; // new current step — not done yet
             this.store();
             this.prewarmUpcomingStep('current-step-change');
         }
@@ -190,6 +196,14 @@ class Parcours extends EventEmitter {
         // Load State
         if (data.state) this.state = { ...this.state, ...data.state };
         this.state.medialoaded = this.state.mediaPackSize > 0 && this.state.mediaPackLoaded >= this.state.mediaPackSize;
+
+        // Restore the current step's _done flag from persisted state. Step._done
+        // is in-memory only; without this, after a reload lostTarget() and the
+        // spot re-fire gating would treat a finished step as still in progress.
+        if (this.state.stepDone && this.state.stepIndex >= 0) {
+            let curStep = this.find('steps', this.state.stepIndex);
+            if (curStep) curStep._done = true;
+        }
 
         // Link with GEO
         GEO.removeAllListeners('position');
@@ -324,7 +338,15 @@ class Parcours extends EventEmitter {
             s.on('enter', () => this.emit('enter', s));
             s.on('leave', () => this.emit('leave', s));
             s.on('fire', (spot, meta) => this.emit('fire', spot, meta));
-            s.on('done', () => this.emit('done', s));
+            s.on('done', () => {
+                // Persist done-state for the current step so a reload guides the
+                // walker to the NEXT step instead of back to this finished one.
+                if (type === 'steps' && s._index === this.state.stepIndex) {
+                    this.state.stepDone = true;
+                    this.store();
+                }
+                this.emit('done', s);
+            });
         }
         return this;
     }
