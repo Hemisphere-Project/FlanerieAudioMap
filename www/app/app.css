@@ -245,11 +245,34 @@ input[type=number].input-page::-webkit-outer-spin-button {
 
 #parcours-map {
     height: 70%;
-    transition: opacity 1.5s;
+    transition: opacity 0.3s;
 }
 
+/* "Je suis perdu·e" — pinned to the top of the page so it's reachable while
+   audio plays with the map hidden. Solid amber background so it stays legible
+   over both the dark backdrop and the map tiles when the map is shown. */
 #parcours-lost {
-    opacity: 0.5;
+    position: absolute;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 900;
+    padding: 10px 18px;
+    background-color: #F8B400;
+    color: #111;
+    border: none;
+    border-radius: 24px;
+    font-family: 'Courier New', 'Roboto', Arial, sans-serif;
+    font-size: 1em;
+    font-weight: bold;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+    cursor: pointer;
+}
+
+#parcours-lost.is-active {
+    background-color: #2c2c2c;
+    color: #fff;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
 }
 
 .position-icon {
@@ -270,6 +293,29 @@ input[type=number].input-page::-webkit-outer-spin-button {
     z-index: 1000;
     opacity: 0.8;
 }
+
+/* GPS accuracy in metres, bucket-coloured. Pinned next to the GPS icon so the
+   walker can correlate "I feel lost" with "my GPS is bad here". Hidden when
+   the GPS-lost overlay covers everything. */
+#gps-precision {
+    position: absolute;
+    top: 8px;
+    right: 36px;
+    z-index: 1000;
+    padding: 2px 8px;
+    background-color: rgba(0, 0, 0, 0.6);
+    color: #fff;
+    border-radius: 10px;
+    font-family: 'Courier New', monospace;
+    font-size: 0.8em;
+    opacity: 0.9;
+}
+#gps-precision.bucket-excellent,
+#gps-precision.bucket-good     { color: #6fff86; }
+#gps-precision.bucket-fair     { color: #ffd060; }
+#gps-precision.bucket-poor,
+#gps-precision.bucket-bad      { color: #ff8a8a; }
+#gps-precision.bucket-unknown  { color: #888; }
 
 #resume-overlay,
 #gpslost-overlay {
@@ -330,6 +376,73 @@ input[type=number].input-page::-webkit-outer-spin-button {
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
     pointer-events: none; /* map below stays interactive */
 }
+
+/* The dismiss button re-enables pointer events for itself only so the band
+   stays non-interactive elsewhere. Hides the band locally for 60s; LOST state
+   itself stays active (state.lost), only the visual is muted. */
+#lost-band-dismiss {
+    pointer-events: auto;
+    margin-left: 12px;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    border: 1px solid rgba(255, 255, 255, 0.4);
+    background-color: rgba(0, 0, 0, 0.25);
+    color: #fff;
+    font-size: 0.9em;
+    line-height: 1;
+    cursor: pointer;
+}
+
+/* Manual peek banner — appears briefly when the walker taps "Je suis perdu·e"
+   without an active LOST state. Same position as #lost-band but neutral colour
+   and auto-fades. */
+#peek-banner {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 998;
+    background-color: rgba(40, 40, 40, 0.92);
+    color: #fff;
+    padding: 14px 18px;
+    text-align: center;
+    font-size: 0.95em;
+    line-height: 1.4;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    transition: opacity 0.4s;
+}
+
+/* Inline "zone bleue claire" highlight — matches COLOR_CURRENT (#43FAF2). */
+.zone-color-target {
+    color: #43FAF2;
+    text-shadow: 0 0 4px rgba(67, 250, 242, 0.4);
+}
+
+/* Live distance to target while the recovery map is open. Pinned near the
+   bottom so it doesn't overlap the band, with high contrast. */
+#lost-distance {
+    position: absolute;
+    bottom: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 901;
+    padding: 8px 16px;
+    background-color: rgba(0, 0, 0, 0.78);
+    color: #fff;
+    border-radius: 20px;
+    font-family: 'Courier New', 'Roboto', Arial, sans-serif;
+    font-size: 1.1em;
+    font-weight: bold;
+    pointer-events: none;
+    transition: color 0.3s;
+}
+
+#lost-distance.is-approaching { color: #6fff86; }
+#lost-distance.is-receding    { color: #ff8a8a; }
 
 /* Diagnostic page */
 #diag-progress { font-size: 0.85em; color: #aaa; margin-bottom: 4px; text-align: center; }

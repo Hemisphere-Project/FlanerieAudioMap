@@ -216,11 +216,12 @@
 
         <div id="parcours" class="page">
             <img id="gps-status" src="$BASEPATH$/images/gps-off.png" alt="GPS Status" width="24" height="24">
+            <span id="gps-precision" class="bucket-unknown">—</span>
             <h3 id="parcours-title">Flanerie en cours </h3>
             <h3 id="parcours-title-dev"></h3>
             <p id="parcours-run">Suivez la voix...</p>
             <p id="parcours-init">Rendez vous au point de départ pour commencer le parcours.</p>
-            <button id="parcours-lost" class="btn btn-primary btn-page">Je suis perdu.e !</button>
+            <button id="parcours-lost" class="btn">📍 Je suis perdu·e</button>
             <button id="parcours-rearm" class="dev btn btn-dev-parcours">Rearm</button>
             <button id="parcours-restart" class="dev btn btn-dev-parcours2">Restart</button>
             <div id="parcours-map"></div>
@@ -285,7 +286,16 @@
         </div>
 
         <div id="lost-band" style="display:none;">
-            <span>Vous vous êtes éloigné — retournez vers le repère sur la carte.</span>
+            <span id="lost-band-text">Vous vous éloignez du parcours. Rejoignez la zone <b class="zone-color-target">bleue claire</b> sur la carte.</span>
+            <button id="lost-band-dismiss" aria-label="Masquer">✕</button>
+        </div>
+
+        <div id="peek-banner" style="display:none;">
+            <span>La zone <b class="zone-color-target">bleue claire</b> est votre prochaine étape.</span>
+        </div>
+
+        <div id="lost-distance" style="display:none;">
+            <span id="lost-distance-text">→ — m</span>
         </div>
 
     </div>

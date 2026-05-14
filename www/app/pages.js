@@ -100,6 +100,8 @@ PAGES_CLEANUP['parcours']           = () => {
     RESUME_PLAYER.stop();
     $('#gpslost-overlay').hide();
     $('#lost-band').hide();
+    // Close the recovery map cleanly so the next visit starts from a known state.
+    if (typeof closeMapForRecovery === 'function') closeMapForRecovery({source: 'page_exit'});
 };
 PAGES_CLEANUP['checknotifications'] = () => clearNotificationPermissionCheck();
 PAGES_CLEANUP['checkbatteryopt']    = () => clearBatteryOptCheck();
@@ -981,6 +983,18 @@ PAGES['checkgeo'] = () => {
     CHECKGEO = setInterval(() => {
         const gpsImg = document.getElementById('gps-status');
         gpsImg.src = gpsImg.src.replace(/gps-(on|off)\.png/, GEO.alive() ? 'gps-on.png' : 'gps-off.png');
+
+        // GPS precision badge: bucket-coloured, refreshed every tick alongside
+        // the on/off icon. Hidden when no recent fix is known.
+        const $prec = $('#gps-precision');
+        let p = GEO && GEO.lastPosition;
+        if (!GEO.alive() || !p || !p.coords || typeof p.coords.accuracy !== 'number') {
+            $prec.attr('class', 'bucket-unknown').text('—');
+        } else {
+            let acc = Math.round(p.coords.accuracy);
+            let bucket = typeof gpsAccuracyBucket === 'function' ? gpsAccuracyBucket(acc) : 'unknown';
+            $prec.attr('class', 'bucket-' + bucket).text(acc + ' m');
+        }
     }, 1000);
 }
 
@@ -1612,29 +1626,32 @@ PAGES['parcours'] = () => {
         PARCOURS.showSpotMarkers('steps');
     } 
 
-    // Function to update markers
+    // Paint exactly one cyan target — `lostTarget()` resolves it (active step
+    // if narration is still running there, otherwise next step). Done steps
+    // stay grey. All other upcoming steps stay hidden in normal mode so the
+    // walker's instruction is unambiguous: "Rejoignez la zone bleue claire".
+    // In DEVMODE we keep painting upcoming steps for debugging (greyed out).
     function updateStepsMarkers() {
+        let target = PARCOURS.lostTarget();
+        let targetIdx = target ? target._index : -1;
+        let doneIdx = PARCOURS.currentStep();
 
-        // Mark passed steps in grey, current step in red
         PARCOURS.spots.steps.forEach((s, i) => {
-            if (i < PARCOURS.currentStep()) {
-                s.showMarker(COLOR_DONE, 0.5)
+            if (i < doneIdx || (i === doneIdx && i !== targetIdx)) {
+                s.showMarker(COLOR_DONE, 0.5);
             }
-            else if (i == PARCOURS.currentStep()) {
-                s.showMarker(COLOR_CURRENT, 0.5)
+            else if (i === targetIdx) {
+                s.showMarker(COLOR_CURRENT, 0.7);
             }
-        })
-
-        // Show next steps in yellow
-        let i = PARCOURS.currentStep() + 1;
-        let sNext = PARCOURS.find('steps', i)
-        while (sNext) {
-            sNext.showMarker(COLOR_NEXT)
-            if (!DEVMODE && !sNext._spot.optional) break;
-            i++;
-            // if (!DEVMODE) break;    // show only next step in normal mode
-            sNext = PARCOURS.find('steps', i)
-        }
+            else if (DEVMODE) {
+                // Dev: keep upcoming steps visible but greyed so the active
+                // target stays the obvious one.
+                s.showMarker(COLOR_DONE, 0.3);
+            }
+            else {
+                s.hideMarker();
+            }
+        });
     }
 
     // ON step fire: show next
@@ -1654,12 +1671,12 @@ PAGES['parcours'] = () => {
             //     PARCOURS.spots.zones.map(z => z.showMarker())
         }
 
-        // Hide map
+        // Hide map back into audio-first immersion after the first step fires.
+        // Note: openMapForRecovery / closeMapForRecovery handle the map+button
+        // state machine — call closeMapForRecovery so the button label and
+        // map controls reset together.
         if (!DEVMODE && s._index==PARCOURS.currentStep() && !isResume) {
-            $('#parcours-map').css('opacity', 0)
-            setTimeout(() => {
-                $('#parcours-lost').show()
-            }, 5000)
+            closeMapForRecovery({source: 'first_step_fire'});
         }
 
         // Last step: prepare GPS cutoff
@@ -1681,7 +1698,10 @@ PAGES['parcours'] = () => {
     PARCOURS.on('done', (s) => {
         if (s._type != 'steps') return
         TELEMETRY.log('step_done', {step: s._index, name: s._spot.name});
-        s.showMarker(COLOR_DONE, 0.5)
+        // Repaint markers so the next step picks up the cyan target before
+        // the walker arrives at it — otherwise the map shows no target between
+        // 'done' on the current step and 'fire' on the next.
+        updateStepsMarkers()
 
         // Last step
         if (s._index + 1 == PARCOURS.spots.steps.length) {
@@ -1724,11 +1744,12 @@ PAGES['parcours'] = () => {
     $('#parcours-title-dev').text(PARCOURS.info.name).toggle(DEVMODE)
     $('#parcours-run').hide()
 
-    // Lost button
-    $('#parcours-lost').hide().off().on('click', () => {
-        console.log('LOST');
-        $('#parcours-map').css('opacity', 1)
-        $('#parcours-lost').hide()
+    // "Je suis perdu·e" button toggles the recovery map. Always visible during
+    // the walk — the visual state (amber idle / dark "✕ Retour à l'écoute" when
+    // map is open) is driven by openMapForRecovery / closeMapForRecovery.
+    $('#parcours-lost').show().off().on('click', () => {
+        if (MAP_RECOVERY_OPEN) closeMapForRecovery({source: 'manual_dismiss'});
+        else openMapForRecovery({source: 'manual'});
     })
 
     // Activate Parcours
@@ -1738,11 +1759,11 @@ PAGES['parcours'] = () => {
         PARCOURS.info.name || PARCOURS.info.file || PARCOURS.info.id || ''
     );
 
-    // First RUN
+    // First RUN — paint step 0 as the single cyan target (matches updateStepsMarkers).
     if (PARCOURS.currentStep() < 0) {
         console.log('FIRST RUN')
         TYPEWRITE('parcours-init')
-        PARCOURS.find('steps', 0).showMarker(COLOR_NEXT)
+        updateStepsMarkers()
     }
 
     // RESUME
@@ -1943,13 +1964,162 @@ var GPSSIGNAL_OK = true;
 
 // LOST state UI helpers — split out so the resume path can repaint the band
 // on a kill-and-relaunch without duplicating the entry handler's audio gates.
+// LOST_BAND_MUTED_UNTIL: timestamp until which the band stays hidden after a
+// manual dismiss. LOST state itself (PARCOURS.state.lost) is unaffected — the
+// audio loop also pauses but a still-lost walker gets a band re-appearance
+// after 60s if they haven't recovered.
+var LOST_BAND_MUTED_UNTIL = 0;
+var LOST_BAND_MUTE_TIMER = null;
+const LOST_BAND_MUTE_MS = 60000;
+
 function applyLostUI() {
-    $('#lost-band').css('display', 'flex');
-    if (typeof LOST_PLAYER !== 'undefined' && LOST_PLAYER.isLoaded()) LOST_PLAYER.play();
+    if (Date.now() >= LOST_BAND_MUTED_UNTIL) {
+        $('#lost-band').css('display', 'flex');
+        if (typeof LOST_PLAYER !== 'undefined' && LOST_PLAYER.isLoaded()) LOST_PLAYER.play();
+    }
+    openMapForRecovery({source: 'lost'});
 }
 function clearLostUI() {
     if (typeof LOST_PLAYER !== 'undefined') LOST_PLAYER.stop();
     $('#lost-band').hide();
+    LOST_BAND_MUTED_UNTIL = 0;
+    if (LOST_BAND_MUTE_TIMER) { clearTimeout(LOST_BAND_MUTE_TIMER); LOST_BAND_MUTE_TIMER = null; }
+    closeMapForRecovery({source: 'recover'});
+}
+
+// Map open/close as a single path so manual help (#parcours-lost tap) and the
+// auto LOST state get identical treatment: visible map, drag + zoom unlocked,
+// auto-framed on the walker + target, and the live distance updater running.
+// On close, the map re-locks and returns to immersion.
+var MAP_RECOVERY_OPEN = false;
+var LOST_DISTANCE_LISTENER = null;
+var LOST_DISTANCE_LAST = null;
+var PEEK_BANNER_TIMER = null;
+
+function fitTargetBounds() {
+    if (!document.MAP) return;
+    let target = PARCOURS.lostTarget();
+    let pos = GEO.lastPosition;
+    if (!target) return;
+
+    let targetCenter = target.getCenterPosition();
+    if (!pos || !pos.coords) {
+        // No fix yet — at least centre on the target so the walker sees where to go.
+        try { document.MAP.setView(targetCenter, 18); } catch(e) {}
+        return;
+    }
+    try {
+        document.MAP.fitBounds(
+            [[pos.coords.latitude, pos.coords.longitude], targetCenter],
+            { padding: [50, 50], maxZoom: 19 }
+        );
+    } catch(e) { console.warn('[MAP] fitBounds failed:', e); }
+}
+
+function updateLostDistance(position) {
+    let target = PARCOURS.lostTarget();
+    if (!target) { $('#lost-distance').hide(); return; }
+    let pos = position || GEO.lastPosition;
+    if (!pos || !pos.coords) { $('#lost-distance-text').text('→ — m'); return; }
+
+    let d = Math.round(target.distanceToBorder(pos));
+    $('#lost-distance-text').text('→ ' + d + ' m');
+
+    // Trend coloring: green if shrinking, red if growing, neutral otherwise.
+    let band = $('#lost-distance');
+    if (LOST_DISTANCE_LAST !== null) {
+        if (d < LOST_DISTANCE_LAST - 1) band.removeClass('is-receding').addClass('is-approaching');
+        else if (d > LOST_DISTANCE_LAST + 1) band.removeClass('is-approaching').addClass('is-receding');
+    }
+    LOST_DISTANCE_LAST = d;
+}
+
+function startLostDistanceUpdater() {
+    if (LOST_DISTANCE_LISTENER) return;
+    LOST_DISTANCE_LAST = null;
+    $('#lost-distance').removeClass('is-approaching is-receding').show();
+    updateLostDistance(); // paint once immediately
+    LOST_DISTANCE_LISTENER = (pos) => updateLostDistance(pos);
+    GEO.on('position', LOST_DISTANCE_LISTENER);
+}
+
+function stopLostDistanceUpdater() {
+    if (LOST_DISTANCE_LISTENER) {
+        try { GEO.off('position', LOST_DISTANCE_LISTENER); } catch(e) {}
+        LOST_DISTANCE_LISTENER = null;
+    }
+    LOST_DISTANCE_LAST = null;
+    $('#lost-distance').hide().removeClass('is-approaching is-receding');
+}
+
+function showPeekBanner() {
+    if (PEEK_BANNER_TIMER) clearTimeout(PEEK_BANNER_TIMER);
+    $('#peek-banner').css({display: 'flex', opacity: 1});
+    PEEK_BANNER_TIMER = setTimeout(() => {
+        $('#peek-banner').css('opacity', 0);
+        PEEK_BANNER_TIMER = setTimeout(() => $('#peek-banner').hide(), 500);
+    }, 4000);
+}
+
+function hidePeekBanner() {
+    if (PEEK_BANNER_TIMER) { clearTimeout(PEEK_BANNER_TIMER); PEEK_BANNER_TIMER = null; }
+    $('#peek-banner').hide();
+}
+
+function openMapForRecovery(opts) {
+    opts = opts || {};
+    if (currentPage !== 'parcours') return;
+    let alreadyOpen = MAP_RECOVERY_OPEN;
+    MAP_RECOVERY_OPEN = true;
+    if (typeof TELEMETRY !== 'undefined' && !alreadyOpen) TELEMETRY.log('map_opened', {source: opts.source || 'unknown'});
+
+    $('#parcours-map').css('opacity', 1);
+    $('#parcours-lost').addClass('is-active').text('✕ Retour à l\'écoute');
+
+    if (document.MAP) {
+        try { document.MAP.dragging.enable(); } catch(e) {}
+        try { document.MAP.touchZoom.enable(); } catch(e) {}
+        try { document.MAP.scrollWheelZoom.enable(); } catch(e) {}
+        try { document.MAP.doubleClickZoom.enable(); } catch(e) {}
+        document.MAP.options.maxZoom = 20;
+        if (!document.MAP._zoomControl) {
+            document.MAP._zoomControl = L.control.zoom({position: 'topright'}).addTo(document.MAP);
+        }
+    }
+
+    fitTargetBounds();
+    startLostDistanceUpdater();
+
+    // Manual peek shows an ephemeral banner so the walker knows what to do.
+    // LOST state has its own band (with audio loop), so we suppress the peek
+    // banner there to avoid two top banners.
+    if (opts.source === 'manual') showPeekBanner();
+    else hidePeekBanner();
+}
+
+function closeMapForRecovery(opts) {
+    opts = opts || {};
+    let wasOpen = MAP_RECOVERY_OPEN;
+    MAP_RECOVERY_OPEN = false;
+    if (typeof TELEMETRY !== 'undefined' && wasOpen) TELEMETRY.log('map_closed', {source: opts.source || 'unknown'});
+
+    $('#parcours-map').css('opacity', 0);
+    $('#parcours-lost').removeClass('is-active').text('📍 Je suis perdu·e');
+
+    if (document.MAP) {
+        try { document.MAP.dragging.disable(); } catch(e) {}
+        try { document.MAP.touchZoom.disable(); } catch(e) {}
+        try { document.MAP.scrollWheelZoom.disable(); } catch(e) {}
+        try { document.MAP.doubleClickZoom.disable(); } catch(e) {}
+        document.MAP.options.maxZoom = 19;
+        if (document.MAP._zoomControl) {
+            document.MAP.removeControl(document.MAP._zoomControl);
+            document.MAP._zoomControl = null;
+        }
+    }
+
+    stopLostDistanceUpdater();
+    hidePeekBanner();
 }
 
 PARCOURS.on('lost', (info) => {
@@ -1979,6 +2149,26 @@ PARCOURS.on('lost', (info) => {
     applyLostUI();
 });
 
+// Manual dismiss: hide the band + pause the loop for LOST_BAND_MUTE_MS.
+// LOST state stays active so the recovery overlay / distance updater keep
+// working; only the visual + audio nag are muted. After the timer, if still
+// LOST, applyLostUI() re-paints the band.
+$('#lost-band-dismiss').off().on('click', (e) => {
+    e.stopPropagation();
+    LOST_BAND_MUTED_UNTIL = Date.now() + LOST_BAND_MUTE_MS;
+    $('#lost-band').hide();
+    if (typeof LOST_PLAYER !== 'undefined') LOST_PLAYER.stop();
+    if (LOST_BAND_MUTE_TIMER) clearTimeout(LOST_BAND_MUTE_TIMER);
+    LOST_BAND_MUTE_TIMER = setTimeout(() => {
+        LOST_BAND_MUTE_TIMER = null;
+        if (PARCOURS.state.lost && currentPage === 'parcours' && GPSSIGNAL_OK) applyLostUI();
+    }, LOST_BAND_MUTE_MS);
+    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('lost_band_dismissed', {
+        step: PARCOURS.currentStep(),
+        muted_ms: LOST_BAND_MUTE_MS,
+    });
+});
+
 PARCOURS.on('recover', (info) => {
     if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('user_recovered', {
         step: PARCOURS.currentStep(),
@@ -2001,9 +2191,21 @@ GEO.stateUpdateTimeout = 30 * 1000; // 30s on all platforms — must exceed the 
 // Default GPS-lost copy (reset whenever we re-show the overlay for a transient signal loss).
 const GPSLOST_TEXT_DEFAULT = 'Signal GPS perdu.<br/><br/>Déplacez-vous vers un espace dégagé.<br/>La progression reprend automatiquement dès le retour du signal.';
 
+// Returns a "Précision GPS: <Xm>" prefix when we have a recent fix, otherwise ''.
+// Helps the walker correlate "no signal" with the last known accuracy.
+function gpsPrecisionPrefix() {
+    let p = GEO && GEO.lastPosition;
+    if (!p || !p.coords || typeof p.coords.accuracy !== 'number') return '';
+    return '<b>Dernière précision GPS:</b> ' + Math.round(p.coords.accuracy) + ' m<br /><br />';
+}
+
 function setGpsLostOverlay(opts) {
     opts = opts || {};
-    $('#gpslost-overlay-desc').html(opts.html || GPSLOST_TEXT_DEFAULT);
+    let body = opts.html || GPSLOST_TEXT_DEFAULT;
+    // Prepend precision only on the default (transient signal-loss) copy.
+    // Auth-revoked / battery-kill copies already explain a concrete cause.
+    if (!opts.html) body = gpsPrecisionPrefix() + body;
+    $('#gpslost-overlay-desc').html(body);
     if (opts.settings) $('#gpslost-settings').show();
     else $('#gpslost-settings').hide();
     $('#gpslost-overlay').css('display', 'flex');

@@ -1,7 +1,7 @@
 # Mobile Audit Remediation Plan
 
 Original: 2026-04-27  
-Last updated: 2026-05-13 (audit restructure: dedup C heading, P3.5 relocated, Architecture Summary aligned with current code)  
+Last updated: 2026-05-13 (LOST state machine P1.18, voice/afterplay fallback P1.19, RESUME cue P1.20, AUDIOFOCUS auto-retry P1.21, devmode tools page P1.22, paused() crash fix; Architecture Summary + telemetry list aligned with current code)  
 Scope: Cordova launcher + downloaded local webapp, GPS-triggered audio walk, locked-screen pocket usage, published parcours FLANERIE_ELYSEE  
 Plugin: [`cordova-background-geolocation-plugin`](https://github.com/Maigre/cordova-background-geolocation-plugin) v2.4.0 (Flanerie fork of HaylLtd v2.3.3)
 
@@ -61,11 +61,11 @@ Keepalive stack (all active during parcours):
 
 Audio model (current code; see player.js + spot.js):
 - **Step → PlayerStep**: 2 internal channels.
-  - `voice` — non-looped narration, rewind 3s on pause, fires `end` → starts afterplay.
-  - `afterplay` — looped continuation, native infinite-loop on iOS (`numberOfLoops: -1`), starts when voice ends, no `end` event while looping.
+  - `voice` — non-looped narration, rewind 3s on pause, fires `end` → starts afterplay. `loaderror`/`playerror` short-circuit to `startAfterplay()` so the step lifecycle still advances (P1.19).
+  - `afterplay` — looped continuation, native infinite-loop on iOS (`numberOfLoops: -1`), starts when voice ends, no `end` event while looping. If the step's own afterplay is missing or errored, `PlayerStep` routes to the shared `DEFAULT_AFTERPLAY_PLAYER` instead (P1.19).
 - **Zone → PlayerSimple (looped)** — ambient or object audio (mode `Ambiance` uses 4000ms fade, otherwise instant).
 - **Offlimit → PlayerSimple (looped, 1000ms fade)** — boundary message; once loaded, kept loaded for upcoming triggers.
-- **Global persistent players**: `SILENT_PLAYER` (parcours-page keepalive), `GPSLOST_PLAYER` (GPS-lost cue), `testplayer` (checkaudio gate).
+- **Global persistent players**: `SILENT_PLAYER` (parcours-page keepalive), `GPSLOST_PLAYER` (GPS-lost cue), `DEFAULT_AFTERPLAY_PLAYER` (shared afterplay fallback, P1.19), `RESUME_PLAYER` (one-shot relaunch cue, P1.20), `LOST_PLAYER` (looped while walker is out-of-zone, P1.18), `testplayer` (checkaudio gate). All load from `www/app/images/{afterplay,resume,youlost,gpslost}.mp3` — bundled placeholders ship as `_afterplay.mp3` / `_resume.mp3` / `_youlost.mp3` (underscore-prefixed) so the loader silently no-ops until the operator renames them.
 
 Page flow:
 ```
@@ -329,6 +329,67 @@ Files: `www/app/assets/player.js`
 
 Files: `www/app/assets/spot.js`, `www/app/assets/player.js`, `www/app/assets/parcours.js`
 
+#### P1.18 LOST state machine — walker out of zone ✅ DONE (2026-05-13)
+
+**Problem:** before this, a walker who drifted away from the active or next step had no in-app signal. The map would still show the repère but audio just stopped, and `step_skip_done` / re-fire telemetry only surfaced after the fact. Offlimit re-crossings while wandering could also fire spurious zone audio.
+
+**Resolution:** new `Parcours.evaluateLostState(position)` runs first in `update()`. Hysteresis: enter LOST when `distanceToBorder(target) > LOST_ENTER_M` (50m) sustained for `LOST_SUSTAIN_MS` (15s), exit when `distance < LOST_EXIT_M` (0m, i.e. inside). `motionIsStationary` defeats the entry timer (pocketed walker isn't wandering), and `GPSSIGNAL_OK === false` defers the decision so GPS-lost takes priority. Target is the active step if still narrating/afterplaying, otherwise the next step. Last step done → no LOST.
+
+While LOST:
+- `Parcours.update()` early-returns after `evaluateLostState`, so offlimits are masked and zones/steps can't (re)trigger.
+- `pages.js` `on('lost')` pauses the active step player, runs `PARCOURS.stopAudio('zones')` and `stopAudio('offlimits')`, vibrates `[200,100,200,100,600]`, and renders `#lost-band` (red pinned top band, `pointer-events:none` so the map stays interactive) + plays looped `LOST_PLAYER` (silent fallback if `images/youlost.mp3` missing).
+- State persists across kill (`state.lost` / `state.lostSince` in localStorage). On relaunch, `PAGES['parcours']` resume branch calls `applyLostUI()` so the walker isn't dropped into silence; `evaluateLostState` fires `recover` on the next position tick if they already came back into range.
+
+Telemetry: `user_lost` (step, target_index, target_name, distance), `user_recovered` (step, distance). `server.js` + `scripts/telemetry-report.js` now compute `lostRecoveryMedianMs` per session and expose `userLostCount` / `userRecoveredCount` columns in the report.
+
+Files: `www/app/assets/parcours.js` (LOST_ENTER_M / LOST_EXIT_M / LOST_SUSTAIN_MS constants, `evaluateLostState()`, persisted state), `www/app/pages.js` (`applyLostUI`/`clearLostUI`, `on('lost')`/`on('recover')` handlers, `GPSSIGNAL_OK` mirror), `www/app/app.html` (`#lost-band`), `www/app/app.css` (`.lost-band` style), `server.js`, `scripts/telemetry-report.js`
+
+Regression risk: **MEDIUM** — first JS state on top of every position update. Validate that a normal walk does not enter LOST during stops at zone boundaries (motionIsStationary gate covers pocket cases but not slow walking near 50m). Tune `LOST_ENTER_M` / `LOST_SUSTAIN_MS` if false positives surface in telemetry.
+
+#### P1.19 Voice failure + afterplay fallback ✅ DONE (2026-05-13)
+
+Two failure modes that previously left the walker in silence are now self-healing.
+
+**1. Voice load/play failure:** `PlayerStep` constructor registers `voice.on('loaderror')` and `voice.on('playerror')`. On either, if `state === 'play'`, the step skips directly to `startAfterplay()`. The walker hears the looped afterplay instead of a dead zone, and step progression (`done` emit, next-step arming) still happens. Telemetry: `step_voice_failed` (reason, src).
+
+**2. Missing/broken step afterplay:** new `PlayerStep._needsDefaultAfterplay()` returns true if `afterplay._media` is null, `src === '-'`, or `_loadError` is set. `startAfterplay()` checks the flag and routes through the shared `DEFAULT_AFTERPLAY_PLAYER` instead of the per-step instance (`_defaultAfterplayActive` mirrors the routing so `play()`/`stop()`/`pause()`/`clear()` all hit the right player). The shared player is stopped before play because another step may still be fading it out. Silently silent if `images/afterplay.mp3` itself isn't bundled (`isLoaded()` gate). Telemetry: `step_afterplay_fallback` (reason: `loaderror` | `no_src`).
+
+Per-session counts surface in the telemetry report as `voiceFailCount`, `afterplayFallbackCount`, `afterplayFallbackNoSrc`, `afterplayFallbackLoadError`.
+
+Files: `www/app/assets/player.js` (PlayerStep constructor `onVoiceFail`, `_needsDefaultAfterplay`, routing in `startAfterplay`/`play`/`stop`/`pause`/`clear`), `www/app/pages.js` (`DEFAULT_AFTERPLAY_PLAYER` global), `server.js`, `scripts/telemetry-report.js`
+
+Regression risk: **LOW** — fallback paths only fire on broken assets; healthy parcours unchanged.
+
+#### P1.20 Resume cue on parcours rehydration ✅ DONE (2026-05-13)
+
+`RESUME_PLAYER` (one-shot, non-looped) plays once when `PAGES['parcours']` enters the resume branch (kill-and-relaunch). Gives the walker an immediate audio confirmation while GPS warms up and before they re-cross into the active step zone. Silently silent if `images/resume.mp3` isn't bundled. Cleaned up in `PAGES_CLEANUP['parcours']` and `PAGES['end']`.
+
+Files: `www/app/pages.js`
+
+#### P1.21 AUDIOFOCUS periodic auto-retry ✅ DONE (2026-05-13)
+
+Some Android OEMs (and occasionally iOS) drop the `AUDIOFOCUS_GAIN` callback after a transient loss, leaving the walker silent in their pocket with no way to recover unless they look at the screen and tap the resume overlay. A `setInterval(60s)` while on the parcours page (`currentPage === 'parcours'`, plus `tools` in DEVMODE for testing) re-calls `requestAudioFocus()` when `AUDIOFOCUS === 0` and `#resume-overlay` is visible. The first 3 attempts vibrate `[300,100,300,100,300]` to nudge the walker; counter resets when focus returns or the overlay hides. `GPSREVOKED` takes priority and skips the retry.
+
+Telemetry: `audiofocus_auto_retry` (attempt). Report exposes `audiofocusRetryCount` and `audiofocusRetryMaxAttempt`.
+
+Files: `www/app/pages.js`, `server.js`, `scripts/telemetry-report.js`
+
+Regression risk: **LOW** — gated tight on focus state + overlay visibility; idle when audio is healthy.
+
+#### P1.22 Devmode tools page ✅ DONE (2026-05-13)
+
+New `PAGES['tools']` (DEVMODE-only, button on `select` page) lets a tester force the failure paths that are hard to reproduce in the field without breaking the live parcours:
+
+- **Forcer LOST** / **Sortir de LOST** — synthesize `lost` / `recover` events on the live `PARCOURS`, exercising band + audio + telemetry without needing to walk 50m away.
+- **Voix HS sur étape courante** — emits `playerror` on the active step's voice player, exercising the P1.19 voice-fail-to-afterplay path.
+- **Afterplay générique sur étape courante** — flips `_defaultAfterplayActive` on the active step and plays `DEFAULT_AFTERPLAY_PLAYER`, exercising the P1.19 missing-afterplay fallback without altering the parcours data.
+- **Overlay reprise audio** — sets `AUDIOFOCUS = 0` and shows `#resume-overlay`; sit on the tools page ~60s to see the P1.21 auto-retry fire (the retry's `currentPage` gate includes `tools` in DEVMODE for exactly this).
+- **Snapshot état** — dumps `currentPage`, `AUDIOFOCUS`, `GPSSIGNAL_OK`, `GPSREVOKED`, `PARCOURS.state`, active step (index/name/active/done/playerState/playstate/defaultAfterplay), next step, all playing players (src list), all PAUSED_PLAYERS (src list) into the on-page console.
+
+Telemetry tags emitted by the buttons: `tools_force_lost`, `tools_clear_lost`, `tools_force_voice_fail`, `tools_force_afterplay_fallback`, `tools_show_resume_overlay`.
+
+Files: `www/app/pages.js` (`PAGES['tools']`), `www/app/app.html` (`#tools` page DOM, `#select-tools` button)
+
 ---
 
 ### P2: Supportability and observability
@@ -339,7 +400,23 @@ Low priority. No risk if deferred.
 
 #### P2.10 Telemetry and operational diagnostics ✅ PARTIAL
 
-Implemented: telemetry client, local buffering/flush/retry, session resume, server ingestion, session storage, admin listing. Events: session start/resume/end, GPS stream, GPS state, step fire/done, offlimit, restart markers, audiofocus, audio lifecycle (play gate/request/started/timeout/loaderror/playerror), iOS background task begin/end, step prewarm, warm/cold trigger context.
+Implemented: telemetry client, local buffering/flush/retry, session resume, server ingestion, session storage, admin listing.
+
+Events:
+- Session: `session_start`, `session_resume`, `session_end`
+- GPS: stream samples, `gps_state`, `gps_heartbeat_ok`, `gps_trigger_rejected`, `gps_revoked`, `gps_settings_open`, `gps_force_resume`
+- Step lifecycle: `step_fire`, `step_done`, `step_skip_done`, `step_refire_blocked`, `step_prewarm`
+- Step failure paths (P1.19): `step_voice_failed` (reason, src), `step_afterplay_fallback` (reason: `loaderror` | `no_src`)
+- LOST state (P1.18): `user_lost` (step, target_index, target_name, distance), `user_recovered` (step, distance)
+- Audio: `audio_play_gate`, `audio_play_requested`, `audio_play_started`, `audio_play_timeout` (with `ms`), `audio_loaderror`, `audio_playerror`
+- AudioFocus: `audiofocus_loss`, `audiofocus_gain`, `audiofocus_auto_retry` (attempt) (P1.21)
+- iOS: `ios_native_fallback`, iOS background task begin/end
+- Battery/OEM: `bg_stop_repeated`, `battery_kill_overlay`
+- Permissions: `motion_authorized`, `motion_check`
+- Misc: `restart`, warm/cold trigger context, `checkaudio_fail`
+- Devmode tools (P1.22): `tools_force_lost`, `tools_clear_lost`, `tools_force_voice_fail`, `tools_force_afterplay_fallback`, `tools_show_resume_overlay`
+
+Per-session derived fields in `server.js` + `scripts/telemetry-report.js`: `lostRecoveryMedianMs`, `userLostCount`, `userRecoveredCount`, `voiceFailCount`, `afterplayFallbackCount` / `afterplayFallbackNoSrc` / `afterplayFallbackLoadError`, `audiofocusRetryCount`, `audiofocusRetryMaxAttempt`. CLI report adds `Lost`, `Rec~`, `VFail`, `ApFb` columns.
 
 Still missing:
 - Permission-state snapshots at startup
@@ -347,7 +424,7 @@ Still missing:
 - Media preload success/failure telemetry at the parcours-pack level
 - Notification scheduling/permission diagnostics
 
-Files: `www/app/assets/telemetry.js`, `www/app/pages.js`, `www/app/assets/geoloc.js`, `www/app/assets/player.js`, `server.js`
+Files: `www/app/assets/telemetry.js`, `www/app/pages.js`, `www/app/assets/geoloc.js`, `www/app/assets/player.js`, `www/app/assets/parcours.js`, `server.js`, `scripts/telemetry-report.js`
 
 #### P2.11 SAS waiting buffer [SAFE-TODAY]
 
@@ -673,6 +750,10 @@ Plus a `document.resume` handler retry: when the user unlocks the screen and `AU
 - **C2** platform/plugin upgrades — configured, rebuild pending (Android SDK 36 + cordova-ios 8 + plugins)
 - **P1.11b** audio stack hardening (2026-05-13) — iOS Howler-fallback gate, AUDIOFOCUS=-1 gate, KEEP_AVAUDIOSESSION alignment, 15s watchdog, distinctive vibration. **Requires cordova-plugin-media reinstall** for the install variable to take effect (see C4).
 - **P1.12** battery-opt: broken settings button fix, OEM-banner detection fix, manufacturer-tailored copy, mid-walk OEM-kill heuristic
+- **P1.18** LOST state machine — needs a walk that deliberately drifts >50m from the next step to verify the 15s sustain timer, band rendering, audio cue, and the kill-and-relaunch resume path (state survives in localStorage)
+- **P1.19** voice / afterplay fallback — needs validation on a parcours with intentionally missing/broken voice or afterplay files (use the P1.22 tools page to force-trigger on a healthy parcours)
+- **P1.20** RESUME cue — verify it plays once on relaunch and not on normal entry
+- **P1.21** AUDIOFOCUS auto-retry — verify the 60s retry actually recovers audio on a Samsung where AUDIOFOCUS_GAIN is known to drop after a phone call
 - **P3.2** confirmgeo Toujours copy front-loaded + iOS Settings deep link + `confirmios` page removed
 - **P3.3b** Android `ACCESS_BACKGROUND_LOCATION` hard-block — needs validation on a fresh Android 11+ install where the first dialog silently denies "Allow all the time"
 - **P3.3c** iOS motion permission hard-block
@@ -741,6 +822,16 @@ Plus a `document.resume` handler retry: when the user unlocks the screen and `AU
 - Both platforms: simulate `AUDIOFOCUS === -1` (audiofocus plugin disabled) → `checkaudio` must hard-fail with "module audio non disponible" copy
 - Voice → afterplay transition on iOS with locked screen: verify no audio gap (validates `KEEP_AVAUDIOSESSION_ALWAYS_ACTIVE=YES` propagated to runtime after plugin reinstall)
 - Large MP3 (>5MB) load + play: verify the 15s play-timeout watchdog doesn't trip; if it does, `audio_play_timeout` telemetry surfaces in the dashboard
+- Step with deliberately broken voice file: voice fires `playerror` → step skips to afterplay automatically; `step_voice_failed` telemetry recorded (P1.19). Devmode shortcut: tools page "Voix HS sur étape courante"
+- Step with no `afterplay.src` (or broken file): voice ends → `DEFAULT_AFTERPLAY_PLAYER` loop plays from `images/afterplay.mp3`; `step_afterplay_fallback` telemetry recorded with `reason` (P1.19). Devmode shortcut: tools page "Afterplay générique sur étape courante"
+- Kill the app mid-step (active step playing voice), relaunch on parcours page: `RESUME_PLAYER` plays once; voice resumes from saved position (P1.20 + P3.5)
+- Android device known to drop `AUDIOFOCUS_GAIN` after a phone call: trigger a call, hang up, leave phone locked. After 60s the auto-retry should re-acquire focus and resume audio; `audiofocus_auto_retry` telemetry recorded (P1.21)
+
+### LOST state
+- Walk deliberately >50m away from the next/active step for >15s (and keep moving — `motionIsStationary` defeats the entry timer): `#lost-band` appears, `LOST_PLAYER` loop plays if bundled, active step pauses, zones/offlimits go silent. Walking back into the zone clears the band and resumes the active step on the next position tick
+- Force-kill the app while LOST, relaunch on parcours page: band reappears immediately via `applyLostUI()`; `recover` fires automatically if the walker came back into range while the app was dead
+- Verify `user_lost` / `user_recovered` telemetry pairs surface in the report with median recovery delta
+- Devmode shortcut: tools page "Forcer LOST" / "Sortir de LOST" exercise the same handlers without needing to walk away
 
 ### Data and startup
 - Start route with no data link after media preload
@@ -769,6 +860,7 @@ Plus a `document.resume` handler retry: when the user unlocks the screen and `AU
 - Review end-of-route cutoff behavior: `cutoff: 7` means GPS tracking stops 7 seconds after last step fires — verify this is long enough for the last audio block
 - Check for polygon overlaps between adjacent steps (BLOC_07→08, BLOC_08→09 are very close) — verify no double-trigger in practice
 - Verify the "Je suis perdu.e !" map works when offline (tile cache is currently disabled)
+- Check `www/app/images/` MP3 fallbacks: `afterplay.mp3` (DEFAULT_AFTERPLAY_PLAYER, P1.19), `resume.mp3` (RESUME_PLAYER, P1.20), `youlost.mp3` (LOST_PLAYER, P1.18). Ship with `_`-prefixed placeholders so the loader silently no-ops; the operator must rename them to enable the cues for a given show.
 
 ---
 
@@ -795,6 +887,7 @@ Short bugs not tracked under a numbered P-section. Each P1.X / P3.X entry above 
 - **GPS drift re-fire during loading** — `_active` flag in `Step`: set on fire, cleared on done/clear; `!_active` added to fire condition. `step_refire_blocked` telemetry added. (`spot.js`)
 - **`step_skip_done` spam** — `_skipDoneLogged` flag limits emission to once per step completion. (`spot.js`)
 - **`allSteps` global leak on parcours rebuild** — `allSteps = []` added to `Parcours.clear()` after per-step `clear()` calls. Confirmed in `parcours.js:30`. (`parcours.js`)
+- **`this._player.paused is not a function` on step stop** — P1.18/P1.19 work introduced `this._player.paused()` calls in `PlayerSimple.stop()`, `isPaused()`, `stopOut()`. `NativeMediaPlayer` exposes `paused()` (iOS path) but Howler's `Howl` does not, so any Howl-backed step crashed on stop. Added `PlayerSimple._isUnderlyingPaused()` helper: delegates to `paused()` when present, otherwise peeks at `Howl._sounds[0]._paused`. (`player.js`)
 
 ---
 

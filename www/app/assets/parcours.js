@@ -465,6 +465,24 @@ class Parcours extends EventEmitter {
         catch (error) { console.error('Error clearing parcours store:', error); }
     }
 
+    // Returns the single step the walker should be aiming for right now —
+    // used by both the LOST gate and the map marker painter so they always
+    // agree on which zone is highlighted on the map.
+    //   - null if the parcours is finished (last step done)
+    //   - step 0 if the walk hasn't started yet (rendezvous target)
+    //   - the active step if narration/afterplay is still running there
+    //   - otherwise the next step in sequence
+    lostTarget() {
+        let idx = this.state.stepIndex;
+        let steps = this.spots.steps || [];
+        if (!steps.length) return null;
+        if (idx < 0) return this.find('steps', 0);
+        let activeStep = this.find('steps', idx);
+        if (activeStep && activeStep._active) return activeStep;
+        if (idx + 1 < steps.length) return this.find('steps', idx + 1);
+        return null;
+    }
+
     // LOST evaluation: decides whether the walker is too far from where they
     // should be (active step if still narrating/afterplaying, otherwise next
     // step). Emits 'lost' on entry and 'recover' on exit — UI/audio handlers
@@ -477,23 +495,10 @@ class Parcours extends EventEmitter {
         // GPS-lost overlay. State.lost from a prior moment is preserved.
         if (typeof GPSSIGNAL_OK !== 'undefined' && !GPSSIGNAL_OK) return;
 
-        let idx = this.state.stepIndex;
-        if (idx < 0) return; // not started — rdv page handles distance UX
+        if (this.state.stepIndex < 0) return; // not started — rdv page handles distance UX
 
-        let activeStep = this.find('steps', idx);
-        if (!activeStep) return;
-
-        let stepsCount = (this.spots.steps || []).length;
-        let target;
-        if (activeStep._active) {
-            target = activeStep;
-        } else if (idx + 1 < stepsCount) {
-            target = this.find('steps', idx + 1);
-        } else {
-            // Last step done — no LOST.
-            return;
-        }
-        if (!target) return;
+        let target = this.lostTarget();
+        if (!target) return; // last step done or no parcours
 
         let distance = target.distanceToBorder(position);
 
