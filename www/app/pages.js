@@ -1460,11 +1460,11 @@ $('body').off('click').on('click', (e) => {
             if (zone == 'top') devmode(!DEVMODE);
             else {
                 console.log('RESTART (tap)');
+                PARCOURS.stopTracking();
                 TELEMETRY.log('session_restart_click', {reason: 'restart_tap'});
                 TELEMETRY.end();
-                PARCOURS.clearStore();
                 tapLocked = true;
-                setTimeout(() => { alert('Application réinitialisée'); location.reload(); }, 300);
+                setTimeout(() => { PARCOURS.clearStore(); alert('Application réinitialisée'); location.reload(); }, 300);
             }
         }
     }
@@ -1521,10 +1521,10 @@ $('#parcours-rearm').click(() => {
 
 $('#parcours-restart').click(() => {
     console.log('RESTART');
+    PARCOURS.stopTracking();
     TELEMETRY.log('session_restart_click', {reason: 'restart_button'});
     TELEMETRY.end();
-    PARCOURS.clearStore();
-    setTimeout(() => { alert('Application réinitialisée'); location.reload(); }, 300);
+    setTimeout(() => { PARCOURS.clearStore(); alert('Application réinitialisée'); location.reload(); }, 300);
 });
 
 
