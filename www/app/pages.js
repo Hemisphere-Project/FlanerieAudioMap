@@ -112,6 +112,7 @@ PAGES_CLEANUP['parcours']           = () => {
     $('#lost-band').hide();
     // Close the recovery map cleanly so the next visit starts from a known state.
     if (typeof closeMapForRecovery === 'function') closeMapForRecovery({source: 'page_exit'});
+    updateStepsMarkers = null;
     // Detach the parcours-page PARCOURS handlers so a re-entry doesn't stack them.
     PARCOURS_PAGE_HANDLERS.forEach(h => PARCOURS.off(h.event, h.fn));
     PARCOURS_PAGE_HANDLERS = [];
@@ -1657,7 +1658,7 @@ PAGES['parcours'] = () => {
     // stay grey. All other upcoming steps stay hidden in normal mode so the
     // walker's instruction is unambiguous: "Rejoignez la zone bleue claire".
     // In DEVMODE we keep painting upcoming steps for debugging (greyed out).
-    function updateStepsMarkers() {
+    updateStepsMarkers = function updateStepsMarkers() {
         let target = PARCOURS.lostTarget();
         let targetIdx = target ? target._index : -1;
         let doneIdx = PARCOURS.currentStep();
@@ -1949,11 +1950,11 @@ $('#parcours-rearm').click(() => {
     PARCOURS.state.lostSince = null
     PARCOURS._lostBeyondSince = null
     clearLostUI()
-    $('#parcours-map').css('opacity', 1)
+    closeMapForRecovery({source: 'rearm'})
     PARCOURS.startTracking()
     PARCOURS.stopAudio()
 
-    if (typeof updateStepsMarkers === 'function') updateStepsMarkers();
+    if (updateStepsMarkers) updateStepsMarkers();
 
     setTimeout(() => document.MAP.fire('move'), 2000)
 })
@@ -2043,6 +2044,7 @@ function clearLostUI() {
 // auto-framed on the walker + target, and the live distance updater running.
 // On close, the map re-locks and returns to immersion.
 var MAP_RECOVERY_OPEN = false;
+var updateStepsMarkers = null;
 var LOST_DISTANCE_LISTENER = null;
 var LOST_DISTANCE_LAST = null;
 
@@ -2121,7 +2123,7 @@ function openMapForRecovery(opts) {
     MAP_RECOVERY_OPEN = true;
     if (typeof TELEMETRY !== 'undefined' && !alreadyOpen) TELEMETRY.log('map_opened', {source: opts.source || 'unknown'});
 
-    if (typeof updateStepsMarkers === 'function') updateStepsMarkers();
+    if (updateStepsMarkers) updateStepsMarkers();
     $('#parcours-map').css('opacity', 1);
     $('#parcours-lost').text('Retour à l\'écoute');
 
