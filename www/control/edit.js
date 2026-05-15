@@ -65,6 +65,8 @@ function fillZones(type, divID, mediaFolder) {
             const header = $('<div>').addClass('edit-header').appendTo(li)
             header.append($('<span>').addClass('badge me-3').addClass(modeClass).text(i))
             header.append($('<span>').addClass('edit-media me-1').text(zone.media.src))
+            const zoneWarn = mediaWarnIcon(mediaFolder, zone.media.src)
+            if (zoneWarn) header.append(zoneWarn)
         
             // body: audio select 
             const body = $('<div>').addClass('edit-body').appendTo(li)
@@ -87,6 +89,7 @@ function fillZones(type, divID, mediaFolder) {
                                 .then(() => {
                                     zone.media.src = file.name
                                     save().then(() => PARCOURS.select(type, i))
+                                    loadMediaCheck().then(load)
                                 })
                                 .catch(error => console.error(error) && toastError('Erreur lors de l\'upload du fichier..'))
                                 .finally(() => input.remove())
@@ -100,6 +103,10 @@ function fillZones(type, divID, mediaFolder) {
                     }
                     
                 })
+
+            // warning icon in body (header is hidden when active)
+            const zoneWarnBody = mediaWarnIcon(mediaFolder, zone.media.src)
+            if (zoneWarnBody) body.append(zoneWarnBody)
 
             // audio play/stop button
             const play = $('<button>').addClass('btn btn-sm btn-secondary btn-sm p-1 me-1').html('<i class="bi bi-play btn-play"></i>').click(() => z.player.toggle() )
@@ -191,6 +198,19 @@ function load() {
                         const header = $('<div>').addClass('edit-header').appendTo(li)
                         header.append($('<span>').addClass('badge bg-warning me-3').text(i))
                         header.append($('<span>').addClass('edit-media me-1').text(step.folder))
+                        // status icon in header: aggregated over all media in step
+                        if (MEDIACHECK && step.media) {
+                            const assigned = Object.values(step.media).filter(m => m.src && m.src !== '-')
+                            const entries  = assigned.map(m => MEDIACHECK[step.folder + '/' + m.src]).filter(e => e !== undefined)
+                            const hasError = entries.some(e => !e.ok && e.tier === 'error')
+                            const hasWarn  = entries.some(e => !e.ok && e.tier === 'warn')
+                            if (hasError || hasWarn) {
+                                const icon = hasError ? 'bi-exclamation-triangle-fill text-danger' : 'bi-exclamation-triangle text-warning'
+                                header.append($('<i>').addClass('bi ' + icon + ' ms-1'))
+                            } else if (entries.length > 0 && entries.every(e => e.ok)) {
+                                header.append($('<i>').addClass('bi bi-check-circle-fill text-success ms-1').attr('title', 'Tous les fichiers sont compatibles'))
+                            }
+                        }
 
                         // body: audio name edit
                         const body = $('<div>').addClass('edit-body').appendTo(li)
@@ -256,8 +276,9 @@ function load() {
                                     console.log('uploading', file)
                                     postFile('/mediaUpload/' + parcoursID + '/' + step.folder, formData )
                                         .then(() => {
-                                            step.media[m].src = file.name 
+                                            step.media[m].src = file.name
                                             save().then(() => PARCOURS.select('steps', i))
+                                            loadMediaCheck().then(load)
                                         })
                                         .catch(error => console.error(error) && toastError('Erreur lors de l\'upload du fichier..'))
                                         .finally(() => input.remove())
@@ -273,6 +294,8 @@ function load() {
                             {
                                 // media name
                                 div.append($('<span>').addClass('edit-media me-1').text(step.media[m].src.substring(0, 25)))
+                                const rowWarn = mediaWarnIcon(step.folder, step.media[m].src)
+                                if (rowWarn) div.append(rowWarn)
                                 div.append($('<button>').addClass('btn btn-sm btn-warning btn-sm float-end p-1 me-1').html('<i class="bi bi-trash"></i>').click(() => {
                                     if (confirm('Supprimer ' + step.folder + '/' +step.media[m].src + ' ?')) {
                                         get('/mediaRemove/' + parcoursID + '/' + step.folder + '/' + step.media[m].src)
@@ -544,6 +567,32 @@ function gotoPoint(lat, lon) {
     MAP.setView([lat, lon], 18)
 }
 
+const MEDIA_ISSUE_LABELS = {
+    vbr:               'VBR : incompatible avec certains anciens Android',
+    abr:               'ABR : débit variable, peut causer des problèmes de lecture',
+    not_mp3:           'Format non supporté — MP3 uniquement',
+    bad_header:        'En-tête illisible ou fichier corrompu',
+    nonstandard_bitrate: 'Débit non standard (VBR probable) — risque d\'échec de lecture',
+    high_bitrate:      'Débit élevé — fichier lourd, préférer ≤ 256 kbps',
+}
+
+function mediaWarnIcon(folder, filename) {
+    if (!MEDIACHECK || !filename || filename === '-') return null
+    const entry = MEDIACHECK[folder + '/' + filename]
+    if (!entry) return null
+    if (entry.ok) return $('<i>').addClass('bi bi-check-circle-fill text-success ms-1').attr('title', 'Fichier compatible')
+    const isError = entry.tier === 'error'
+    const tips = entry.issues.map(i => {
+        let label = MEDIA_ISSUE_LABELS[i] || i
+        if (i === 'nonstandard_bitrate' && entry.bitrate) label += ' (' + Math.round(entry.bitrate / 1000) + ' kbps)'
+        if (i === 'high_bitrate' && entry.bitrate) label += ' (' + Math.round(entry.bitrate / 1000) + ' kbps)'
+        return label
+    }).join('\n')
+    const icon = isError ? 'bi-exclamation-triangle-fill' : 'bi-exclamation-triangle'
+    const color = isError ? 'text-danger' : 'text-warning'
+    return $('<i>').addClass('bi ' + icon + ' ' + color + ' ms-1').attr('title', tips)
+}
+
 function loadMediaList() {
     return get('/mediaList/'+ parcoursID)
         .then(data => { MEDIALIST = data; console.log('Media list loaded', data) })
@@ -553,6 +602,12 @@ function loadMediaList() {
         })
 }
 
+function loadMediaCheck() {
+    return get('/mediaCheck/' + parcoursID)
+        .then(data => { MEDIACHECK = data; console.log('Media check loaded', data) })
+        .catch(error => console.error('Media check failed', error))
+}
+
 
 // INIT
 //
@@ -560,7 +615,11 @@ PARCOURS.setMap(MAP)
 
 // first get media list json tree
 var MEDIALIST = null
+var MEDIACHECK = null
 loadMediaList()
     .then(load)
     .then(loadMap)
+
+// async: load media check results then refresh UI warnings
+loadMediaCheck().then(load)
 

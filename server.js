@@ -12,6 +12,7 @@ import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import crypto from 'crypto';
 import { createStandaloneFlanerieChat } from 'flanerie-chat';
+import { parseFile } from 'music-metadata';
 
 // Simple Auth
 import { useSimpleAuth, requireAuth, requireAdmin, handleLogin, getUserRole, getGuestPassword, setGuestPassword } from './modules/simpleAuth.js';
@@ -384,6 +385,26 @@ function summarizeTelemetrySessionData(data) {
     return Number.isFinite(value) ? sum + value : sum;
   }, 0);
 
+  // LOST recovery deltas — pair each user_lost with the next user_recovered.
+  const lostRecoveryDeltas = [];
+  let pendingLost = null;
+  for (const event of events) {
+    if (event.type === 'user_lost') pendingLost = event;
+    else if (event.type === 'user_recovered' && pendingLost) {
+      const delta = Number(event.t) - Number(pendingLost.t);
+      if (Number.isFinite(delta) && delta >= 0) lostRecoveryDeltas.push(delta);
+      pendingLost = null;
+    }
+  }
+  let lostRecoveryMedianMs = null;
+  if (lostRecoveryDeltas.length > 0) {
+    const sorted = [...lostRecoveryDeltas].sort((left, right) => left - right);
+    const mid = Math.floor(sorted.length / 2);
+    lostRecoveryMedianMs = sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  }
+
+  const afterplayFallbackEvents = events.filter(event => event.type === 'step_afterplay_fallback');
+
   return {
     finalStep,
     uniqueStepCount: uniqueSteps.size,
@@ -397,7 +418,15 @@ function summarizeTelemetrySessionData(data) {
     rejectedFixes: rejectedFromSummary || events.filter(event => event.type === 'gps_trigger_rejected').length,
     heartbeatRecoveries: events.filter(event => event.type === 'gps_heartbeat_ok').length,
     gpsLostCount: events.filter(event => event.type === 'gps_state' && event.data && event.data.state === 'lost').length,
-    audioErrors: events.filter(event => event.type === 'audio_loaderror' || event.type === 'audio_playerror').length
+    audioErrors: events.filter(event => event.type === 'audio_loaderror' || event.type === 'audio_playerror').length,
+    userLostCount: events.filter(event => event.type === 'user_lost').length,
+    userRecoveredCount: events.filter(event => event.type === 'user_recovered').length,
+    lostRecoveryMedianMs,
+    voiceFailCount: events.filter(event => event.type === 'step_voice_failed').length,
+    afterplayFallbackCount: afterplayFallbackEvents.length,
+    afterplayFallbackNoSrc: afterplayFallbackEvents.filter(event => event.data && event.data.reason === 'no_src').length,
+    afterplayFallbackLoadError: afterplayFallbackEvents.filter(event => event.data && event.data.reason === 'loaderror').length,
+    audiofocusRetryCount: events.filter(event => event.type === 'audiofocus_auto_retry').length
   };
 }
 
@@ -457,7 +486,15 @@ function buildSessionSummary(data) {
     rejectedFixes: summary.rejectedFixes,
     heartbeatRecoveries: summary.heartbeatRecoveries,
     gpsLostCount: summary.gpsLostCount,
-    audioErrors: summary.audioErrors
+    audioErrors: summary.audioErrors,
+    userLostCount: summary.userLostCount,
+    userRecoveredCount: summary.userRecoveredCount,
+    lostRecoveryMedianMs: summary.lostRecoveryMedianMs,
+    voiceFailCount: summary.voiceFailCount,
+    afterplayFallbackCount: summary.afterplayFallbackCount,
+    afterplayFallbackNoSrc: summary.afterplayFallbackNoSrc,
+    afterplayFallbackLoadError: summary.afterplayFallbackLoadError,
+    audiofocusRetryCount: summary.audiofocusRetryCount
   };
 }
 
@@ -594,7 +631,20 @@ app.get('/list', (req, res) => {
   fs.readdirSync(parcoursFolder).forEach(file => {
     if (!file.endsWith('.json')) return;
     const parcoursFileName = file.split('.json')[0];
-    const parcoursContent = JSON.parse(fs.readFileSync(parcoursFolder + file, 'utf8'));
+
+    // Skip-with-log on a corrupt file: a single bad JSON must not 500 the
+    // whole endpoint — that would put every app into the nodata retry loop.
+    let parcoursContent;
+    try {
+      parcoursContent = JSON.parse(fs.readFileSync(parcoursFolder + file, 'utf8'));
+    } catch (e) {
+      console.warn('[/list] skipping corrupt parcours file:', file, e.message);
+      return;
+    }
+    if (!parcoursContent || !parcoursContent.info) {
+      console.warn('[/list] skipping parcours file without info:', file);
+      return;
+    }
 
     // Guest filtering: only GUEST_ prefixed, non-archived
     if (role === 'guest') {
@@ -884,8 +934,71 @@ app.get('/mediaList/:parcours', (req, res) => {
   res.json(media);
 });  
 
+// Standard MPEG Layer 3 bitrates in bps
+const MPEG_BITRATES = new Set([32,40,48,56,64,80,96,112,128,144,160,192,224,256,320].map(b => b * 1000));
+
+// Check all MP3 files in a parcours for mobile compatibility issues
+app.get('/mediaCheck/:parcours', async (req, res) => {
+  const mediaFolder = './media/' + req.params.parcours + '/';
+  if (!fs.existsSync(mediaFolder)) return res.json({});
+
+  // Collect all files as { key: "folder/file", path: "..." }
+  const files = [];
+  fs.readdirSync(mediaFolder).forEach(entry => {
+    const entryPath = mediaFolder + entry;
+    if (fs.lstatSync(entryPath).isDirectory()) {
+      fs.readdirSync(entryPath).forEach(file => {
+        if (!fs.lstatSync(entryPath + '/' + file).isDirectory())
+          files.push({ key: entry + '/' + file, path: entryPath + '/' + file });
+      });
+    } else {
+      files.push({ key: entry, path: entryPath });
+    }
+  });
+
+  const results = {};
+  await Promise.all(files.map(async ({ key, path: filePath }) => {
+    const ext = filePath.split('.').pop().toLowerCase();
+    if (ext !== 'mp3') {
+      results[key] = { ok: false, tier: 'error', issues: ['not_mp3'] };
+      return;
+    }
+    try {
+      const meta = await parseFile(filePath, { duration: false });
+      const issues = [];
+      const bitrate = meta.format.bitrate;
+      const profile = meta.format.codecProfile;
+
+      if (!bitrate) {
+        issues.push('bad_header');
+      } else {
+        if (profile === 'VBR') issues.push('vbr');
+        else if (profile === 'ABR') issues.push('abr');
+        const isVariableBitrate = issues.includes('vbr') || issues.includes('abr');
+        if (!isVariableBitrate && !MPEG_BITRATES.has(bitrate)) issues.push('nonstandard_bitrate');
+      }
+
+      const errorIssues = ['vbr', 'abr', 'not_mp3', 'bad_header', 'nonstandard_bitrate'];
+      const warnIssues = [];
+      if (bitrate > 256000 && !issues.includes('nonstandard_bitrate')) warnIssues.push('high_bitrate');
+
+      const allIssues = [...issues, ...warnIssues];
+      if (allIssues.length === 0) {
+        results[key] = { ok: true };
+      } else {
+        const tier = issues.some(i => errorIssues.includes(i)) ? 'error' : 'warn';
+        results[key] = { ok: false, tier, issues: allIssues, bitrate };
+      }
+    } catch {
+      results[key] = { ok: false, tier: 'error', issues: ['bad_header'] };
+    }
+  }));
+
+  res.json(results);
+});
+
 // Upload media file with folder argument from file argument
-app.post('/mediaUpload/:parcours/:folder/:name?', requireAuth, upload.single('file'), (req, res) => 
+app.post('/mediaUpload/:parcours/:folder/:name?', requireAuth, upload.single('file'), (req, res) =>
 {
   // Guest: can only upload to GUEST_ parcours
   if (req.userRole === 'guest') {

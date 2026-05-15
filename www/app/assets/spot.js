@@ -283,11 +283,14 @@ class Spot extends EventEmitter
         // to be implemented by children
     }
 
-    updatePosition(pos) 
+    updatePosition(pos)
     {
+        // Defensive: a cleared spot has no player. Treat as "not inside".
+        if (!this.player) return false
+
         // Near: load if not loaded — skip if player has a load error (prevents reload loop)
         let hasError = typeof this.player.hasError === 'function' && this.player.hasError()
-        if (this.player && !this.player.isLoaded() && !hasError && this.near(pos)) {
+        if (!this.player.isLoaded() && !hasError && this.near(pos)) {
             telemetryLog('spot_audio_prepare', {
                 spot_type: this._type,
                 step: this._type === 'steps' ? this._index : undefined,
@@ -373,19 +376,29 @@ class Zone extends Spot
         this.player.load('/media/'+ this.pID +'/' + this._spot.folder + '/', this._spot.media)        
     }
 
-    updatePosition(position) 
+    updatePosition(position)
     {
+        if (this.player && this.player.isPlaying())
+            this._keepLoadedForUpcomingTrigger = true
+
         let inside = super.updatePosition(position)
         if (!this.player || !this.player.isLoaded()) return inside
 
         // Inside
         if (inside) {
             // Objet: play with volume crossfade
-            if (this._spot.mode === 'Objet') 
+            if (this._spot.mode === 'Objet')
             {
-                let vol = 1 - this.distanceToCenter(position) / this._spot.radius
-                this.player.volume(vol)
-                this.player.resume(vol)
+                if (typeof this._spot.radius === 'number') {
+                    let vol = 1 - this.distanceToCenter(position) / this._spot.radius
+                    this.player.volume(vol)
+                    this.player.resume(vol)
+                }
+                else {
+                    // Polygon Objet zone: no meaningful centre-distance ratio
+                    // (radius is an array of coords) — play flat instead of NaN.
+                    this.player.resume()
+                }
             }
             // Ambiance: play
             else this.player.resume()
@@ -437,14 +450,18 @@ class Offlimit extends Spot
         this.player.load('/media/'+ this.pID +'/' + this._spot.folder + '/', this._spot.media)        
     }
 
-    updatePosition(position) 
+    updatePosition(position)
     {
+        // Once loaded, keep alive regardless of distance — loops in the "nowhere"
+        // until a step zone explicitly fades it out via PARCOURS.pauseAudio.
+        if (this.player && this.player.isLoaded())
+            this._keepLoadedForUpcomingTrigger = true
+
         let inside = super.updatePosition(position)
-        
+
         if (this.player && this.player.isLoaded()) {
-            
             if (inside) this.player.resume()
-            else this.player.stop()
+            // no stop on exit — message loops until a step zone fades it out via pauseAudio
         }
 
         return inside
@@ -452,7 +469,10 @@ class Offlimit extends Spot
 }
 
 
-var allSteps = []
+// `allSteps` is the single shared registry of live Step instances. It is
+// declared once in parcours.js (which loads before spot.js) — both files
+// reassign it (filter on add/remove, `[]` on Parcours.clear()), so it stays a
+// shared global rather than being re-declared here.
 
 class Step extends Spot
 {
@@ -468,10 +488,10 @@ class Step extends Spot
             this._spot.name = 'Etape '+index
 
         if (!this._spot.media) this._spot.media = {}
+        delete this._spot.media.music
+        delete this._spot.media.ambiant
+        delete this._spot.media.offlimit
         if (!('voice' in this._spot.media)) this._spot.media.voice = {src: '-', master: 1}
-        if (!('music' in this._spot.media)) this._spot.media.music = {src: '-', master: 1}
-        if (!('ambiant' in this._spot.media)) this._spot.media.ambiant = {src: '-', master: 1}
-        if (!('offlimit' in this._spot.media)) this._spot.media.offlimit = {src: '-', master: 1}
         if (!('afterplay' in this._spot.media)) this._spot.media.afterplay = {src: '-', master: 1}
 
         // player
@@ -533,6 +553,12 @@ class Step extends Spot
 
     updatePosition(position) 
     {
+        // Keep audio loaded while this step is active — covers offlimit state, pause from
+        // interruption zone, and GPS drift — so resume/fire can trigger on return.
+        // Flag is cleared by the resume and fire paths below.
+        if (this._active && PARCOURS.currentStep() == this._index)
+            this._keepLoadedForUpcomingTrigger = true
+
         let inside = super.updatePosition(position)
         let borderDistance = this.distanceToBorder(position)
 
@@ -542,9 +568,9 @@ class Step extends Spot
             this._skipDoneLogged = false
         }
 
-        // Handle Offlimit (if media exists) before generic fire logic, so reentry resumes
+        // Handle boundary crossing before generic fire logic, so reentry resumes
         // from the paused position instead of being treated as a fresh trigger.
-        if (PARCOURS.currentStep() == this._index && this._spot.media.offlimit.src !== '-') 
+        if (PARCOURS.currentStep() == this._index)
         {
             // If already in offlimit mode, only resume once safely back inside.
             if (this.player.isOfflimit()) {
@@ -592,6 +618,7 @@ class Step extends Spot
             })
             this._keepLoadedForUpcomingTrigger = false
             this.player.resume()
+            PARCOURS.pauseAudio('offlimits')
             return inside
         }
 
@@ -609,35 +636,53 @@ class Step extends Spot
         {
             let wasCurrentStep = PARCOURS.currentStep() == this._index
 
-            // Check if previous unrealised steps where optional
+            // Sequential fire-gate: this step may fire only if every step
+            // between the current step and this one is OPTIONAL. A mandatory
+            // un-done step in between blocks the jump. (Previously inverted —
+            // `!(optional === false)` collected optional steps under the name
+            // `mandatory`; see P1.25 / former P1.8. `isStepMandatory` lives in
+            // parcours.js and is the same predicate reachableSteps() uses.)
             if (this._index > PARCOURS.currentStep() + 1 && PARCOURS.currentStep() + 1 >= 0) {
-                let mandatory = allSteps.filter(s => s._index > PARCOURS.currentStep() && s._index < this._index && !(s._spot.optional === false)).map(s => s._index)
-                if (mandatory.length > 0) {
-                    console.warn('Etape précédente obligatoire:', PARCOURS.currentStep(), '->' ,JSON.stringify(mandatory) , 'cette étape:', this._index)
+                let blockers = allSteps.filter(s =>
+                    s._index > PARCOURS.currentStep() &&
+                    s._index < this._index &&
+                    isStepMandatory(s)
+                ).map(s => s._index)
+                if (blockers.length > 0) {
+                    console.warn('Etape obligatoire non réalisée:', PARCOURS.currentStep(), '->', JSON.stringify(blockers), 'cette étape:', this._index)
                     return inside
                 }
             }
                 
 
-            // Stop all other steps
+            // Stop all other steps. Emit 'done' only for a step that had NOT
+            // already completed naturally — a step whose voice ended already
+            // emitted 'done' (afterplay phase), so re-emitting here would
+            // duplicate step_done telemetry and re-run the Parcours done handler.
             allSteps.filter(s => s._index !== this._index).map( s => {
                 if (!s.player) return
                 let wasPlaying = s.player.isPlaying() || s.player.isPaused()
-                s.player.stop() 
+                s.player.stop()
                 if (wasPlaying) {
                     s.player.clear()
-                    s.emit('done', s)
+                    if (!s._done) s.emit('done', s)
                 }
                 // console.log('Stopping step:', s._index, s._spot.name, 'wasPlaying:', wasPlaying)
             })
             
             // Play
             let action = this.player.isPaused() ? 'resume' : 'play'
+            let seekPos = 0
+            if (action === 'play' && wasCurrentStep && PARCOURS.state.resumeStepVoicePos > 0) {
+                seekPos = Math.max(0, PARCOURS.state.resumeStepVoicePos - 3)
+                PARCOURS.state.resumeStepVoicePos = 0
+            }
             telemetryLog('step_audio_trigger', {
                 step: this._index,
                 name: this._spot.name,
                 action: action,
                 was_current_step: wasCurrentStep,
+                resume_seek_pos: seekPos || undefined,
                 visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
                 distanceToCenter: this.distanceToCenter(position),
                 distanceToBorder: borderDistance,
@@ -647,7 +692,8 @@ class Step extends Spot
             })
             this._keepLoadedForUpcomingTrigger = false
             if (action === 'resume') this.player.resume()
-            else this.player.play()
+            else this.player.play(seekPos)
+            PARCOURS.pauseAudio('offlimits')
 
             if (wasCurrentStep) {
                 telemetryLog('step_refire_current', {

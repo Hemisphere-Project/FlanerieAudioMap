@@ -246,12 +246,9 @@ input[type=number].input-page::-webkit-outer-spin-button {
 
 #parcours-map {
     height: 70%;
-    transition: opacity 1.5s;
+    transition: opacity 0.3s;
 }
 
-#parcours-lost {
-    opacity: 0.5;
-}
 
 .position-icon {
     border-radius: 50%;
@@ -271,6 +268,29 @@ input[type=number].input-page::-webkit-outer-spin-button {
     z-index: 1000;
     opacity: 0.8;
 }
+
+/* GPS accuracy in metres, bucket-coloured. Pinned next to the GPS icon so the
+   walker can correlate "I feel lost" with "my GPS is bad here". Hidden when
+   the GPS-lost overlay covers everything. */
+#gps-precision {
+    position: absolute;
+    top: 8px;
+    right: 36px;
+    z-index: 1000;
+    padding: 2px 8px;
+    background-color: rgba(0, 0, 0, 0.6);
+    color: #fff;
+    border-radius: 10px;
+    font-family: 'Courier New', monospace;
+    font-size: 0.8em;
+    opacity: 0.9;
+}
+#gps-precision.bucket-excellent,
+#gps-precision.bucket-good     { color: #6fff86; }
+#gps-precision.bucket-fair     { color: #ffd060; }
+#gps-precision.bucket-poor,
+#gps-precision.bucket-bad      { color: #ff8a8a; }
+#gps-precision.bucket-unknown  { color: #888; }
 
 #resume-overlay,
 #gpslost-overlay {
@@ -309,6 +329,69 @@ input[type=number].input-page::-webkit-outer-spin-button {
     line-height: 1.6;
     margin: 0;
 }
+
+/* LOST state band — pinned to the top, leaves the map visible and usable
+   so the walker can navigate back to the repère. Lower z-index than the
+   full-screen overlays so GPS-lost / resume / revoked still take priority. */
+#lost-band {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 999;
+    background-color: rgba(198, 40, 40, 0.92);
+    color: #fff;
+    padding: 14px 18px;
+    text-align: center;
+    font-size: 0.95em;
+    line-height: 1.4;
+    display: none; /* overridden to flex by JS — kept here only for initial hide */
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+    pointer-events: none; /* map below stays interactive */
+}
+
+/* The dismiss button re-enables pointer events for itself only so the band
+   stays non-interactive elsewhere. Hides the band locally for 60s; LOST state
+   itself stays active (state.lost), only the visual is muted. */
+#lost-band-dismiss {
+    pointer-events: auto;
+    margin-left: 12px;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    border: 1px solid rgba(255, 255, 255, 0.4);
+    background-color: rgba(0, 0, 0, 0.25);
+    color: #fff;
+    font-size: 0.9em;
+    line-height: 1;
+    cursor: pointer;
+}
+
+/* Inline "zone bleue claire" highlight — matches COLOR_CURRENT (#43FAF2)
+   so the words in the copy point at the actual colour on the map. */
+.zone-color-target {
+    color: #43FAF2;
+}
+
+/* Instruction text under the map — plain page text style, shown whenever the
+   recovery map is open (manual peek or auto LOST). The distance sub-line
+   trend-colours green/red. */
+#map-instruction {
+    margin-top: 12px;
+    text-align: center;
+    line-height: 1.5;
+}
+
+#map-instruction-distance {
+    display: block;
+    margin-top: 4px;
+    font-family: 'Courier New', monospace;
+    transition: color 0.3s;
+}
+#map-instruction-distance.is-approaching { color: #6fff86; }
+#map-instruction-distance.is-receding    { color: #ff8a8a; }
 
 /* Diagnostic page */
 #diag-progress { font-size: 0.85em; color: #aaa; margin-bottom: 4px; text-align: center; }

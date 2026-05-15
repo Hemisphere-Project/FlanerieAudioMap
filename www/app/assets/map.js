@@ -47,8 +47,11 @@ function initMap(id, options = {}) {
         ...options
     }
 
-    this.markerPosition = null
-    
+    // Per-call map state. initMap is a plain function (not a constructor), so
+    // `this` would resolve to `window` in sloppy mode — keep the position
+    // marker + wheel-zoom debounce state in a proper local object instead.
+    var mapState = { markerPosition: null, zoomTimeout: null, zoomPaused: false }
+
     console.log('initMap', id, _options)
 
     if (document.MAP) {
@@ -94,10 +97,8 @@ function initMap(id, options = {}) {
     });
 
     // Mouse wheel custom handler
-    this.zoomTimeout = null;
-    this.zoomPaused = false;
     document.MAP.getContainer().addEventListener('wheel', (e) => {
-        if (this.zoomPaused) {
+        if (mapState.zoomPaused) {
             // console.log('zoom paused');
             return;
         }
@@ -108,12 +109,12 @@ function initMap(id, options = {}) {
             // console.log('zoom out', e.deltaY);
             document.MAP.zoomOut();
         }
-        this.zoomPaused = true;
-        this.zoomTimeout = setTimeout(() => {
-            if (this.zoomPaused) {
-                this.zoomPaused = false;
+        mapState.zoomPaused = true;
+        mapState.zoomTimeout = setTimeout(() => {
+            if (mapState.zoomPaused) {
+                mapState.zoomPaused = false;
                 // console.log('zoom unpaused');
-            }    
+            }
         }, 350); // Adjust debounce as needed
     });
 
@@ -121,8 +122,8 @@ function initMap(id, options = {}) {
 
     // show position
     document.MAP.showPositionMarker = () => {
-        if (this.markerPosition) return
-        this.markerPosition = L.marker(geo_coords(GEO.position()), {
+        if (mapState.markerPosition) return
+        mapState.markerPosition = L.marker(geo_coords(GEO.position()), {
             icon: L.divIcon({
                 className: 'position-icon',
                 html: '<div class="position-icon"></div>',
@@ -146,7 +147,7 @@ function initMap(id, options = {}) {
     if (GEO) {
         GEO.setMap(document.MAP)
         GEO.on('position', position => {
-            if (this.markerPosition) this.markerPosition.setLatLng(geo_coords(position))
+            if (mapState.markerPosition) mapState.markerPosition.setLatLng(geo_coords(position))
         })
     }
     return document.MAP

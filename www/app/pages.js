@@ -10,6 +10,11 @@ var DEVMODE = localStorage.getItem('devmode') == 'true' || false;
 //
 var noSleep = null;
 var CHECKGEO = null;
+// PARCOURS event handlers registered by PAGES['parcours'] — tracked so they
+// can be torn down on page exit (and not stacked on a page re-entry). The
+// module-scope lost/recover handlers are NOT in here — those are intentionally
+// permanent.
+var PARCOURS_PAGE_HANDLERS = [];
 
 // BATTERY STATUS
 var BATTERY = 0
@@ -37,6 +42,16 @@ var BATTOPT_TIMER = null;
 var BATTOPT_ATTEMPTS = 0;
 const BATTOPT_POLL_MS = 1500;
 const BATTOPT_MAX_ATTEMPTS = 10;
+var BGLOC_TIMER = null;
+const BGLOC_POLL_MS = 1500;
+var MOTION_TIMER = null;
+const MOTION_WAIT_MS = 8000;
+// On a resume (kill+relaunch mid-walk) motion was already validated before the
+// walk started; GEO.motionAuthorized just resets to undefined on every reload.
+// Don't hard-block a pocketed walker — give a short grace, then proceed.
+// A genuine mid-walk revocation is caught by the P3.3d health monitoring.
+const MOTION_RESUME_GRACE_MS = 3000;
+var GPSREVOKED = false;
 
 function clearWakeupNotification(clearPending = true)
 {
@@ -72,13 +87,45 @@ function clearBatteryOptCheck()
     BATTOPT_ATTEMPTS = 0;
 }
 
+function clearBgLocCheck()
+{
+    if (BGLOC_TIMER) {
+        clearTimeout(BGLOC_TIMER);
+        BGLOC_TIMER = null;
+    }
+}
+
+function clearMotionCheck()
+{
+    if (MOTION_TIMER) {
+        clearTimeout(MOTION_TIMER);
+        MOTION_TIMER = null;
+    }
+}
+
 PAGES_CLEANUP['parcours']           = () => {
     clearWakeupNotification();
     GPSLOST_PLAYER.stop();
+    LOST_PLAYER.stop();
+    RESUME_PLAYER.stop();
     $('#gpslost-overlay').hide();
+    $('#lost-band').hide();
+    // Close the recovery map cleanly so the next visit starts from a known state.
+    if (typeof closeMapForRecovery === 'function') closeMapForRecovery({source: 'page_exit'});
+    // Detach the parcours-page PARCOURS handlers so a re-entry doesn't stack them.
+    PARCOURS_PAGE_HANDLERS.forEach(h => PARCOURS.off(h.event, h.fn));
+    PARCOURS_PAGE_HANDLERS = [];
 };
 PAGES_CLEANUP['checknotifications'] = () => clearNotificationPermissionCheck();
 PAGES_CLEANUP['checkbatteryopt']    = () => clearBatteryOptCheck();
+PAGES_CLEANUP['checkbgloc']         = () => clearBgLocCheck();
+PAGES_CLEANUP['checkmotion']        = () => clearMotionCheck();
+PAGES_CLEANUP['checkgeo']           = () => {
+    // The CHECKGEO interval only paints #gps-status / #gps-precision, which
+    // live in the parcours page DOM — leaving it running for the whole app
+    // lifetime is pure waste.
+    if (CHECKGEO) { clearInterval(CHECKGEO); CHECKGEO = null; }
+};
 
 function PAGE(name, ...args)
 {
@@ -206,8 +253,9 @@ PAGES['select'] = (list) => {
     // Only one parcours => click it
     if (list.length == 1) select.querySelector('li').click();
 
-    // DEV: diagnostic button
+    // DEV: diagnostic + tools buttons
     $('#select-diagnostic').off().on('click', () => PAGE('diagnostic'));
+    $('#select-tools').off().on('click', () => PAGE('tools'));
 }
 
 //
@@ -722,6 +770,133 @@ PAGES['diagnostic'] = () => {
 }
 
 //
+// TOOLS (devmode only)
+//
+PAGES['tools'] = () => {
+    if (!DEVMODE) return PAGE('select');
+
+    let $out = $('#tools-output');
+    $out.text('');
+    function appendOutput(line) {
+        let ts = new Date().toLocaleTimeString();
+        $out.append('[' + ts + '] ' + line + '\n');
+        $out.scrollTop($out[0].scrollHeight);
+    }
+
+    function activeStep() {
+        if (typeof PARCOURS === 'undefined' || !PARCOURS.spots || !PARCOURS.spots.steps) return null;
+        let idx = PARCOURS.currentStep();
+        if (idx < 0) return null;
+        return PARCOURS.find('steps', idx);
+    }
+
+    function nextStep() {
+        if (typeof PARCOURS === 'undefined' || !PARCOURS.spots || !PARCOURS.spots.steps) return null;
+        let idx = PARCOURS.currentStep();
+        let candidate = idx < 0 ? 0 : idx + 1;
+        return PARCOURS.find('steps', candidate);
+    }
+
+    // Force LOST: synthesize the same event evaluateLostState would emit.
+    // Reuses the lost handler so band, vibration, audio gates all fire.
+    $('#tools-force-lost').off().on('click', () => {
+        let target = activeStep() && activeStep()._active ? activeStep() : nextStep();
+        if (!target) { appendOutput('force-lost: no target step (parcours not started?)'); return; }
+        if (PARCOURS.state.lost) { appendOutput('force-lost: already LOST'); return; }
+        PARCOURS.state.lost = true;
+        PARCOURS.state.lostSince = Date.now();
+        PARCOURS._lostBeyondSince = null;
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('tools_force_lost', {step: PARCOURS.currentStep(), target: target._index});
+        PARCOURS.emit('lost', {target, distance: 999});
+        appendOutput('force-lost: emitted (target=' + target._spot.name + ')');
+    });
+
+    // Sortir de LOST: synthesize recover. Skips distance check.
+    $('#tools-clear-lost').off().on('click', () => {
+        if (!PARCOURS.state.lost) { appendOutput('clear-lost: not LOST'); return; }
+        PARCOURS.state.lost = false;
+        PARCOURS.state.lostSince = null;
+        PARCOURS._lostBeyondSince = null;
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('tools_clear_lost', {step: PARCOURS.currentStep()});
+        PARCOURS.emit('recover', {target: null, distance: 0});
+        appendOutput('clear-lost: emitted recover');
+    });
+
+    // Force voice failure on the active step: emit playerror directly on the
+    // step's voice player. Fix B's handler in PlayerStep will route through
+    // startAfterplay so the LATE fallback can be observed end-to-end.
+    $('#tools-force-voice-fail').off().on('click', () => {
+        let s = activeStep();
+        if (!s || !s.player || !s.player.voice) { appendOutput('force-voice-fail: no active step'); return; }
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('tools_force_voice_fail', {step: s._index});
+        // Synthesize what PlayerSimple emits on a real failure.
+        s.player.voice.emit('playerror', s.player.voice._src(), 'forced-by-tools');
+        appendOutput('force-voice-fail: emitted playerror on step ' + s._index + ' (' + s._spot.name + ')');
+    });
+
+    // Force afterplay fallback: flip the step's afterplay to default and play it.
+    // Useful to validate the DEFAULT_AFTERPLAY_PLAYER routing without breaking
+    // the parcours' real afterplay data.
+    $('#tools-force-afterplay-fallback').off().on('click', () => {
+        let s = activeStep();
+        if (!s || !s.player) { appendOutput('force-afterplay: no active step'); return; }
+        if (typeof DEFAULT_AFTERPLAY_PLAYER === 'undefined' || !DEFAULT_AFTERPLAY_PLAYER.isLoaded()) {
+            appendOutput('force-afterplay: DEFAULT_AFTERPLAY_PLAYER not loaded (images/afterplay.mp3 missing?)');
+            return;
+        }
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('tools_force_afterplay_fallback', {step: s._index});
+        // Stop whatever's currently playing on this step, then route to default.
+        if (s.player.voice) s.player.voice.stop();
+        if (s.player.afterplay) s.player.afterplay.stop();
+        s.player._defaultAfterplayActive = true;
+        s.player.playstate = 'afterplay';
+        s.player.state = 'afterplay';
+        DEFAULT_AFTERPLAY_PLAYER.stop();
+        DEFAULT_AFTERPLAY_PLAYER.play();
+        appendOutput('force-afterplay: routed step ' + s._index + ' to DEFAULT_AFTERPLAY_PLAYER');
+    });
+
+    // Show resume overlay: simulate AUDIOFOCUS_LOSS so the periodic-retry
+    // logic (Fix G) can be observed. Stay on the tools page and wait ~60s
+    // — the retry interval allows currentPage === 'tools' in devmode.
+    $('#tools-show-resume-overlay').off().on('click', () => {
+        AUDIOFOCUS = 0;
+        $('#resume-overlay').css('display', 'flex');
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('tools_show_resume_overlay', {});
+        appendOutput('resume-overlay: shown, AUDIOFOCUS=0 — retry should fire in ~60s');
+    });
+
+    // Snapshot: dump enough state to debug a stuck walker.
+    $('#tools-snapshot').off().on('click', () => {
+        let s = activeStep();
+        let n = nextStep();
+        let snap = {
+            currentPage: typeof currentPage !== 'undefined' ? currentPage : null,
+            AUDIOFOCUS: typeof AUDIOFOCUS !== 'undefined' ? AUDIOFOCUS : null,
+            GPSSIGNAL_OK: typeof GPSSIGNAL_OK !== 'undefined' ? GPSSIGNAL_OK : null,
+            GPSREVOKED: typeof GPSREVOKED !== 'undefined' ? GPSREVOKED : null,
+            DEVMODE: DEVMODE,
+            parcoursState: PARCOURS.state,
+            activeStep: s ? {
+                index: s._index,
+                name: s._spot.name,
+                active: s._active,
+                done: s._done,
+                playerState: s.player ? s.player.state : null,
+                playstate: s.player ? s.player.playstate : null,
+                defaultAfterplay: s.player ? s.player._defaultAfterplayActive : null,
+            } : null,
+            nextStep: n ? { index: n._index, name: n._spot.name } : null,
+            playersPlaying: (typeof ALL_PLAYERS !== 'undefined' ? ALL_PLAYERS : []).filter(p => p.isPlaying()).map(p => p._src()),
+            pausedPlayers: (typeof PAUSED_PLAYERS !== 'undefined' ? PAUSED_PLAYERS : []).map(p => p._src()),
+        };
+        appendOutput(JSON.stringify(snap, null, 2));
+    });
+
+    $('#tools-back').off().on('click', () => PAGE('select'));
+}
+
+//
 // CHECK MEDIA
 //
 PAGES['preload'] = (p) => {
@@ -827,6 +1002,18 @@ PAGES['checkgeo'] = () => {
     CHECKGEO = setInterval(() => {
         const gpsImg = document.getElementById('gps-status');
         gpsImg.src = gpsImg.src.replace(/gps-(on|off)\.png/, GEO.alive() ? 'gps-on.png' : 'gps-off.png');
+
+        // GPS precision badge: bucket-coloured, refreshed every tick alongside
+        // the on/off icon. Hidden when no recent fix is known.
+        const $prec = $('#gps-precision');
+        let p = GEO && GEO.lastPosition;
+        if (!GEO.alive() || !p || !p.coords || typeof p.coords.accuracy !== 'number') {
+            $prec.attr('class', 'bucket-unknown').text('—');
+        } else {
+            let acc = Math.round(p.coords.accuracy);
+            let bucket = typeof gpsAccuracyBucket === 'function' ? gpsAccuracyBucket(acc) : 'unknown';
+            $prec.attr('class', 'bucket-' + bucket).text(acc + ' m');
+        }
     }, 1000);
 }
 
@@ -887,8 +1074,10 @@ PAGES['confirmgeo'] = () => {
 PAGES['startgeo'] = () => {
     GEO.startGeoloc()
             .then(()=>{
-                if (PLATFORM == 'ios') PAGE('confirmios')
-                else if (PLATFORM == 'android') PAGE('checknotifications')
+                // iOS: AUTHORIZED here already implies "Toujours" (startGeoloc rejects on partial auth),
+                // so the old confirmios reminder is redundant — go straight to motion check.
+                if (PLATFORM == 'ios') PAGE('checkmotion')
+                else if (PLATFORM == 'android') PAGE('checkbgloc')
                 else PAGE('rdv')
             })
             .catch((e)=>{
@@ -897,9 +1086,108 @@ PAGES['startgeo'] = () => {
             })
 }
 
-PAGES['confirmios'] = () => {
-    $('#confirmios-settings').off().on('click', () => GEO.showAppSettings())
-    $('#confirmios-accept').off().on('click', () => PAGE('rdv'))
+//
+// CHECK BACKGROUND LOCATION (Android 10+)
+// bg-geo's checkStatus reports AUTHORIZED based on FINE/COARSE alone, so a user
+// who picked "While using" passes startGeoloc — but BG tracking will die at lock.
+// Block startup here until ACCESS_BACKGROUND_LOCATION is granted.
+//
+PAGES['checkbgloc'] = () => {
+    clearBgLocCheck();
+    $('#checkbgloc-retry').hide().off();
+    $('#checkbgloc-settings').off().on('click', () => GEO.showAppSettings());
+
+    var attempts = 0;
+    var firstFail = true;
+
+    function queueRetry() {
+        $('#checkbgloc-retry').show().off().on('click', () => { clearBgLocCheck(); check(); });
+        clearBgLocCheck();
+        BGLOC_TIMER = setTimeout(check, BGLOC_POLL_MS);
+    }
+
+    function check() {
+        BGLOC_TIMER = null;
+        if (currentPage !== 'checkbgloc') return;
+
+        GEO.checkBackgroundLocationAndroid()
+            .then(() => {
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('bg_location', {granted: true, attempts});
+                PAGE('checknotifications');
+            })
+            .catch(() => {
+                attempts++;
+                if (firstFail) {
+                    firstFail = false;
+                    // First attempt: ask the system. Android 10 may show the dialog;
+                    // Android 11+ silently denies (must use Settings).
+                    if (cordova.plugins && cordova.plugins.permissions && cordova.plugins.permissions.ACCESS_BACKGROUND_LOCATION) {
+                        cordova.plugins.permissions.requestPermission(
+                            cordova.plugins.permissions.ACCESS_BACKGROUND_LOCATION,
+                            (s) => {
+                                if (s.hasPermission) check();
+                                else queueRetry();
+                            },
+                            () => queueRetry()
+                        );
+                        return;
+                    }
+                }
+                queueRetry();
+            });
+    }
+    check();
+}
+
+//
+// CHECK MOTION (iOS)
+// CMMotionActivityManager is started by bg-geo, but the auth prompt result is
+// not surfaced. Without motion events, stationary detection breaks and the
+// GPS-lost overlay fires spuriously during pocketed pauses. Hard-block until
+// the first 'activity' event arrives, with a Settings deep link as escape.
+//
+PAGES['checkmotion'] = () => {
+    clearMotionCheck();
+    $('#checkmotion-desc').text('Vérification du capteur de mouvement...');
+    $('#checkmotion-settings').hide().off().on('click', () => GEO.showAppSettings());
+    $('#checkmotion-retry').hide().off().on('click', () => { clearMotionCheck(); start = Date.now(); poll(); });
+
+    // Already received a motion event from a previous startGeoloc cycle? skip.
+    if (GEO.motionAuthorized) {
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('motion_check', {granted: true, waited_ms: 0});
+        return PAGE('rdv');
+    }
+
+    // Resume path: don't hard-block — short grace then proceed (see MOTION_RESUME_GRACE_MS).
+    var isResume = PARCOURS.valid() && PARCOURS.currentStep() >= 0;
+
+    var start = Date.now();
+    var warningShown = false;
+    function poll() {
+        MOTION_TIMER = null;
+        if (currentPage !== 'checkmotion') return;
+        if (GEO.motionAuthorized) {
+            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('motion_check', {granted: true, waited_ms: Date.now() - start});
+            return PAGE('rdv');
+        }
+        if (isResume && Date.now() - start >= MOTION_RESUME_GRACE_MS) {
+            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('motion_check', {granted: false, resumed: true, waited_ms: Date.now() - start});
+            return PAGE('rdv');
+        }
+        if (!isResume && !warningShown && Date.now() - start >= MOTION_WAIT_MS) {
+            warningShown = true;
+            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('motion_check', {granted: false, waited_ms: Date.now() - start});
+            $('#checkmotion-desc').html(
+                "Flanerie a besoin du capteur de mouvement pour détecter vos pauses pendant la marche.<br /><br />" +
+                "Sans cette autorisation, des fausses alertes \"GPS perdu\" se déclencheront en poche.<br /><br />" +
+                "Réglages > Flanerie > <u>Mouvement et forme</u>"
+            );
+            $('#checkmotion-settings').show();
+            $('#checkmotion-retry').show();
+        }
+        MOTION_TIMER = setTimeout(poll, warningShown ? 1000 : 500);
+    }
+    poll();
 }
 
 PAGES['checknotifications'] = () => {
@@ -979,11 +1267,76 @@ PAGES['checknotifications'] = () => {
     checkNotif();
 }
 
+// Manufacturer family detection — Doze whitelist alone is rarely enough on
+// OEM-modified Android. We show tailored Settings instructions per family.
+function batteryKillFamily() {
+    if (typeof device === 'undefined' || !device.manufacturer) return null;
+    var m = device.manufacturer.toLowerCase();
+    if (m.includes('samsung')) return 'samsung';
+    if (m.includes('xiaomi') || m.includes('redmi') || m.includes('poco')) return 'xiaomi';
+    if (m.includes('huawei')) return 'huawei';
+    if (m.includes('honor')) return 'honor';
+    if (m.includes('oneplus')) return 'oneplus';
+    if (m.includes('oppo') || m.includes('realme')) return 'oppo';
+    if (m.includes('vivo')) return 'vivo';
+    if (m.includes('asus')) return 'asus';
+    return null;
+}
+
+function batteryKillCopy(family) {
+    switch(family) {
+        case 'samsung': return {
+            title: 'Réglages Samsung',
+            steps:
+                "Maintenance > Batterie > Limites d'utilisation en arrière-plan > <u>Apps en veille profonde</u>: retirez Flanerie de la liste.<br /><br />" +
+                "Apps > Flanerie > Batterie: choisir <u>Non restreint</u>."
+        };
+        case 'xiaomi': return {
+            title: 'Réglages Xiaomi / Redmi / POCO',
+            steps:
+                "Sécurité > Autorisations > <u>Démarrage automatique</u>: activez Flanerie.<br /><br />" +
+                "Économiseur de batterie > Choisir des apps > Flanerie: <u>Pas de restrictions</u>.<br /><br />" +
+                "Verrouillez Flanerie dans les apps récentes (icône cadenas)."
+        };
+        case 'huawei':
+        case 'honor': return {
+            title: 'Réglages Huawei / Honor',
+            steps:
+                "Batterie > Lancement d'apps > Flanerie: passer en <u>Manuel</u>, puis activer <u>Démarrage automatique</u> + <u>Démarrage secondaire</u> + <u>Exécution en arrière-plan</u>."
+        };
+        case 'oneplus': return {
+            title: 'Réglages OnePlus',
+            steps:
+                "Batterie > Optimisation de la batterie > Flanerie: <u>Ne pas optimiser</u>.<br /><br />" +
+                "Batterie > Optimisation avancée: <u>Désactiver</u> l'optimisation en veille profonde si présente."
+        };
+        case 'oppo': return {
+            title: 'Réglages Oppo / Realme',
+            steps:
+                "Batterie > Optimisation de la batterie > Flanerie: <u>Ne pas optimiser</u>.<br /><br />" +
+                "Confidentialité > Démarrage > Flanerie: <u>Autoriser</u>."
+        };
+        case 'vivo': return {
+            title: 'Réglages Vivo',
+            steps:
+                "Batterie > Consommation en arrière-plan > Flanerie: <u>Haute priorité</u>.<br /><br />" +
+                "Démarrage automatique: activer Flanerie."
+        };
+        case 'asus': return {
+            title: 'Réglages Asus',
+            steps: "Gestionnaire de démarrage automatique > Flanerie: <u>Autorisé</u>."
+        };
+        default: return null;
+    }
+}
+
 //
 // CHECK BATTERY OPTIMIZATION (Android 6+ / API 23+)
 // Requires: snt1017/cordova-plugin-power-optimization
 // Hard-blocks startup until the app is whitelisted from Android battery optimization.
-// OEM-specific restrictions are detected via HaveProtectedAppsCheck() — no hardcoded list.
+// OEM-specific guidance is rendered up front based on Build.MANUFACTURER, since
+// Doze whitelist (the only thing the plugin can verify) is not enough on most
+// modern OEM Androids.
 //
 PAGES['checkbatteryopt'] = () => {
     if (DEVMODE) return PAGE('rdv');
@@ -997,21 +1350,41 @@ PAGES['checkbatteryopt'] = () => {
     if (apiLevel < 23) return PAGE('rdv');
 
     clearBatteryOptCheck();
+    var family = batteryKillFamily();
+    var oemCopy = family ? batteryKillCopy(family) : null;
 
-    $('#checkbatteryopt-settings').hide().off().on('click', () => plugin.RequestOptimizationsMenu());
-    $('#checkbatteryopt-oem-btn').hide().off().on('click', () => plugin.ProtectedAppCheck(true));
+    // The plugin's RequestOptimizationsMenu has an inverted conditional and only
+    // opens the system page when the app is already whitelisted — useless when
+    // we actually need it. Use bg-geo's showAppSettings (app details page) instead.
+    $('#checkbatteryopt-settings').hide().off().on('click', () => GEO.showAppSettings());
+    $('#checkbatteryopt-oem-btn').hide().off().on('click', () => {
+        // ProtectedAppCheck(true) fires the OEM intent if any is callable.
+        // If none (modern OEMs that no longer expose intents), fall back to app settings.
+        plugin.ProtectedAppCheck(true).catch(() => GEO.showAppSettings());
+    });
     $('#checkbatteryopt-retry').hide().off().on('click', () => { clearBatteryOptCheck(); check(); });
     $('#checkbatteryopt-oem').hide();
 
-    // Detect OEM-specific battery restriction layers (Samsung, Xiaomi, Huawei, etc.)
+    // Render manufacturer-tailored copy up front, before the user can fail.
+    if (oemCopy) {
+        $('#checkbatteryopt-oem').show().html('<b>' + oemCopy.title + '</b><br /><br />' + oemCopy.steps);
+        $('#checkbatteryopt-oem-btn').show();
+    }
+
+    // Also probe the plugin's intent table — covers a few older OEM activities
+    // not in our manufacturer match. Show the deep-link button if any are callable.
+    // bug-fix: HaveProtectedAppsCheck returns {skip_message, found_intent}, not a boolean.
     plugin.HaveProtectedAppsCheck()
-        .then(hasOEM => {
-            if (hasOEM && currentPage === 'checkbatteryopt') {
+        .then(result => {
+            if (!result || !result.found_intent) return;
+            if (currentPage !== 'checkbatteryopt') return;
+            if (!oemCopy) {
+                // Manufacturer not in our table but OS exposes an OEM activity: generic banner.
                 $('#checkbatteryopt-oem').show().text(
-                    'Votre téléphone a des réglages de batterie spécifiques. Ouvrez les paramètres fabricant et autorisez Flanerie en arrière-plan.'
+                    "Votre téléphone a des réglages de batterie spécifiques. Ouvrez les paramètres fabricant et autorisez Flanerie en arrière-plan."
                 );
-                $('#checkbatteryopt-oem-btn').show();
             }
+            $('#checkbatteryopt-oem-btn').show();
         })
         .catch(() => {});
 
@@ -1022,7 +1395,7 @@ PAGES['checkbatteryopt'] = () => {
 
         plugin.IsIgnoringBatteryOptimizations()
             .then(isIgnoring => {
-                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('battery_opt', { ignoring: isIgnoring, manufacturer: device.manufacturer, apiLevel });
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('battery_opt', { ignoring: isIgnoring, manufacturer: device.manufacturer, family, apiLevel });
                 if (isIgnoring) { PAGE('rdv'); return; }
 
                 // First failure: trigger native dialog (ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
@@ -1036,7 +1409,7 @@ PAGES['checkbatteryopt'] = () => {
                 if (BATTOPT_ATTEMPTS >= BATTOPT_MAX_ATTEMPTS) {
                     $('#checkbatteryopt-retry').show();
                     $('#checkbatteryopt-settings').show();
-                    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('battery_opt', { blocked: true, manufacturer: device.manufacturer });
+                    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('battery_opt', { blocked: true, manufacturer: device.manufacturer, family });
                     return;
                 }
                 BATTOPT_TIMER = setTimeout(check, BATTOPT_POLL_MS);
@@ -1101,36 +1474,63 @@ PAGES['checkaudio'] = () => {
     // Use PlayerSimple so the test exercises the same backend (NativeMediaPlayer on iOS,
     // Howler on Android/browser) that will be used during the walk.
     testplayer = new PlayerSimple(true, 0)
+    var fatalReason = null;
+    function failAudio(reason, html) {
+        ok = false;
+        fatalReason = reason;
+        $('#checkaudio-accept').hide();
+        $('#checkaudio-help').show();
+        $('#checkaudio-desc').html(html).css('color', 'red');
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('checkaudio_fail', {reason});
+    }
     testplayer.on('loaderror', (src, error) => {
-        console.log('[AUDIO] loaderror', src, error)
-        ok = false
-        $('#checkaudio-accept').hide()
-        $('#checkaudio-help').hide()
-        $('#checkaudio-desc').text("Erreur de lecture audio. Votre appareil ne semble pas compatible...");
-        $('#checkaudio-desc').css('color', 'red');
+        console.log('[AUDIO] loaderror', src, error);
+        failAudio('loaderror', "Erreur de lecture audio. Votre appareil ne semble pas compatible...");
     })
     testplayer.on('playerror', (src, error) => {
-        console.log('[AUDIO] playerror', src, error)
-        ok = false
-        $('#checkaudio-accept').hide()
-        $('#checkaudio-help').hide()
-        $('#checkaudio-desc').text("Erreur de lecture audio. Votre appareil ne semble pas compatible...");
-        $('#checkaudio-desc').css('color', 'red');
+        console.log('[AUDIO] playerror', src, error);
+        failAudio('playerror', "Erreur de lecture audio. Votre appareil ne semble pas compatible...");
     })
     testplayer.on('play', (src) => { console.log('[AUDIO] OK!', src); })
 
+    // Gate 1: AudioFocus plugin failed to initialize. Without it, Android can lose
+    // audio routing silently mid-walk; on iOS the AVAudioSession category is also
+    // set via this plugin, so its absence means the session may not be in Playback mode.
+    if (typeof PLATFORM !== 'undefined' && (PLATFORM === 'android' || PLATFORM === 'ios') && AUDIOFOCUS === -1) {
+        failAudio('audiofocus_unavailable',
+            "Le module audio n'est pas disponible. L'application ne peut pas garantir une lecture continue.<br /><br />" +
+            "Demandez à un membre de l'équipe."
+        );
+    }
+
     console.log('[AUDIO] testing via PlayerSimple, basepath:', BASEURL+'/images/');
     testplayer.load(BASEURL+'/images/', {src: 'test.mp3', master: 1}, false)
+
+    // Gate 2 (iOS only): the test player fell back to Howler because httpToNativePath
+    // returned null — usually because LOCALMEDIA_PATH_NATIVE / LOCALAPP_PATH_NATIVE
+    // weren't captured. Howler cannot start playback from a background GPS callback
+    // on a locked iPhone, so the walk would die silently in the pocket.
+    if (ok && PLATFORM === 'ios' && (testplayer._isNativeFallback || IOS_NATIVE_FALLBACK_DETECTED)) {
+        failAudio('ios_native_fallback',
+            "Erreur de compatibilité audio (iOS).<br /><br />" +
+            "Demandez à un membre de l'équipe."
+        );
+    }
+
     testplayer.play(0)
 
-    TYPEWRITE('checkaudio-desc')
-        .pauseFor(4000)
-        .callFunction(() => {
-            if (ok) {
-                $('#checkaudio-accept').show()
-                $('#checkaudio-help').show()
-            }
-        })
+    // Skip the typewriter animation when a fatal gate already painted the red
+    // error — TYPEWRITE reads .text() (strips HTML) and would overwrite the error.
+    if (!fatalReason) {
+        TYPEWRITE('checkaudio-desc')
+            .pauseFor(4000)
+            .callFunction(() => {
+                if (ok) {
+                    $('#checkaudio-accept').show()
+                    $('#checkaudio-help').show()
+                }
+            })
+    }
 
     $('#checkaudio-accept').off().on('click', () => {
         testplayer.stop();
@@ -1252,33 +1652,46 @@ PAGES['parcours'] = () => {
         PARCOURS.showSpotMarkers('steps');
     } 
 
-    // Function to update markers
+    // Paint exactly one cyan target — `lostTarget()` resolves it (active step
+    // if narration is still running there, otherwise next step). Done steps
+    // stay grey. All other upcoming steps stay hidden in normal mode so the
+    // walker's instruction is unambiguous: "Rejoignez la zone bleue claire".
+    // In DEVMODE we keep painting upcoming steps for debugging (greyed out).
     function updateStepsMarkers() {
+        let target = PARCOURS.lostTarget();
+        let targetIdx = target ? target._index : -1;
+        let doneIdx = PARCOURS.currentStep();
 
-        // Mark passed steps in grey, current step in red
         PARCOURS.spots.steps.forEach((s, i) => {
-            if (i < PARCOURS.currentStep()) {
-                s.showMarker(COLOR_DONE, 0.5)
+            if (i < doneIdx || (i === doneIdx && i !== targetIdx)) {
+                s.showMarker(COLOR_DONE, 0.5);
             }
-            else if (i == PARCOURS.currentStep()) {
-                s.showMarker(COLOR_CURRENT, 0.5)
+            else if (i === targetIdx) {
+                s.showMarker(COLOR_CURRENT, 0.7);
             }
-        })
+            else if (DEVMODE) {
+                // Dev: keep upcoming steps visible but greyed so the active
+                // target stays the obvious one.
+                s.showMarker(COLOR_DONE, 0.3);
+            }
+            else {
+                s.hideMarker();
+            }
+        });
+    }
 
-        // Show next steps in yellow
-        let i = PARCOURS.currentStep() + 1;
-        let sNext = PARCOURS.find('steps', i)
-        while (sNext) {
-            sNext.showMarker(COLOR_NEXT)
-            if (!DEVMODE && !sNext._spot.optional) break;
-            i++;
-            // if (!DEVMODE) break;    // show only next step in normal mode
-            sNext = PARCOURS.find('steps', i)
-        }
+    // Register PARCOURS handlers via onParcours so PAGES_CLEANUP['parcours']
+    // can detach them. Clear any that survived first (defensive against a
+    // missed cleanup / page re-entry) so handlers never stack.
+    PARCOURS_PAGE_HANDLERS.forEach(h => PARCOURS.off(h.event, h.fn));
+    PARCOURS_PAGE_HANDLERS = [];
+    function onParcours(event, fn) {
+        PARCOURS.on(event, fn);
+        PARCOURS_PAGE_HANDLERS.push({event: event, fn: fn});
     }
 
     // ON step fire: show next
-    PARCOURS.on('fire', (s, meta = {}) => {
+    onParcours('fire', (s, meta = {}) => {
         if (s._type != 'steps') return
         if (!meta.refire) TELEMETRY.log('step_fire', {step: s._index, name: s._spot.name});
         updateStepsMarkers()
@@ -1294,12 +1707,12 @@ PAGES['parcours'] = () => {
             //     PARCOURS.spots.zones.map(z => z.showMarker())
         }
 
-        // Hide map
+        // Hide map back into audio-first immersion after the first step fires.
+        // Note: openMapForRecovery / closeMapForRecovery handle the map+button
+        // state machine — call closeMapForRecovery so the button label and
+        // map controls reset together.
         if (!DEVMODE && s._index==PARCOURS.currentStep() && !isResume) {
-            $('#parcours-map').css('opacity', 0)
-            setTimeout(() => {
-                $('#parcours-lost').show()
-            }, 5000)
+            closeMapForRecovery({source: 'first_step_fire'});
         }
 
         // Last step: prepare GPS cutoff
@@ -1310,6 +1723,7 @@ PAGES['parcours'] = () => {
                 if (PARCOURS.currentStep() + 1 == PARCOURS.spots.steps.length) {
                     console.log('LAST STEP: cut GPS');
                     PARCOURS.stopTracking()
+                    GEO.stopGeoloc()
                 }
             }, PARCOURS.info.cutoff * 1000); // seconds
         }
@@ -1318,10 +1732,13 @@ PAGES['parcours'] = () => {
     })
 
     // ON step done: hide
-    PARCOURS.on('done', (s) => {
+    onParcours('done', (s) => {
         if (s._type != 'steps') return
         TELEMETRY.log('step_done', {step: s._index, name: s._spot.name});
-        s.showMarker(COLOR_DONE, 0.5)
+        // Repaint markers so the next step picks up the cyan target before
+        // the walker arrives at it — otherwise the map shows no target between
+        // 'done' on the current step and 'fire' on the next.
+        updateStepsMarkers()
 
         // Last step
         if (s._index + 1 == PARCOURS.spots.steps.length) {
@@ -1334,7 +1751,7 @@ PAGES['parcours'] = () => {
 
     // Safety: if last step fires but done never comes (audio load failure), end after 5 minutes
     var walkEndTimeout = null;
-    PARCOURS.on('fire', function onLastStepFire(s) {
+    onParcours('fire', function onLastStepFire(s) {
         if (s._type != 'steps') return
         if (s._index + 1 == PARCOURS.spots.steps.length) {
             walkEndTimeout = setTimeout(() => {
@@ -1349,10 +1766,10 @@ PAGES['parcours'] = () => {
     })
 
     // Offlimit telemetry
-    PARCOURS.on('enter', (s) => {
+    onParcours('enter', (s) => {
         if (s._type === 'offlimits') TELEMETRY.log('offlimit_enter', {name: s._spot.name, step: PARCOURS.currentStep()});
     })
-    PARCOURS.on('leave', (s) => {
+    onParcours('leave', (s) => {
         if (s._type === 'offlimits') TELEMETRY.log('offlimit_leave', {name: s._spot.name, step: PARCOURS.currentStep()});
     })
 
@@ -1364,25 +1781,29 @@ PAGES['parcours'] = () => {
     $('#parcours-title-dev').text(PARCOURS.info.name).toggle(DEVMODE)
     $('#parcours-run').hide()
 
-    // Lost button
-    $('#parcours-lost').hide().off().on('click', () => {
-        console.log('LOST');
-        $('#parcours-map').css('opacity', 1)
-        $('#parcours-lost').hide()
+    // "Je suis perdu·e" button toggles the recovery map. Always visible during
+    // the walk — the label flips between "Je suis perdu·e" and "Retour à
+    // l'écoute", driven by openMapForRecovery / closeMapForRecovery.
+    $('#parcours-lost').show().off().on('click', () => {
+        if (MAP_RECOVERY_OPEN) closeMapForRecovery({source: 'manual_dismiss'});
+        else openMapForRecovery({source: 'manual'});
     })
 
     // Activate Parcours
     PARCOURS.startTracking()
+    // Key the telemetry session on the stable pID (the parcours file id), not
+    // info.name — info carries only {name,status,coords,cutoff}, so file/id are
+    // always undefined and sessions would otherwise group by human name.
     TELEMETRY.start(
-        PARCOURS.info.file || PARCOURS.info.id || PARCOURS.info.name || '',
-        PARCOURS.info.name || PARCOURS.info.file || PARCOURS.info.id || ''
+        PARCOURS.pID || PARCOURS.info.name || '',
+        PARCOURS.info.name || PARCOURS.pID || ''
     );
 
-    // First RUN
+    // First RUN — paint step 0 as the single cyan target (matches updateStepsMarkers).
     if (PARCOURS.currentStep() < 0) {
         console.log('FIRST RUN')
         TYPEWRITE('parcours-init')
-        PARCOURS.find('steps', 0).showMarker(COLOR_NEXT)
+        updateStepsMarkers()
     }
 
     // RESUME
@@ -1393,7 +1814,17 @@ PAGES['parcours'] = () => {
         $('#parcours-run').show()
         // TYPEWRITE('parcours-run')
         updateStepsMarkers()
-    }    
+
+        // Audio cue so the walker isn't dropped into silence while GPS warms up
+        // or while they walk back into the active step zone. Map is already
+        // visible on resume (the hide-on-first-fire path is gated by !isResume).
+        if (RESUME_PLAYER.isLoaded()) RESUME_PLAYER.play()
+
+        // LOST state restored from a prior session: paint the band and start
+        // the loop immediately. evaluateLostState will fire 'recover' on the
+        // next position tick if the walker already came back into range.
+        if (PARCOURS.state.lost) applyLostUI()
+    }
 
     // SIMULATION: set GEO position to 10m from parcours start
     if (GEO.mode() == 'simulate') 
@@ -1417,10 +1848,18 @@ PAGES['parcours'] = () => {
 //
 PAGES['end'] = () => {
 
+    // Walk is over — stop position processing AND the native GPS service so it
+    // doesn't keep draining battery in the background after the parcours.
+    PARCOURS.stopTracking();
+    GEO.stopGeoloc();
+
     // Cleanup: stop all background audio
     PARCOURS.stopAudio();
     GPSLOST_PLAYER.stop();
     SILENT_PLAYER.stop();
+    LOST_PLAYER.stop();
+    RESUME_PLAYER.stop();
+    clearLostUI();
     if (testplayer) { testplayer.stop(); testplayer.clear(); testplayer = null; }
 
     var ending = true
@@ -1504,10 +1943,14 @@ $('#parcours-rearm').click(() => {
     console.log('REARM');
     TELEMETRY.restart(
         'rearm_button',
-        PARCOURS.info.file || PARCOURS.info.id || PARCOURS.info.name || '',
-        PARCOURS.info.name || PARCOURS.info.file || PARCOURS.info.id || ''
+        PARCOURS.pID || PARCOURS.info.name || '',
+        PARCOURS.info.name || PARCOURS.pID || ''
     );
     PARCOURS.currentStep(-2) // Reset current step
+    PARCOURS.state.lost = false
+    PARCOURS.state.lostSince = null
+    PARCOURS._lostBeyondSince = null
+    clearLostUI()
     PARCOURS.startTracking()
     PARCOURS.stopAudio()
 
@@ -1541,13 +1984,363 @@ $('#logs-title').on('click', (e) => {
     }
 });
 
+// LATE state fallback: shared loop played when a step's voice ends but the
+// step has no afterplay (or its afterplay file failed to load). Silently
+// silent if images/afterplay.mp3 isn't bundled — PlayerStep.startAfterplay
+// gates on isLoaded() before routing here.
+var DEFAULT_AFTERPLAY_PLAYER = new PlayerSimple(true, 0);
+DEFAULT_AFTERPLAY_PLAYER.load(BASEURL+'/images/', {src: 'afterplay.mp3', master: 1}, false);
+
+// P1.29 — when the generic "you are late" afterplay loop kicks in, the step
+// had no afterplay of its own: a soft signal the walker may be lost or behind.
+// Surface the recovery map so they get a visual cue back onto the route. The
+// currentPage guard keeps this off the devmode tools page.
+DEFAULT_AFTERPLAY_PLAYER.on('play', () => {
+    if (currentPage === 'parcours' && typeof openMapForRecovery === 'function') {
+        openMapForRecovery({source: 'default_afterplay'});
+    }
+});
+
+// RESUME cue: short one-shot played on app relaunch so the walker hears
+// something while GPS warms up / they walk back into the active zone.
+// Silently silent if images/resume.mp3 isn't bundled.
+var RESUME_PLAYER = new PlayerSimple(false, 0);
+RESUME_PLAYER.load(BASEURL+'/images/', {src: 'resume.mp3', master: 1}, false);
+
+// LOST state: looped message while the walker is too far from the active /
+// next step. Silently silent if images/youlost.mp3 isn't bundled.
+var LOST_PLAYER = new PlayerSimple(true, 0);
+LOST_PLAYER.load(BASEURL+'/images/', {src: 'youlost.mp3', master: 1}, false);
+
+// Tracks current GEO signal state (mirrors GEO.on('stateUpdate')). LOST is
+// gated on this — GPS-lost takes priority and suppresses the LOST band while
+// the bg-geo plugin reports no usable fix.
+var GPSSIGNAL_OK = true;
+
+// LOST state UI helpers — split out so the resume path can repaint the band
+// on a kill-and-relaunch without duplicating the entry handler's audio gates.
+// LOST_BAND_MUTED_UNTIL: timestamp until which the band stays hidden after a
+// manual dismiss. LOST state itself (PARCOURS.state.lost) is unaffected — the
+// audio loop also pauses but a still-lost walker gets a band re-appearance
+// after 60s if they haven't recovered.
+var LOST_BAND_MUTED_UNTIL = 0;
+var LOST_BAND_MUTE_TIMER = null;
+const LOST_BAND_MUTE_MS = 60000;
+
+function applyLostUI() {
+    if (Date.now() >= LOST_BAND_MUTED_UNTIL) {
+        $('#lost-band').css('display', 'flex');
+        if (typeof LOST_PLAYER !== 'undefined' && LOST_PLAYER.isLoaded()) LOST_PLAYER.play();
+    }
+    openMapForRecovery({source: 'lost'});
+}
+function clearLostUI() {
+    if (typeof LOST_PLAYER !== 'undefined') LOST_PLAYER.stop();
+    $('#lost-band').hide();
+    LOST_BAND_MUTED_UNTIL = 0;
+    if (LOST_BAND_MUTE_TIMER) { clearTimeout(LOST_BAND_MUTE_TIMER); LOST_BAND_MUTE_TIMER = null; }
+    closeMapForRecovery({source: 'recover'});
+}
+
+// Map open/close as a single path so manual help (#parcours-lost tap) and the
+// auto LOST state get identical treatment: visible map, drag + zoom unlocked,
+// auto-framed on the walker + target, and the live distance updater running.
+// On close, the map re-locks and returns to immersion.
+var MAP_RECOVERY_OPEN = false;
+var LOST_DISTANCE_LISTENER = null;
+var LOST_DISTANCE_LAST = null;
+
+// Instruction text under the map. Always ends with "Rejoignez la zone bleue
+// claire."; prefixed with "Vous semblez un peu perdu." while LOST is active.
+function updateMapInstruction() {
+    let lost = PARCOURS.state && PARCOURS.state.lost;
+    let prefix = lost ? 'Vous semblez un peu perdu. ' : '';
+    $('#map-instruction-text').html(
+        prefix + 'Rejoignez la zone <b class="zone-color-target">bleue claire</b>.'
+    );
+}
+
+function fitTargetBounds() {
+    if (!document.MAP) return;
+    let target = PARCOURS.lostTarget();
+    let pos = GEO.lastPosition;
+    if (!target) return;
+
+    let targetCenter = target.getCenterPosition();
+    if (!pos || !pos.coords) {
+        // No fix yet — at least centre on the target so the walker sees where to go.
+        try { document.MAP.setView(targetCenter, 18); } catch(e) {}
+        return;
+    }
+    try {
+        document.MAP.fitBounds(
+            [[pos.coords.latitude, pos.coords.longitude], targetCenter],
+            { padding: [50, 50], maxZoom: 19 }
+        );
+    } catch(e) { console.warn('[MAP] fitBounds failed:', e); }
+}
+
+function updateLostDistance(position) {
+    let $d = $('#map-instruction-distance');
+    let target = PARCOURS.lostTarget();
+    if (!target) { $d.text(''); return; }
+    let pos = position || GEO.lastPosition;
+    if (!pos || !pos.coords) { $d.text('→ — m'); return; }
+
+    // distanceToBorder is negative when the walker is already inside the zone —
+    // clamp to 0 so the indicator never shows a meaningless negative value.
+    let d = Math.max(0, Math.round(target.distanceToBorder(pos)));
+    $d.text('→ ' + d + ' m');
+
+    // Trend coloring: green if shrinking, red if growing, neutral otherwise.
+    if (LOST_DISTANCE_LAST !== null) {
+        if (d < LOST_DISTANCE_LAST - 1) $d.removeClass('is-receding').addClass('is-approaching');
+        else if (d > LOST_DISTANCE_LAST + 1) $d.removeClass('is-approaching').addClass('is-receding');
+    }
+    LOST_DISTANCE_LAST = d;
+}
+
+function startLostDistanceUpdater() {
+    if (LOST_DISTANCE_LISTENER) return;
+    LOST_DISTANCE_LAST = null;
+    $('#map-instruction-distance').removeClass('is-approaching is-receding');
+    updateLostDistance(); // paint once immediately
+    LOST_DISTANCE_LISTENER = (pos) => updateLostDistance(pos);
+    GEO.on('position', LOST_DISTANCE_LISTENER);
+}
+
+function stopLostDistanceUpdater() {
+    if (LOST_DISTANCE_LISTENER) {
+        try { GEO.off('position', LOST_DISTANCE_LISTENER); } catch(e) {}
+        LOST_DISTANCE_LISTENER = null;
+    }
+    LOST_DISTANCE_LAST = null;
+    $('#map-instruction-distance').removeClass('is-approaching is-receding');
+}
+
+function openMapForRecovery(opts) {
+    opts = opts || {};
+    if (currentPage !== 'parcours') return;
+    let alreadyOpen = MAP_RECOVERY_OPEN;
+    MAP_RECOVERY_OPEN = true;
+    if (typeof TELEMETRY !== 'undefined' && !alreadyOpen) TELEMETRY.log('map_opened', {source: opts.source || 'unknown'});
+
+    $('#parcours-map').css('opacity', 1);
+    $('#parcours-lost').text('Retour à l\'écoute');
+
+    if (document.MAP) {
+        try { document.MAP.dragging.enable(); } catch(e) {}
+        try { document.MAP.touchZoom.enable(); } catch(e) {}
+        try { document.MAP.scrollWheelZoom.enable(); } catch(e) {}
+        try { document.MAP.doubleClickZoom.enable(); } catch(e) {}
+        document.MAP.options.maxZoom = 20;
+        if (!document.MAP._zoomControl) {
+            document.MAP._zoomControl = L.control.zoom({position: 'topright'}).addTo(document.MAP);
+        }
+    }
+
+    fitTargetBounds();
+    updateMapInstruction();
+    $('#map-instruction').show();
+    startLostDistanceUpdater();
+}
+
+function closeMapForRecovery(opts) {
+    opts = opts || {};
+    let wasOpen = MAP_RECOVERY_OPEN;
+    MAP_RECOVERY_OPEN = false;
+    if (typeof TELEMETRY !== 'undefined' && wasOpen) TELEMETRY.log('map_closed', {source: opts.source || 'unknown'});
+
+    $('#parcours-map').css('opacity', 0);
+    $('#parcours-lost').text('Je suis perdu·e');
+
+    if (document.MAP) {
+        try { document.MAP.dragging.disable(); } catch(e) {}
+        try { document.MAP.touchZoom.disable(); } catch(e) {}
+        try { document.MAP.scrollWheelZoom.disable(); } catch(e) {}
+        try { document.MAP.doubleClickZoom.disable(); } catch(e) {}
+        document.MAP.options.maxZoom = 19;
+        if (document.MAP._zoomControl) {
+            document.MAP.removeControl(document.MAP._zoomControl);
+            document.MAP._zoomControl = null;
+        }
+    }
+
+    stopLostDistanceUpdater();
+    $('#map-instruction').hide();
+}
+
+PARCOURS.on('lost', (info) => {
+    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('user_lost', {
+        step: PARCOURS.currentStep(),
+        target_index: info && info.target ? info.target._index : null,
+        target_name: info && info.target ? info.target._spot.name : null,
+        distance: info ? Math.round(info.distance) : null,
+    });
+    if (navigator.vibrate) navigator.vibrate([200, 100, 200, 100, 600]);
+
+    // Pause the active step's audio (voice or afterplay) — store() in
+    // evaluateLostState already snapshotted the voice position above.
+    let activeStep = PARCOURS.find('steps', PARCOURS.currentStep());
+    if (activeStep && activeStep.player && activeStep.player.isPlaying()) {
+        activeStep.player.pause();
+    }
+
+    // Stop interruption zones outright (Re-crossing while LOST must not re-trigger
+    // them — Parcours.update early-returns during LOST so that's automatic, but
+    // we also kill any audio currently playing).
+    PARCOURS.stopAudio('zones');
+
+    // LOST masks offlimit: silence offlimit loops too.
+    PARCOURS.stopAudio('offlimits');
+
+    applyLostUI();
+});
+
+// Manual dismiss: hide the band + pause the loop for LOST_BAND_MUTE_MS.
+// LOST state stays active so the recovery overlay / distance updater keep
+// working; only the visual + audio nag are muted. After the timer, if still
+// LOST, applyLostUI() re-paints the band.
+$('#lost-band-dismiss').off().on('click', (e) => {
+    e.stopPropagation();
+    LOST_BAND_MUTED_UNTIL = Date.now() + LOST_BAND_MUTE_MS;
+    $('#lost-band').hide();
+    if (typeof LOST_PLAYER !== 'undefined') LOST_PLAYER.stop();
+    if (LOST_BAND_MUTE_TIMER) clearTimeout(LOST_BAND_MUTE_TIMER);
+    LOST_BAND_MUTE_TIMER = setTimeout(() => {
+        LOST_BAND_MUTE_TIMER = null;
+        if (PARCOURS.state.lost && currentPage === 'parcours' && GPSSIGNAL_OK) applyLostUI();
+    }, LOST_BAND_MUTE_MS);
+    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('lost_band_dismissed', {
+        step: PARCOURS.currentStep(),
+        muted_ms: LOST_BAND_MUTE_MS,
+    });
+});
+
+PARCOURS.on('recover', (info) => {
+    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('user_recovered', {
+        step: PARCOURS.currentStep(),
+        distance: info ? Math.round(info.distance) : null,
+    });
+    if (navigator.vibrate) navigator.vibrate([200, 80, 200]);
+
+    clearLostUI();
+
+    // Active-step resume + next-step fire are handled by Step.updatePosition's
+    // own branches on the next position tick (the LOST gate is now off).
+});
+
 // GPS LOST
 var GPSLOST_PLAYER = new PlayerSimple(true, 0);
 GPSLOST_PLAYER.load(BASEURL+'/images/', {src: 'gpslost.mp3', master: 1}, false);
 
 GEO.stateUpdateTimeout = 30 * 1000; // 30s on all platforms — must exceed the 15s native keepalive interval
+
+// Default GPS-lost copy (reset whenever we re-show the overlay for a transient signal loss).
+const GPSLOST_TEXT_DEFAULT = 'Signal GPS perdu.<br/><br/>Déplacez-vous vers un espace dégagé.<br/>La progression reprend automatiquement dès le retour du signal.';
+
+// Returns a "Précision GPS: <Xm>" prefix when we have a recent fix, otherwise ''.
+// Helps the walker correlate "no signal" with the last known accuracy.
+function gpsPrecisionPrefix() {
+    let p = GEO && GEO.lastPosition;
+    if (!p || !p.coords || typeof p.coords.accuracy !== 'number') return '';
+    return '<b>Dernière précision GPS:</b> ' + Math.round(p.coords.accuracy) + ' m<br /><br />';
+}
+
+function setGpsLostOverlay(opts) {
+    opts = opts || {};
+    let body = opts.html || GPSLOST_TEXT_DEFAULT;
+    // Prepend precision only on the default (transient signal-loss) copy.
+    // Auth-revoked / battery-kill copies already explain a concrete cause.
+    if (!opts.html) body = gpsPrecisionPrefix() + body;
+    $('#gpslost-overlay-desc').html(body);
+    if (opts.settings) $('#gpslost-settings').show();
+    else $('#gpslost-settings').hide();
+    $('#gpslost-overlay').css('display', 'flex');
+}
+
+function showGpsRevokedOverlay(reason) {
+    if (currentPage !== 'parcours') return;
+    GPSREVOKED = true;
+    var html;
+    if (reason === 'services') {
+        html = "<b>GPS désactivé</b><br/><br/>La localisation a été coupée dans les réglages système. Réactivez-la pour continuer le parcours.";
+    } else {
+        html = "<b>Autorisation révoquée</b><br/><br/>Flanerie n'a plus accès à votre position. Ouvrez les paramètres et réactivez la localisation sur <u>Toujours autoriser</u>.";
+    }
+    TELEMETRY.log('gps_revoked', {reason, step: PARCOURS.currentStep()});
+    if (navigator.vibrate) navigator.vibrate([500, 200, 500, 200, 500]);
+    pauseAllPlayers();
+    GPSLOST_PLAYER.play();
+    setGpsLostOverlay({html, settings: true});
+}
+
+// Mid-walk health probe: when GPS goes lost, check whether services or auth
+// were toggled off in settings — those need a dedicated overlay, not just
+// "move to an open area".
+function probeGpsHealth() {
+    if (currentPage !== 'parcours') return;
+    if (typeof BackgroundGeolocation === 'undefined') return;
+    GEO.checkHealth().then((h) => {
+        if (h.servicesEnabled === false) return showGpsRevokedOverlay('services');
+        if (h.authorization !== null && h.authorization !== BackgroundGeolocation.AUTHORIZED) return showGpsRevokedOverlay('auth');
+        if (h.bgLocationOk === false) return showGpsRevokedOverlay('auth');
+    });
+}
+
+// Re-emitted by geoloc.js whenever the bg-geo plugin reports a non-AUTHORIZED status.
+GEO.on('authorizationChanged', (status) => {
+    console.warn('GEO authorizationChanged:', status);
+    if (currentPage !== 'parcours') return;
+    showGpsRevokedOverlay('auth');
+});
+
+// Mid-walk OEM-kill heuristic: count unexpected bg-geo service stops in a
+// rolling window. Two stops within 5 min strongly suggests the OEM battery
+// layer is killing the foreground service — escalate beyond a transient
+// GPS-lost overlay with manufacturer-tailored copy.
+var BG_STOP_HISTORY = [];
+const BG_STOP_WINDOW_MS = 5 * 60 * 1000;
+const BG_STOP_THRESHOLD = 2;
+
+function showBatteryKillOverlay() {
+    if (currentPage !== 'parcours') return;
+    GPSREVOKED = true;
+    var oem = batteryKillCopy(batteryKillFamily());
+    var body = oem
+        ? oem.steps
+        : "Ouvrez les paramètres et désactivez les restrictions de batterie pour Flanerie, puis revenez à l'application.";
+    var html = "<b>Restriction batterie détectée</b><br /><br />" +
+               "Votre téléphone interrompt l'application en arrière-plan.<br /><br />" +
+               body;
+    TELEMETRY.log('battery_kill_overlay', {family: batteryKillFamily(), manufacturer: (typeof device !== 'undefined' ? device.manufacturer : null), step: PARCOURS.currentStep()});
+    if (navigator.vibrate) navigator.vibrate([500, 200, 500, 200, 500]);
+    pauseAllPlayers();
+    GPSLOST_PLAYER.play();
+    setGpsLostOverlay({html, settings: true});
+}
+
+GEO.on('bgServiceStop', (info) => {
+    if (info && info.intentional) return;
+    if (currentPage !== 'parcours') return;
+    var now = Date.now();
+    BG_STOP_HISTORY = BG_STOP_HISTORY.filter(t => now - t < BG_STOP_WINDOW_MS);
+    BG_STOP_HISTORY.push(now);
+    TELEMETRY.log('bg_stop_repeated', {count: BG_STOP_HISTORY.length, windowMs: BG_STOP_WINDOW_MS, step: PARCOURS.currentStep()});
+    if (BG_STOP_HISTORY.length >= BG_STOP_THRESHOLD) showBatteryKillOverlay();
+});
+
 GEO.on('stateUpdate', (state) => {
     if (state == 'lost') {
+        // GPS-lost takes priority over LOST. Always suppress the LOST band /
+        // loop, even if the UX gates below skip the gpslost overlay — the
+        // signal is unreliable, so we must not let LOST run on top.
+        GPSSIGNAL_OK = false;
+        if (PARCOURS.state.lost) {
+            $('#lost-band').hide();
+            LOST_PLAYER.stop();
+        }
+
         if (currentPage != 'parcours') return;                                  // only if on parcours page
         if (GEO.mode() == 'simulate') return;                                   // not in simulate mode
         if (PARCOURS.currentStep() == PARCOURS.spots.steps.length - 1) return;  // not if last step
@@ -1558,14 +2351,28 @@ GEO.on('stateUpdate', (state) => {
         if (navigator.vibrate) navigator.vibrate([500, 200, 500]);
         pauseAllPlayers();
         GPSLOST_PLAYER.play();
-        $('#gpslost-overlay').css('display', 'flex');
+        setGpsLostOverlay();
+        // Concurrent with the transient-loss overlay, probe system state.
+        // If GPS was revoked in settings, the probe escalates to the revoked overlay.
+        probeGpsHealth();
     }
     if (state == 'ok') {
+        GPSSIGNAL_OK = true;
+        // Drop any stale sustain timestamp — a value from before the signal
+        // dropped would let LOST fire on the very first recovered tick instead
+        // of giving the walker a fresh window to get back on course.
+        PARCOURS._lostBeyondSince = null;
+        // If LOST was active going into the GPS-lost window, repaint the
+        // band+loop now that GPS is back. evaluateLostState will exit LOST on
+        // the next position tick if the walker is already in range.
+        if (PARCOURS.state.lost && currentPage === 'parcours') applyLostUI();
+
         if (currentPage != 'parcours') return; // only if on parcours page
         if (AUDIOFOCUS == 0) return;
         console.log('GEO position ok');
         TELEMETRY.log('gps_recovered', {step: PARCOURS.currentStep()});
         if (navigator.vibrate) navigator.vibrate([200]);
+        GPSREVOKED = false;
         GPSLOST_PLAYER.stop();
         resumeAllPlayers();
         $('#gpslost-overlay').hide();
@@ -1573,11 +2380,67 @@ GEO.on('stateUpdate', (state) => {
     console.log('GEO stateUpdate', state, currentPage, AUDIOFOCUS);
 })
 
+// Periodic mid-walk poll: catches the case where the user toggles services
+// or auth in settings without leaving GPS-lost yet (e.g., disable then re-enable
+// quickly). Cheap call, fires every 30s only while on the parcours page.
+setInterval(() => {
+    if (currentPage !== 'parcours') return;
+    if (GEO.mode() == 'simulate') return;
+    if (typeof BackgroundGeolocation === 'undefined') return;
+    GEO.checkHealth().then((h) => {
+        var revoked = (h.servicesEnabled === false) ||
+                      (h.authorization !== null && h.authorization !== BackgroundGeolocation.AUTHORIZED) ||
+                      (h.bgLocationOk === false);
+        if (revoked && !GPSREVOKED) {
+            showGpsRevokedOverlay(h.servicesEnabled === false ? 'services' : 'auth');
+        }
+        if (!revoked && GPSREVOKED) {
+            GPSREVOKED = false;
+            $('#gpslost-settings').hide();
+            // stateUpdate('ok') will hide the overlay when a fix arrives
+        }
+    });
+}, 30000);
+
+// Periodic re-request of AUDIOFOCUS while the resume overlay is still up.
+// Some Android OEMs (and occasionally iOS) drop the AUDIOFOCUS_GAIN callback
+// after a transient loss, leaving the walker silent in their pocket with no
+// way to recover unless they look at the screen and tap. We re-ask once a
+// minute and vibrate the first few attempts to nudge them.
+var AUDIOFOCUS_RETRY_COUNT = 0;
+setInterval(() => {
+    // Allow the tools page in devmode so the show-resume-overlay test fires
+    // its retry without forcing the tester onto a live parcours.
+    if (currentPage !== 'parcours' && !(DEVMODE && currentPage === 'tools')) return;
+    if (typeof AUDIOFOCUS === 'undefined' || AUDIOFOCUS !== 0) {
+        AUDIOFOCUS_RETRY_COUNT = 0;
+        return;
+    }
+    if (!$('#resume-overlay').is(':visible')) {
+        AUDIOFOCUS_RETRY_COUNT = 0;
+        return;
+    }
+    if (GPSREVOKED) return; // revoked overlay takes priority
+
+    AUDIOFOCUS_RETRY_COUNT++;
+    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audiofocus_auto_retry', {attempt: AUDIOFOCUS_RETRY_COUNT});
+    if (AUDIOFOCUS_RETRY_COUNT <= 3 && navigator.vibrate) navigator.vibrate([300, 100, 300, 100, 300]);
+
+    if (typeof requestAudioFocus === 'function') {
+        requestAudioFocus().catch((e) => console.warn('[AudioFocus] auto-retry failed:', e));
+    }
+}, 60000);
+
 $('#gpslost-resume').on('click', () => {
     TELEMETRY.log('gps_force_resume', {step: PARCOURS.currentStep()});
     GPSLOST_PLAYER.stop();
     resumeAllPlayers();
     $('#gpslost-overlay').hide();
+})
+
+$('#gpslost-settings').on('click', () => {
+    TELEMETRY.log('gps_settings_open', {step: PARCOURS.currentStep()});
+    GEO.showAppSettings();
 })
 
 

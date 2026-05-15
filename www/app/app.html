@@ -64,13 +64,32 @@
             <h3 id="confirmgeo-title">Géolocalisation</h3>
             <div class="content">
                 <p id="confirmgeo-desc">
-                    L'application nécessite deux autorisations pour accéder à votre position précise en arrière plan afin de vous guider.<br /><br />
-                    Aucune informations n'est collectée ou transmise: la localisation sert uniquement à déclencher les audios du parcours.<br /><br />
+                    L'application a besoin de votre position en arrière plan pour vous guider, téléphone en poche écran éteint.<br /><br />
+                    À l'écran suivant, choisissez <u>Pendant l'utilisation</u>. 
+                    Il faudra ensuite autoriser la localisation en arrière plan en choisissant <u>Toujours autoriser</u>.<br /><br />
+                    Aucune donnée n'est transmise: la localisation sert uniquement à déclencher les audios.<br /><br />
                 </p>
                 <p id="confirmgeo-desc2"></p>
             </div>
-            <button id="confirmgeo-accept" class="btn btn-primary btn-page">J'accepte</button> 
+            <button id="confirmgeo-accept" class="btn btn-primary btn-page">J'accepte</button>
             <button id="confirmgeo-settings" class="btn btn-primary btn-page">Paramètres</button>
+        </div>
+
+        <div id="checkbgloc" class="page">
+            <h3 id="checkbgloc-title">Localisation en arrière plan</h3>
+            <p id="checkbgloc-desc">
+                Pour que la localisation fonctionne quand l'écran est éteint et le téléphone en poche, vous devez régler l'autorisation sur <u>Toujours autoriser</u>.<br /><br />
+                Réglages > Applications > Flanerie > Autorisations > Position > <u>Toujours autoriser</u>
+            </p>
+            <button id="checkbgloc-settings" class="btn btn-primary btn-page">Paramètres</button>
+            <button id="checkbgloc-retry" class="btn btn-primary btn-page" style="display:none;">J'ai autorisé</button>
+        </div>
+
+        <div id="checkmotion" class="page">
+            <h3 id="checkmotion-title">Capteur de mouvement</h3>
+            <p id="checkmotion-desc">Vérification du capteur de mouvement...</p>
+            <button id="checkmotion-settings" class="btn btn-primary btn-page" style="display:none;">Paramètres</button>
+            <button id="checkmotion-retry" class="btn btn-primary btn-page" style="display:none;">J'ai autorisé</button>
         </div>
 
         <div id="nogeo-auth" class="page">
@@ -135,6 +154,7 @@
                 <p>Choisissez un parcours:</p>
                 <ul id="select-parcours"></ul>
                 <button id="select-diagnostic" class="dev btn btn-primary btn-page" style="margin-top:30px;">Diagnostic appareil</button>
+                <button id="select-tools" class="dev btn btn-primary btn-page" style="margin-top:10px;">Outils dev</button>
             </div>
         </div>
 
@@ -165,15 +185,6 @@
             </div>
         </div>
 
-        <div id="confirmios" class="page">
-            <h3 id="confirmios-title">Géolocalisation</h3>
-            <p id="rdvios">ATTENTION: sur iPhone la localisation en veille ne fonctionne pas directement.<br /><br />
-                Vous devez régler vous même les paramètres de localisation de l'application sur "Toujours".<br /><br />
-                Réglages > Apps > Flanerie > Position > Toujours.<br /><br />
-            </p>
-            <!-- <button id="confirmios-settings" class="btn btn-primary btn-page">Réglages</button> -->
-            <button id="confirmios-accept" class="btn btn-primary btn-page">C'est compris</button>
-        </div>
 
         <div id="rdv" class="page">
             <div class="content">
@@ -205,14 +216,19 @@
 
         <div id="parcours" class="page">
             <img id="gps-status" src="$BASEPATH$/images/gps-off.png" alt="GPS Status" width="24" height="24">
+            <span id="gps-precision" class="bucket-unknown">—</span>
             <h3 id="parcours-title">Flanerie en cours </h3>
             <h3 id="parcours-title-dev"></h3>
             <p id="parcours-run">Suivez la voix...</p>
             <p id="parcours-init">Rendez vous au point de départ pour commencer le parcours.</p>
-            <button id="parcours-lost" class="btn btn-primary btn-page">Je suis perdu.e !</button>
+            <button id="parcours-lost" class="btn btn-primary btn-page">Je suis perdu·e</button>
             <button id="parcours-rearm" class="dev btn btn-dev-parcours">Rearm</button>
             <button id="parcours-restart" class="dev btn btn-dev-parcours2">Restart</button>
             <div id="parcours-map"></div>
+            <p id="map-instruction" style="display:none;">
+                <span id="map-instruction-text">Rejoignez la zone <b class="zone-color-target">bleue claire</b>.</span>
+                <span id="map-instruction-distance">→ — m</span>
+            </p>
         </div>
 
         <div id="end" class="page">
@@ -244,6 +260,20 @@
             </div>
         </div>
 
+        <div id="tools" class="page">
+            <h2>Outils dev</h2>
+            <div class="content" id="tools-content">
+                <button id="tools-force-lost" class="btn btn-primary btn-page">Forcer LOST</button>
+                <button id="tools-clear-lost" class="btn btn-primary btn-page">Sortir de LOST</button>
+                <button id="tools-force-voice-fail" class="btn btn-primary btn-page">Voix HS sur étape courante</button>
+                <button id="tools-force-afterplay-fallback" class="btn btn-primary btn-page">Afterplay générique sur étape courante</button>
+                <button id="tools-show-resume-overlay" class="btn btn-primary btn-page">Overlay reprise audio</button>
+                <button id="tools-snapshot" class="btn btn-primary btn-page">Snapshot état</button>
+                <pre id="tools-output" style="margin-top:20px; max-height:30vh; overflow:auto; font-size:0.75em; text-align:left; white-space:pre-wrap; word-break:break-word;"></pre>
+                <button id="tools-back" class="btn btn-primary btn-page" style="margin-top:20px;">Retour</button>
+            </div>
+        </div>
+
         <div id="sidepanel" class="dev">
             <h4 id="logs-title">LOGS</h4>
             <div id="logs"></div>
@@ -255,7 +285,13 @@
 
         <div id="gpslost-overlay" style="display:none;">
             <p id="gpslost-overlay-desc">Signal GPS perdu.<br/><br/>Déplacez-vous vers un espace dégagé.<br/>La progression reprend automatiquement dès le retour du signal.</p>
+            <button id="gpslost-settings" class="btn btn-primary" style="display:none;">Paramètres</button>
             <button id="gpslost-resume" class="btn btn-primary">Continuer l'écoute sans GPS</button>
+        </div>
+
+        <div id="lost-band" style="display:none;">
+            <span id="lost-band-text">Vous semblez un peu perdu. Rejoignez la zone <b class="zone-color-target">bleue claire</b>.</span>
+            <button id="lost-band-dismiss" aria-label="Masquer">✕</button>
         </div>
 
     </div>

@@ -3,6 +3,10 @@ var PAUSED_PLAYERS = []  // Interrupted players that are paused and can be resum
 var DUCKED_PLAYERS = new Map()
 var AUDIOFOCUS = -1  // Audio focus state, -1 means not available, 0 means no focus, 1 means focus gained
 var AUDIOFOCUS_DUCK_FACTOR = 0.25
+// Sticky flag: any iOS PlayerSimple that fell back to Howler sets this true.
+// checkaudio reads it to fail-fast before the user starts walking with a
+// broken locked-screen audio path. Reset on app reload only.
+var IOS_NATIVE_FALLBACK_DETECTED = false
 
 function showResumeOverlayIfNeeded(pausedCount) {
     if (pausedCount > 0) $('#resume-overlay').css('display', 'flex');
@@ -37,12 +41,14 @@ document.addEventListener('deviceready', function() {
         console.log('[AudioFocus] change:', focusState);
         if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audiofocus_change', {state: focusState});
         if (focusState === "AUDIOFOCUS_LOSS" || focusState === "AUDIOFOCUS_LOSS_TRANSIENT") {
-            if (navigator.vibrate) navigator.vibrate([300]);
+            // Distinctive triple-pulse so a pocketed user can feel that audio paused
+            // — a single 300ms pulse is easy to miss against walking motion.
+            if (navigator.vibrate) navigator.vibrate([300, 150, 300, 150, 300]);
             let pausedCount = pauseAllPlayers();
             AUDIOFOCUS = 0;
             showResumeOverlayIfNeeded(pausedCount);
         } else if (focusState === "AUDIOFOCUS_GAIN") {
-            if (navigator.vibrate) navigator.vibrate([100]);
+            if (navigator.vibrate) navigator.vibrate([100, 80, 100]);
             restoreDuckedPlayers();
             resumeAllPlayers();
             AUDIOFOCUS = 1;
@@ -508,8 +514,12 @@ class PlayerSimple extends EventEmitter
 
     load(basepath, media, usemediapath = true) {
         this._media = media
-        
+
         if (!media || !media.src || media.src == '-') return
+
+        // Default master gain — a media object from parcours JSON may omit it,
+        // which would make volume() compute _volume * undefined = NaN.
+        if (typeof media.master !== 'number') media.master = 1
 
         if (usemediapath && document.LOCALMEDIA_PATH) {
             let localpath = document.LOCALMEDIA_PATH.split('/')
@@ -527,12 +537,22 @@ class PlayerSimple extends EventEmitter
 
         this.clear()
 
+        this._isNativeFallback = false
         if (PLATFORM === 'ios') {
             let nativeSrc = httpToNativePath(fullSrc)
             if (nativeSrc) {
                 this._player = new NativeMediaPlayer(nativeSrc, { loop: this._loop })
             } else {
-                console.warn('[NativeMedia] Cannot resolve native path for:', fullSrc, '— using Howler fallback')
+                // FATAL on iOS — Howler cannot start playback from a background GPS
+                // callback when the phone is locked. checkaudio gates on this flag.
+                console.error('[NativeMedia] Cannot resolve native path for:', fullSrc, '— iOS Howler fallback (BROKEN for locked-screen GPS triggers)')
+                this._isNativeFallback = true
+                IOS_NATIVE_FALLBACK_DETECTED = true
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('ios_native_fallback', {
+                    src: fullSrc,
+                    has_localmedia: !!document.LOCALMEDIA_PATH_NATIVE,
+                    has_localapp: !!document.LOCALAPP_PATH_NATIVE,
+                })
                 this._player = new Howl({ src: fullSrc, loop: this._loop, autoplay: false, volume: 1, html5: true })
             }
         } else {
@@ -546,7 +566,7 @@ class PlayerSimple extends EventEmitter
             if (!this._player) return
             console.log('PlayerSimple end:', this._player._src)
             this._playRequested = false
-            this._isActive = false
+            if (!this._loop) this._isActive = false  // keep active so loop's next 'play' event isn't rejected
             this.emit('end', this._player._src)
             // console.log('PlayerSimple end:', this._player._src)
         })
@@ -689,10 +709,12 @@ class PlayerSimple extends EventEmitter
             if (this._playRequested) {
                 console.warn('PlayerSimple play timeout: resetting stuck _playRequested', this._player ? this._player._src : '?')
                 this._playRequested = false
-                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_play_timeout', {src: this._player ? this._player._src : null})
+                // 15s window covers slow filesystems / large MP3 loads. loaderror/playerror fire
+                // on real failures and resolve the geo task earlier; this is the last-resort safety net.
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_play_timeout', {src: this._player ? this._player._src : null, ms: 15000})
                 this._resolveGeoTask('play-timeout')
             }
-        }, 5000)
+        }, 15000)
         console.log('PlayerSimple play requested:', this._player._src, 'seek:', seek, 'volume:', volume)
         let bgTask = this._claimGeoTask({ seek: seek })
         if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_play_requested', {
@@ -753,19 +775,36 @@ class PlayerSimple extends EventEmitter
 
     stop() {
         if (!this._player) return
+
+        // Explicit stop wins over an AUDIOFOCUS-driven pause — drop any
+        // pending resume so resumeAllPlayers() can't revive a player that
+        // was deliberately stopped (e.g. GPSLOST_PLAYER after recovery,
+        // a step's afterplay after the next step fires).
+        PAUSED_PLAYERS = PAUSED_PLAYERS.filter(p => p !== this)
+
         if (this._playRequested) {
             console.warn('PlayerSimple stop but play requesting ...')
             this._playRequested = false
-            return
+            clearTimeout(this._playRequestedTimeout)
         }
-        if (!this._player.playing()) return
-        this._player.stop()
+        if (this._player.playing() || this._isUnderlyingPaused()) {
+            this._player.stop()
+        }
     }
 
     pause() {
         if (!this._player) return
-        if (!this._player.playing()) return
         if (this.isGoingOut) return
+
+        // Cancel a queued play that hasn't started yet — otherwise the audio
+        // would start playing the moment load completes (e.g. when GPS-lost
+        // paused everything while a step voice was still loading).
+        if (this._playRequested && !this._player.playing()) {
+            this._player.stop()
+            return
+        }
+
+        if (!this._player.playing()) return
         this._player.pause()
     }
 
@@ -806,7 +845,16 @@ class PlayerSimple extends EventEmitter
     }
 
     isPaused() {
-        return this._player && this._player.paused()
+        return this._isUnderlyingPaused()
+    }
+
+    // Howler's Howl has no public paused() — peek at the first sound's _paused
+    // flag. NativeMediaPlayer exposes paused() directly so prefer that when present.
+    _isUnderlyingPaused() {
+        if (!this._player) return false
+        if (typeof this._player.paused === 'function') return this._player.paused()
+        let sounds = this._player._sounds
+        return !!(sounds && sounds[0] && sounds[0]._paused && !sounds[0]._ended)
     }
 
     isPlaying() {
@@ -817,6 +865,22 @@ class PlayerSimple extends EventEmitter
         return (this._player !== null && !this._loadError) || (this._media && this._media.src == '-')
     }
 
+    // seek([seconds]) — getter/setter in seconds, proxied to the underlying
+    // Howl / NativeMediaPlayer. Without this, snapshotVoicePosition() in
+    // parcours.js could never read a position and resume-with-progress (P3.5)
+    // silently always restarted the step from 0.
+    // Howler's no-arg seek() returns the Howl object itself in some states —
+    // guard with typeof so callers always get a clean number.
+    seek(seconds) {
+        if (!this._player) return 0
+        if (seconds === undefined) {
+            let p = this._player.seek()
+            return (typeof p === 'number' && !isNaN(p)) ? p : 0
+        }
+        this._player.seek(seconds)
+        return this
+    }
+
     rewindOnPause(value = -1) {
         this._rewindOnPause = value
     }
@@ -824,7 +888,17 @@ class PlayerSimple extends EventEmitter
     stopOut(d=-1) {
         if (d < 0) d = this._fadeTime
         if (this.isGoingOut) clearTimeout(this.isGoingOut)
-        if (!this._player || !this._player.playing()) return
+        if (!this._player) return
+
+        // Drop any pending resume — see PlayerSimple.stop() for the rationale.
+        PAUSED_PLAYERS = PAUSED_PLAYERS.filter(p => p !== this)
+
+        // Paused player (e.g. by AUDIOFOCUS_LOSS): can't fade, but must still
+        // stop the underlying so a later AUDIOFOCUS_GAIN can't revive it.
+        if (!this._player.playing()) {
+            if (this._isUnderlyingPaused()) this._player.stop()
+            return
+        }
 
         // Fade out
         this._player.fade(this._player.volume(), 0, d)
@@ -857,37 +931,74 @@ class PlayerSimple extends EventEmitter
 
 
 
-class PlayerStep extends EventEmitter 
+class PlayerStep extends EventEmitter
 {
     constructor() {
         super()
         this.voice   = new PlayerSimple()
-        this.music   = new PlayerSimple()
-        this.ambiant = new PlayerSimple(true)
-        this.offlimit = new PlayerSimple(true, 500)
         this.afterplay = new PlayerSimple(true)
-        this.state = 'off'       // play, afterplay, pause, stop, offlimit  
+        this.state = 'off'       // play, afterplay, pause, stop, offlimit
         this.playstate = 'play'  // play, afterplay
         this._doneFired = false
+        // True while this step's afterplay phase is being served by the shared
+        // DEFAULT_AFTERPLAY_PLAYER (because the step's own afterplay is missing
+        // or failed to load). All afterplay-routed ops must check this flag.
+        this._defaultAfterplayActive = false
 
         this.voice.rewindOnPause(3000)
-        this.voice.on('end', () => { 
+        this.voice.on('end', () => {
             this.startAfterplay()
         })
 
-        this.music.rewindOnPause(3000)
-        this.music.on('end', () => { 
+        // Voice playback failure: skip directly to afterplay so the step's
+        // lifecycle still advances and the user doesn't end up in silence
+        // staring at a dead zone they can't progress past.
+        let onVoiceFail = (reason) => {
+            if (this.state !== 'play') return
+            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('step_voice_failed', {
+                reason,
+                src: this.voice._src(),
+            })
             this.startAfterplay()
-        })
-        
+        }
+        this.voice.on('loaderror', () => onVoiceFail('loaderror'))
+        this.voice.on('playerror', () => onVoiceFail('playerror'))
+
         this.afterplay.rewindOnPause(3000)
+    }
+
+    // Returns true if the step's own afterplay is unusable (no src, errored,
+    // or otherwise not loadable) — in which case we route through the shared
+    // DEFAULT_AFTERPLAY_PLAYER. Silent fallback if that file is also missing.
+    _needsDefaultAfterplay() {
+        if (!this.afterplay._media) return true
+        if (this.afterplay._media.src === '-') return true
+        if (this.afterplay._loadError) return true
+        return false
     }
 
     startAfterplay() {
         if (this.state != 'play') return
         this.playstate = 'afterplay'
         this.state = 'afterplay'
-        this.afterplay.play()
+
+        if (this._needsDefaultAfterplay()) {
+            this._defaultAfterplayActive = true
+            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('step_afterplay_fallback', {
+                reason: this.afterplay._loadError ? 'loaderror' : 'no_src',
+            })
+            if (typeof DEFAULT_AFTERPLAY_PLAYER !== 'undefined' && DEFAULT_AFTERPLAY_PLAYER) {
+                // Stop first — the singleton is shared, so another step may
+                // still be fading it out from its own teardown.
+                DEFAULT_AFTERPLAY_PLAYER.stop()
+                if (DEFAULT_AFTERPLAY_PLAYER.isLoaded()) DEFAULT_AFTERPLAY_PLAYER.play()
+                // If isLoaded() is false the bundled afterplay.mp3 is missing —
+                // stay silent rather than retry or surface an error.
+            }
+        } else {
+            this.afterplay.play()
+        }
+
         if (!this._doneFired) {
             this._doneFired = true
             this.emit('done')
@@ -896,20 +1007,19 @@ class PlayerStep extends EventEmitter
 
     load(basepath, media) {
         this.voice.load(basepath, media.voice)
-        this.music.load(basepath, media.music)
-        this.ambiant.load(basepath, media.ambiant)
-        this.offlimit.load(basepath, media.offlimit)
         this.afterplay.load(basepath, media.afterplay)
         this.playstate = 'play'
         this._doneFired = false
+        this._defaultAfterplayActive = false
         this.state = 'stop'
     }
 
     clear() {
         this.voice.clear()
-        this.music.clear()
-        this.ambiant.clear()
-        this.offlimit.clear()
+        if (this._defaultAfterplayActive && typeof DEFAULT_AFTERPLAY_PLAYER !== 'undefined') {
+            DEFAULT_AFTERPLAY_PLAYER.stop()
+        }
+        this._defaultAfterplayActive = false
         this.afterplay.clear()
         let wasNotStop = this.state !== 'stop'
         this.playstate = 'play'
@@ -918,17 +1028,17 @@ class PlayerStep extends EventEmitter
         if (wasNotStop) this.emit('stop')
     }
 
-    play() {
+    play(seekPos=0) {
         console.log('PlayerStep play', this.playstate)
-        this.offlimit.stop()
-        this.ambiant.play()
-
         if (this.playstate == 'afterplay') {
-            this.afterplay.play()
+            if (this._defaultAfterplayActive && typeof DEFAULT_AFTERPLAY_PLAYER !== 'undefined') {
+                if (DEFAULT_AFTERPLAY_PLAYER.isLoaded()) DEFAULT_AFTERPLAY_PLAYER.play()
+            } else {
+                this.afterplay.play()
+            }
         }
         else {
-            this.voice.play()
-            this.music.play()
+            this.voice.play(seekPos)
         }
         let wasNotPlay = this.state !== this.playstate
         this.state = this.playstate
@@ -937,10 +1047,12 @@ class PlayerStep extends EventEmitter
 
     stop(d=-1) {
         this.voice.stopOut(d)
-        this.music.stopOut(d)
-        this.ambiant.stopOut(d)
-        this.offlimit.stopOut(d)
-        this.afterplay.stopOut(d)
+        if (this._defaultAfterplayActive && typeof DEFAULT_AFTERPLAY_PLAYER !== 'undefined') {
+            DEFAULT_AFTERPLAY_PLAYER.stopOut(d)
+        } else {
+            this.afterplay.stopOut(d)
+        }
+        this._defaultAfterplayActive = false
 
 
         let wasNotStop = this.state !== 'stop'
@@ -952,10 +1064,11 @@ class PlayerStep extends EventEmitter
     pause() {
         if (!this.isPlaying()) return
         this.voice.pauseOut()
-        this.music.pauseOut()
-        this.ambiant.pauseOut()
-        this.offlimit.pauseOut()
-        this.afterplay.pauseOut()
+        if (this._defaultAfterplayActive && typeof DEFAULT_AFTERPLAY_PLAYER !== 'undefined') {
+            DEFAULT_AFTERPLAY_PLAYER.pauseOut()
+        } else {
+            this.afterplay.pauseOut()
+        }
         let wasNotPause = this.state !== 'pause'
         this.state = 'pause'
         if (wasNotPause) {
@@ -965,14 +1078,15 @@ class PlayerStep extends EventEmitter
     }
 
     resume() {
-
-        this.ambiant.resume()
         if (this.playstate == 'afterplay') {
-            this.afterplay.resume()
+            if (this._defaultAfterplayActive && typeof DEFAULT_AFTERPLAY_PLAYER !== 'undefined') {
+                if (DEFAULT_AFTERPLAY_PLAYER.isLoaded()) DEFAULT_AFTERPLAY_PLAYER.resume()
+            } else {
+                this.afterplay.resume()
+            }
         }
         else {
             this.voice.resume()
-            this.music.resume()
         }
 
         let wasNotPlay = this.state !== this.playstate
@@ -982,10 +1096,11 @@ class PlayerStep extends EventEmitter
 
     volume(value) {
         this.voice.volume(value)
-        this.music.volume(value)
-        this.ambiant.volume(value)
-        this.offlimit.volume(value)
-        this.afterplay.volume(value)
+        if (this._defaultAfterplayActive && typeof DEFAULT_AFTERPLAY_PLAYER !== 'undefined') {
+            DEFAULT_AFTERPLAY_PLAYER.volume(value)
+        } else {
+            this.afterplay.volume(value)
+        }
     }
 
     isPaused() {
@@ -993,24 +1108,25 @@ class PlayerStep extends EventEmitter
     }
 
     isPlaying() {
-        return this.state == 'play' || this.state == 'afterplay'
+        return this.state == 'play' || this.state == 'afterplay' || this.state == 'offlimit'
     }
 
+    // Voice-only: an afterplay loaderror is tolerated via the DEFAULT_AFTERPLAY
+    // fallback, so it must not block the step from being considered loaded.
     isLoaded() {
-        return this.voice.isLoaded() && this.music.isLoaded() && this.ambiant.isLoaded() && this.offlimit.isLoaded() && this.afterplay.isLoaded()
+        return this.voice.isLoaded()
     }
 
     hasError() {
-        return !!(this.voice._loadError || this.music._loadError || this.ambiant._loadError ||
-                  this.offlimit._loadError || this.afterplay._loadError)
+        return !!this.voice._loadError
     }
 
     isReady() {
-        return this.voice.isReady() && this.music.isReady() && this.ambiant.isReady() && this.offlimit.isReady() && this.afterplay.isReady()
+        return this.voice.isReady()
     }
 
     loadState() {
-        let states = [this.voice, this.music, this.ambiant, this.offlimit, this.afterplay].map(player => player.loadState())
+        let states = [this.voice, this.afterplay].map(player => player.loadState())
         if (states.every(state => state === 'loaded' || state === 'empty')) return 'loaded'
         if (states.every(state => state === 'unloaded' || state === 'empty')) return 'unloaded'
         return states.join(',')
@@ -1024,31 +1140,13 @@ class PlayerStep extends EventEmitter
         return this.state == 'play'
     }
 
-    crossLimit(out=true) 
+    crossLimit(out=true)
     {
-        if (out && this.state == 'play') {
-            this.voice.pauseOut()
-            this.music.pauseOut()
-            this.offlimit.play()
-            this.state = 'offlimit'
-            this.emit('offlimit')
-        }
-        else if (out && this.state == 'afterplay') {
-            this.afterplay.pauseOut()
-            this.offlimit.play()
+        if (out && (this.state == 'play' || this.state == 'afterplay')) {
             this.state = 'offlimit'
             this.emit('offlimit')
         }
         else if (!out && this.state == 'offlimit') {
-            this.offlimit.stopOut()
-
-            if (this.playstate == 'afterplay') {
-                this.afterplay.resume()
-            }
-            else {
-                this.voice.resume()
-                this.music.resume()
-            }
             this.state = this.playstate
             this.emit('resume')
         }
