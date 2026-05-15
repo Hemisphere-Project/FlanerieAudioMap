@@ -1,7 +1,7 @@
 var DISTANCE_RDV = 20; // 20m (to validate RDV)
 
-var COLOR_DONE = 'grey';
-var COLOR_NEXT = 'blue';
+var COLOR_DONE    = 'grey';
+var COLOR_FUTURE  = '#1a4a8a';
 var COLOR_CURRENT = '#43FAF2';
 
 var DEVMODE = localStorage.getItem('devmode') == 'true' || false;
@@ -1670,9 +1670,7 @@ PAGES['parcours'] = () => {
                 s.showMarker(COLOR_CURRENT, 0.7);
             }
             else if (DEVMODE) {
-                // Dev: keep upcoming steps visible but greyed so the active
-                // target stays the obvious one.
-                s.showMarker(COLOR_DONE, 0.3);
+                s.showMarker(COLOR_FUTURE);
             }
             else {
                 s.hideMarker();
@@ -1955,10 +1953,7 @@ $('#parcours-rearm').click(() => {
     PARCOURS.startTracking()
     PARCOURS.stopAudio()
 
-    // set all steps markers to yellow
-    PARCOURS.spots.steps.forEach((s, i) => {
-        s.showMarker(COLOR_NEXT)
-    })
+    if (typeof updateStepsMarkers === 'function') updateStepsMarkers();
 
     setTimeout(() => document.MAP.fire('move'), 2000)
 })
@@ -2126,6 +2121,7 @@ function openMapForRecovery(opts) {
     MAP_RECOVERY_OPEN = true;
     if (typeof TELEMETRY !== 'undefined' && !alreadyOpen) TELEMETRY.log('map_opened', {source: opts.source || 'unknown'});
 
+    if (typeof updateStepsMarkers === 'function') updateStepsMarkers();
     $('#parcours-map').css('opacity', 1);
     $('#parcours-lost').text('Retour à l\'écoute');
 
