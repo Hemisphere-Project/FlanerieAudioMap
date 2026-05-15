@@ -1951,6 +1951,7 @@ $('#parcours-rearm').click(() => {
     PARCOURS.state.lostSince = null
     PARCOURS._lostBeyondSince = null
     clearLostUI()
+    $('#parcours-map').css('opacity', 1)
     PARCOURS.startTracking()
     PARCOURS.stopAudio()
 
