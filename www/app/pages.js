@@ -1951,6 +1951,7 @@ $('#parcours-rearm').click(() => {
     PARCOURS._lostBeyondSince = null
     clearLostUI()
     closeMapForRecovery({source: 'rearm'})
+    openMapForRecovery({source: 'rearm'})
     PARCOURS.startTracking()
     PARCOURS.stopAudio()
 
