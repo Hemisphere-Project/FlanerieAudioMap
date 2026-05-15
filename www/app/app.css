@@ -83,18 +83,23 @@ body {
     width: 100%;
 }
 
-.btn-dev-parcours, 
+.btn-dev-parcours,
 .btn-dev-parcours2 {
-    position: absolute;
-    top: 0;
+    position: fixed;
+    bottom: 20px;
     padding: 10px;
     border: 1px solid #EEE;
     border-radius: 2px;
-    background-color: black;
+    background-color: rgba(0,0,0,0.85);
     color: white;
     cursor: pointer;
     font-family: 'Courier New', 'Roboto', Arial, sans-serif;
     font-size: 1.2em;
+    z-index: 500;
+}
+
+.btn-dev-parcours {
+    left: 0;
 }
 
 .btn-dev-parcours2 {
@@ -209,6 +214,9 @@ input[type=number].input-page::-webkit-outer-spin-button {
     width: 80%;
     text-align: center;
     cursor: pointer;
+    word-break: break-word;
+    overflow-wrap: break-word;
+    box-sizing: border-box;
 }
 
 #select-parcours li.testparcours {
@@ -239,7 +247,6 @@ input[type=number].input-page::-webkit-outer-spin-button {
 
 /* PARCOURS */
 #parcours {
-    position: relative;
     width: 100%;
     height: 90%;
 }
