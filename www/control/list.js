@@ -24,6 +24,86 @@ function formatBytes(bytes) {
     }) + ' ' + units[unitIndex];
 }
 
+function renderParcoursRow(list, parcours) {
+    const tr = document.createElement('tr')
+    tr.classList.add('status-'+parcours.status);
+    tr.classList.add('parcours-row');
+    list.appendChild(tr);
+
+    // Name
+    const tdName = document.createElement('td')
+    tdName.innerHTML = parcours.name;
+    tr.appendChild(tdName);
+
+    // Update time
+    const tdTime = document.createElement('td');
+    tdTime.innerHTML = new Date(parcours.time).toLocaleString('fr-FR');
+    tr.appendChild(tdTime);
+
+    // Media pack size
+    const tdMedia = document.createElement('td');
+    tdMedia.textContent = formatBytes(parcours.mediaBytes || 0);
+    tr.appendChild(tdMedia);
+
+    // Status
+    const tdStatus = document.createElement('td');
+    var status = parcours.status;
+    if (status == 'draft') status = '<i>Brouillon</i>'
+    else if (status == 'test') status = 'Test'
+    else if (status == 'public') status = '<strong>Publiée</strong>'
+    else if (status == 'old') status = 'Archive'
+
+    tdStatus.innerHTML = status;
+    tr.appendChild(tdStatus);
+    const tdLink = document.createElement('td');
+    tr.appendChild(tdLink);
+    
+    // show button
+    // const buttonShow = document.createElement('button');
+    // buttonShow.classList.add('btn', 'btn-warning', 'btn-sm', 'mr-1');
+    // buttonShow.innerHTML = 'Show';
+    // buttonShow.addEventListener('click', () => {
+    //     window.location.href = '/show/' + parcours.file;
+    // })
+    // tdLink.appendChild(buttonShow);
+
+    // button edit
+    const buttonEdit = document.createElement('button');
+    buttonEdit.classList.add('btn', 'btn-primary', 'btn-sm', 'mr-1');
+    buttonEdit.innerHTML = 'Edit';
+    buttonEdit.addEventListener('click', () => {
+        window.location.href = '/edit/' + parcours.file;
+    })
+    tdLink.appendChild(buttonEdit);
+
+    // button clone
+    const buttonClone = document.createElement('button');
+    buttonClone.classList.add('btn', 'btn-info', 'btn-sm', 'mr-1');
+    buttonClone.innerHTML = 'Clone';
+    buttonClone.addEventListener('click', () => {
+        var prevName = parcours.name + ' - Copie';
+        var name = prompt('Enter the name of the new parcours', prevName).trim()
+        if (!name) return;
+        post('/cloneParcours', {file: parcours.file, name: name})
+            .then(() => {
+                refreshList();
+            })
+    })
+    tdLink.appendChild(buttonClone);
+
+    // button delete
+    const buttonDelete = document.createElement('button');
+    buttonDelete.classList.add('btn', 'btn-danger', 'btn-sm', 'mr-1');
+    buttonDelete.innerHTML = 'Delete';
+    buttonDelete.addEventListener('click', () => { 
+        if (parcours.status == 'draft') {
+            if (confirm('Supprimer le parcours ' + parcours.name + ' ?')) deleteParcours(parcours.file) 
+        }
+        else alert('Le parcours doit être en brouillon pour être supprimé !')
+    });
+    if (parcours.status == 'draft') tdLink.appendChild(buttonDelete);
+}
+
 
 function refreshList() {
     // fetch parcours list
@@ -31,7 +111,10 @@ function refreshList() {
     .then(response => response.json())
     .then(data => {
         const list = document.getElementById('parcours');
+        const archiveList = document.getElementById('archives');
+        const archiveSection = document.getElementById('archiveSection');
         list.innerHTML = '';
+        archiveList.innerHTML = '';
 
         // reorder data by .name
         data.sort((a, b) => {
@@ -48,87 +131,12 @@ function refreshList() {
         });
 
         console.log(data)
-        data.forEach(parcours => {
-            const tr = document.createElement('tr')
-            tr.classList.add('status-'+parcours.status);
-            tr.classList.add('parcours-row');
-            list.appendChild(tr);
+        const activeParcours = data.filter(parcours => parcours.status !== 'old');
+        const archivedParcours = data.filter(parcours => parcours.status === 'old');
 
-            // Name
-            const tdName = document.createElement('td')
-            tdName.innerHTML = parcours.name;
-            tr.appendChild(tdName);
-
-            // Update time
-            const tdTime = document.createElement('td');
-            // format date to jj/MM/YYYY HH:mm:ss
-            tdTime.innerHTML = new Date(parcours.time).toLocaleString('fr-FR');
-            tr.appendChild(tdTime);
-
-            // Media pack size
-            const tdMedia = document.createElement('td');
-            tdMedia.textContent = formatBytes(parcours.mediaBytes || 0);
-            tr.appendChild(tdMedia);
-
-            // Status
-            const tdStatus = document.createElement('td');
-            var status = parcours.status;
-            if (status == 'draft') status = '<i>Brouillon</i>'
-            else if (status == 'test') status = 'Test'
-            else if (status == 'public') status = '<strong>Publiée</strong>'
-            else if (status == 'old') status = 'Archive'
-
-            tdStatus.innerHTML = status;
-            tr.appendChild(tdStatus);
-            const tdLink = document.createElement('td');
-            tr.appendChild(tdLink);
-            
-            // show button
-            // const buttonShow = document.createElement('button');
-            // buttonShow.classList.add('btn', 'btn-warning', 'btn-sm', 'mr-1');
-            // buttonShow.innerHTML = 'Show';
-            // buttonShow.addEventListener('click', () => {
-            //     window.location.href = '/show/' + parcours.file;
-            // })
-            // tdLink.appendChild(buttonShow);
-
-            // button edit
-            const buttonEdit = document.createElement('button');
-            buttonEdit.classList.add('btn', 'btn-primary', 'btn-sm', 'mr-1');
-            buttonEdit.innerHTML = 'Edit';
-            buttonEdit.addEventListener('click', () => {
-                window.location.href = '/edit/' + parcours.file;
-            })
-            tdLink.appendChild(buttonEdit);
-
-            // button clone
-            const buttonClone = document.createElement('button');
-            buttonClone.classList.add('btn', 'btn-info', 'btn-sm', 'mr-1');
-            buttonClone.innerHTML = 'Clone';
-            buttonClone.addEventListener('click', () => {
-                var prevName = parcours.name + ' - Copie';
-                var name = prompt('Enter the name of the new parcours', prevName).trim()
-                if (!name) return;
-                post('/cloneParcours', {file: parcours.file, name: name})
-                    .then(() => {
-                        refreshList();
-                    })
-            })
-            tdLink.appendChild(buttonClone);
-
-            // button delete
-            const buttonDelete = document.createElement('button');
-            buttonDelete.classList.add('btn', 'btn-danger', 'btn-sm', 'mr-1');
-            buttonDelete.innerHTML = 'Delete';
-            buttonDelete.addEventListener('click', () => { 
-                if (parcours.status == 'draft') {
-                    if (confirm('Supprimer le parcours ' + parcours.name + ' ?')) deleteParcours(parcours.file) 
-                }
-                else alert('Le parcours doit être en brouillon pour être supprimé !')
-            });
-            if (parcours.status == 'draft') tdLink.appendChild(buttonDelete);
-
-        });
+        activeParcours.forEach(parcours => renderParcoursRow(list, parcours));
+        archivedParcours.forEach(parcours => renderParcoursRow(archiveList, parcours));
+        archiveSection.style.display = archivedParcours.length ? '' : 'none';
     });
 }
 
