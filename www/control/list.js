@@ -6,6 +6,24 @@ function deleteParcours(file) {
         })    
 }
 
+function formatBytes(bytes) {
+    if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let size = bytes;
+    let unitIndex = 0;
+
+    while (size >= 1024 && unitIndex < units.length - 1) {
+        size /= 1024;
+        unitIndex += 1;
+    }
+
+    const precision = size >= 100 || unitIndex === 0 ? 0 : 1;
+    return size.toLocaleString('fr-FR', {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: precision
+    }) + ' ' + units[unitIndex];
+}
+
 
 function refreshList() {
     // fetch parcours list
@@ -46,6 +64,11 @@ function refreshList() {
             // format date to jj/MM/YYYY HH:mm:ss
             tdTime.innerHTML = new Date(parcours.time).toLocaleString('fr-FR');
             tr.appendChild(tdTime);
+
+            // Media pack size
+            const tdMedia = document.createElement('td');
+            tdMedia.textContent = formatBytes(parcours.mediaBytes || 0);
+            tr.appendChild(tdMedia);
 
             // Status
             const tdStatus = document.createElement('td');

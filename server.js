@@ -79,6 +79,51 @@ function walkDir(basePath, currentPath, list = {}) {
   });
 }
 
+const VALID_MEDIA_EXTENSIONS = new Set(['mp3', 'wav', 'ogg', 'm4a', 'mp4', 'webm', 'ogv', 'mov', 'avi', 'mkv', 'flv', 'wmv', 'm4v']);
+
+function isValidMediaFile(fileName) {
+  const extension = fileName.split('.').pop()?.toLowerCase();
+  return VALID_MEDIA_EXTENSIONS.has(extension);
+}
+
+function getParcoursMediaStats(parcoursId) {
+  const mediaFolder = path.join(__dirname, 'media', parcoursId);
+  const stats = {
+    totalBytes: 0,
+    fileCount: 0,
+    folders: { '.': { bytes: 0, fileCount: 0 } }
+  };
+
+  if (!fs.existsSync(mediaFolder)) return stats;
+
+  fs.readdirSync(mediaFolder).forEach(entry => {
+    const entryPath = path.join(mediaFolder, entry);
+    const entryStat = fs.statSync(entryPath);
+
+    if (entryStat.isDirectory()) {
+      stats.folders[entry] = { bytes: 0, fileCount: 0 };
+      fs.readdirSync(entryPath).forEach(file => {
+        const filePath = path.join(entryPath, file);
+        const fileStat = fs.statSync(filePath);
+        if (fileStat.isDirectory() || !isValidMediaFile(file)) return;
+        stats.folders[entry].bytes += fileStat.size;
+        stats.folders[entry].fileCount += 1;
+        stats.totalBytes += fileStat.size;
+        stats.fileCount += 1;
+      });
+      return;
+    }
+
+    if (!isValidMediaFile(entry)) return;
+    stats.folders['.'].bytes += entryStat.size;
+    stats.folders['.'].fileCount += 1;
+    stats.totalBytes += entryStat.size;
+    stats.fileCount += 1;
+  });
+
+  return stats;
+}
+
 
 // Unified list route for media and parcours
 // /list/:type where type is 'media' or 'parcours'
@@ -657,6 +702,7 @@ app.get('/list', (req, res) => {
       name: parcoursContent.info.name, 
       status: parcoursContent.info.status, 
       time: fs.statSync(parcoursFolder + file).mtime,
+      mediaBytes: getParcoursMediaStats(parcoursFileName).totalBytes,
       coords: parcoursContent.info.coords,
       cutoff: parcoursContent.info.cutoff !== undefined ? parcoursContent.info.cutoff : -1
     });
@@ -912,25 +958,23 @@ app.post('/edit/:file/json', requireAuth, express.json(), (req, res) => {
 
 // Media json file tree (one deep) with folders as keys and files as values list
 app.get('/mediaList/:parcours', (req, res) => {
-
-  // validExt : audio and video
-  const validExt = ['mp3', 'wav', 'ogg', 'm4a', 'mp4', 'webm', 'ogg', 'ogv', 'mov', 'avi', 'mkv', 'flv', 'wmv', 'm4v'];
-
   const mediaFolder = './media/'+req.params.parcours+'/';
 
   // Create folder if not exists
   if (!fs.existsSync(mediaFolder)) fs.mkdirSync(mediaFolder);
 
   const media = {'.':[]};
+  const mediaStats = getParcoursMediaStats(req.params.parcours);
   fs.readdirSync(mediaFolder).forEach(folder => {
     if (fs.lstatSync(mediaFolder + folder).isDirectory())
       media[folder] = fs.readdirSync(mediaFolder + folder)
           .filter(file => !fs.lstatSync(mediaFolder + folder + '/' + file).isDirectory())
-          .filter(file => validExt.includes(file.split('.').pop()));
+          .filter(file => isValidMediaFile(file));
     else 
-      if (validExt.includes(folder.split('.').pop()))
+      if (isValidMediaFile(folder))
         media['.'].push(folder);
   });
+  media.__stats = mediaStats;
   res.json(media);
 });  
 

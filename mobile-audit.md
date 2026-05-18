@@ -1,7 +1,8 @@
 # Mobile Audit Remediation Plan
 
 Original: 2026-04-27  
-Last updated: 2026-05-14 (Round 2 codebase review: resume `update()` gate P1.23, `init()` no-op listener removal P1.24, LOST↔afterplay/step-progression unification P1.25, GPS stop on walk end P1.26, duplicate `step_done` guard P1.27, page-exit cleanup gaps P1.28, recovery map on default-afterplay P1.29, defensive hardening cluster P2.12, telemetry session key P2.13, resume gate fast-path P2.14, structural refactors P3.6, server resilience C7)  
+Last updated: 2026-05-18 (Round 3 — field test 2026-05-15 on FRAPPAZ_V10-modif_monnot, 13 sessions across 9 devices: off-route popup title fix P1.30, voice-snapshot lifecycle telemetry P3.5b, Android Doze GPS blackout flagged P1.31, fresh-parcours any-step entry confirmed accepted)  
+Previous: 2026-05-14 (Round 2 codebase review: resume `update()` gate P1.23, `init()` no-op listener removal P1.24, LOST↔afterplay/step-progression unification P1.25, GPS stop on walk end P1.26, duplicate `step_done` guard P1.27, page-exit cleanup gaps P1.28, recovery map on default-afterplay P1.29, defensive hardening cluster P2.12, telemetry session key P2.13, resume gate fast-path P2.14, structural refactors P3.6, server resilience C7)  
 Previous: 2026-05-13 (LOST state machine P1.18, voice/afterplay fallback P1.19, RESUME cue P1.20, AUDIOFOCUS auto-retry P1.21, devmode tools page P1.22, paused() crash fix; Architecture Summary + telemetry list aligned with current code)  
 Scope: Cordova launcher + downloaded local webapp, GPS-triggered audio walk, locked-screen pocket usage, published parcours FLANERIE_ELYSEE  
 Plugin: [`cordova-background-geolocation-plugin`](https://github.com/Maigre/cordova-background-geolocation-plugin) v2.4.0 (Flanerie fork of HaylLtd v2.3.3)
@@ -695,6 +696,79 @@ Regression risk: **LOW** — pure refactor; smoke-test the full page flow (map r
 
 ---
 
+### Round 3 (Field test 2026-05-15 — codebase work 2026-05-18)
+
+Test setup: single tester walked FRAPPAZ_V10-modif_monnot with all 9 devices in a backpack simultaneously, headphones on one Xiaomi + one Samsung. 13 telemetry sessions captured. Identical GPS/motion conditions across devices, so divergence isolates device/OS-class behavior. See [memory: project-test-session-20260515](./.claude/projects/-home-mgr-Bakery-FlanerieAudioMap/memory/project_test_session_20260515.md) and [memory: project-test-findings-20260515](./.claude/projects/-home-mgr-Bakery-FlanerieAudioMap/memory/project_test_findings_20260515.md) for raw findings.
+
+#### P1.30 Off-route popup shows pre-start title ✅ DONE (2026-05-18) [SAFE-TODAY]
+
+Field test reproducer: a fresh parcours started directly at step 2 (because the sequential-fire gate at `spot.js:645` short-circuits when `currentStep == -2`, see P1.31b below). The walker then drifted off-route; the recovery map opened over a page where `#parcours-init` ("Rendez vous au point de départ pour commencer le parcours.") was never hidden. Confirmed on both `sgof` (Android) and `lwa3` (iOS) sessions.
+
+Root cause: `pages.js:1699` only hid `#parcours-init` when step **0** fired. Any other step firing first left the pre-start title showing behind the map.
+
+Fix: hide on visibility, not step index — `if ($('#parcours-init').is(':visible'))` swap to `#parcours-run` on the first step fire regardless of which step. One-line behavioural change.
+
+Files: `www/app/pages.js`
+
+Regression risk: **LOW** — degenerate case of the prior code; step 0 case still hits the same branch.
+
+#### P1.31 Android Doze GPS blackout on locked devices [RESEARCH-FIRST] DEFERRED
+
+Telemetry: Motorola moto g(7) power (Android 10, session `x47d`) had a **34-min GPS callback blackout** while locked in the backpack — GPS frozen at start coords from 17:18 to 17:52 despite continuous walking, then jumped straight to the end position on the next callback. TCL T433D (Android 14, session `f2n3`) showed the same 34-min gap but recovered at the very end, so the last 3 steps fired late. Battery optimization was disabled, autostart granted, motion sensor authorized — the existing checks all passed. Samsung A41/A50/A51 and Xiaomi Redmi Note 11 in the same backpack completed all 29 steps cleanly.
+
+This is downstream of `cordova-background-geolocation-plugin` v2.4.0 not keeping its wake-lock / location callbacks alive in Doze on these specific OEMs. The fork's `bgServiceStop` heuristic (P1.12) won't fire because the service stays nominally alive — only the callback delivery is throttled. The audio_loaderror / audio_play_timeout flood at the end of both sessions is downstream of the same gap (the player can't catch up when several queued audios fire at once).
+
+Not fixed in this round. Options to consider:
+1. Document "keep screen on" as an operational requirement for known-problematic OEMs (cheapest)
+2. Add an OEM-class detector and force `stationaryRadius=0` + tighter `distanceFilter` on those devices to keep the location service hot
+3. Reevaluate the BG geolocation plugin config (or switch to a different provider class — see P0.5 Fix 3 / Fix 4 backlog)
+4. Add a JS-side GPS-callback-gap watchdog that escalates to UI ("Téléphone en veille — déverrouillez pour continuer") after N seconds without a callback while motion is non-STILL
+
+Probably needs a dedicated field-test session on the specific moto g(7) power + TCL T433D devices before committing to a fix path.
+
+Files (when picked up): `www/app/assets/geoloc.js`, possibly `cordova-background-geolocation-plugin/`
+
+#### P1.31b Fresh-parcours any-step entry — ACCEPTED BEHAVIOR (2026-05-18)
+
+Field observation #8: during off-route / crash tests, the walker could enter the parcours at any step from anywhere. Root cause traced to `spot.js:645` — the sequential-fire gate guards with `PARCOURS.currentStep() + 1 >= 0`, which is false on the initial `-2` state, so a fresh parcours fires any optional step the walker enters first. Mandatory-step blockers still apply, but FRAPPAZ has only 4 mandatory steps out of 29.
+
+Per user decision (2026-05-18): keep as-is. The "pratique en test" property is wanted, and the live operational flow always starts visitors at the RDV point so the field-test scenario isn't reproducible on a real visit.
+
+No code change. Documented here so a future contributor doesn't "fix" it accidentally.
+
+#### P2.15 / P3.5b Voice-snapshot lifecycle telemetry ✅ DONE (2026-05-18) [SAFE-TODAY]
+
+Diagnostic instrumentation, not a fix — see P3.5 for the underlying mechanism.
+
+Field test 2026-05-15: iOS sessions (`soby`, `lwa3`, `n01i` — iPhone SE 3, iOS 26.4.2) **never captured `resume_seek_pos` on `session_resume`**, while every Android `session_resume` carried a clean position (jurr Xiaomi: 21.5s → 22.2s → 23.9s → 25.0s → 35.9s across 5 successive crashes in the same step). iOS sessions also emit **zero `app_visibility` events** while Android emits them on every background/foreground transition — the BackgroundGeolocation plugin doesn't surface those callbacks on iOS. Reading the JS code didn't surface a clear root cause (the `pause` / `visibilitychange` / `pagehide` paths all exist and converge on the same `store()` → `snapshotVoicePosition()` → `localStorage.setItem` chain), so the next test needs more signal.
+
+New events added (all logged via `TELEMETRY.log`):
+- `voice_snapshot` — every successful capture, with `step`, `pos`, `playstate`, `trigger`, `visibility`
+- `voice_snapshot_skipped` — bail with reason (`no_step` / `no_player` / `playstate`)
+- `parcours_store` — every `store()` invocation with a non-empty `trigger` (`interval` / `pause` / `visibilitychange` / `pagehide` / `startTracking`), the saved `resumeStepVoicePos`, and the visibility state
+- `parcours_restore` — on every `build()` with restored state, logs `stepIndex` / `stepDone` / `resumeStepVoicePos` / `lost` / `reloading`
+
+What the next field test will answer:
+1. Does Cordova `pause` fire on iOS at all? → look for `parcours_store` with `trigger: "pause"` in iOS sessions
+2. Does the 5s interval keep ticking? → recurring `trigger: "interval"` events
+3. Is the seek actually captured during playback? → `voice_snapshot` should show `pos > 0`
+4. Does localStorage survive the iOS kill? → `parcours_restore.resumeStepVoicePos` on `session_resume` should match the last pre-kill `parcours_store.resumeStepVoicePos`
+5. Is something resetting to 0? → cross-check `parcours_restore.resumeStepVoicePos` vs the next `step_audio_trigger.resume_seek_pos`
+
+The reproducer is the same iOS double-kill test the colleague ran (two crashes in the same step ~1 min apart). Re-running it after deployment will direct P3.5 Plan B (native `getCurrentPosition()` in GPS tasks) vs Plan C (native plugin save on `applicationDidEnterBackground`).
+
+Files: `www/app/assets/parcours.js`
+
+Regression risk: **LOW** — pure telemetry additions; one signature change (`store()` / `snapshotVoicePosition()` accept an optional `triggerReason`) with all call sites updated.
+
+#### Field-test items that turned out NOT to be bugs
+
+- **Sony Xperia X (F5121, Android 8.0.0) "alerts"** — caa0 session emits `gps_callback_gap` / `gps_sleep_suspect` / `gps_stale_callback` / `gps_heartbeat[_ok]` events unique to Sony. Sony still completed all 29 steps. These are the GPS keep-alive system correctly detecting a 15-18 s callback pause on the older Android 8 device and recovering via heartbeat ping. Working as designed; no code change. Worth a one-line explainer in the telemetry viewer rather than treating them as anomalies.
+- **iOS `audio_playerror` on `resume.mp3` / `youlost.mp3` / `afterplay.mp3`** — per user (2026-05-18) these three audio files have not been produced yet; the bundled placeholders are still the `_`-prefixed no-op shims (see Architecture Summary). The Cordova Media plugin errors immediately on play of a non-existent file. Expected and harmless until the files exist. The error serialization (`"[object Object]"`) is still worth tightening to surface the underlying Media error code if these ever become real failure modes.
+- **iPhone 8 / iOS 16.7 "liaison internet nécessaire" screen** (Bapt's device) — no telemetry session was ever created so the failure must be diagnosed off-device. Per user (2026-05-18): deprioritized. Likely an iOS-16-era `NSAppTransportSecurity` quirk; not a fleet issue.
+
+---
+
 ### C: Cordova container findings
 
 #### C1 Audiofocus plugin ✅ DONE (2026-05-05, follow-up 2026-05-06)
@@ -898,6 +972,17 @@ Regression risk: **LOW** — C7.1 is a pure try/catch wrap.
 
 ## Recommended Execution Sequence
 
+### Round 3 implementation (2026-05-18) — ✅ code complete, awaiting next field test
+
+Triggered by the 2026-05-15 FRAPPAZ_V10-modif_monnot field test (13 sessions, 9 devices). Two atomic changes, both safe to ship before the next outing because next outing is the only way to validate the iOS instrumentation.
+
+- **P1.30** off-route popup no longer shows "Rendez vous au point de départ" behind the recovery map when the parcours starts mid-route (one-line `pages.js` fix; SAFE-TODAY).
+- **P3.5b / P2.15** voice-snapshot lifecycle telemetry added (`voice_snapshot`, `voice_snapshot_skipped`, `parcours_store`, `parcours_restore`) to isolate why iOS `session_resume` always reads `resume_seek_pos: null`. No behavioural change; the next field test will pinpoint whether Plan B or Plan C of P3.5 is needed.
+
+Deferred from this round (Round 4 candidates):
+- **P1.31** Android Doze GPS blackout (Motorola moto g(7) power, TCL T433D) — needs a dedicated test session on those specific devices to choose between OEM-class workarounds, BG plugin reconfig, and an OS-level "phone asleep" UI escalation.
+- **iPhone 8 / iOS 16** internet-required screen — deprioritized per user, deferred until the device is back.
+
 ### Round 2 implementation (2026-05-14) — ✅ code complete, awaiting field validation
 
 All four batches implemented in one session. JS syntax-checked; no behavioural field test yet.
@@ -909,6 +994,8 @@ All four batches implemented in one session. JS syntax-checked; no behavioural f
 
 ### Awaiting field validation (shipped, build pending or untested)
 
+- **P1.30** off-route popup title (2026-05-18) — verify on a fresh-but-mid-route start that the recovery map no longer overlays the pre-start title
+- **P3.5b / P2.15** voice-snapshot lifecycle telemetry (2026-05-18) — re-run the iOS double-kill reproducer (two crashes in the same step ~1 min apart) and confirm the new event types surface in the report; the answer tells us whether Plan B or Plan C is the right next move
 - **C2** platform/plugin upgrades — configured, rebuild pending (Android SDK 36 + cordova-ios 8 + plugins)
 - **P1.11b** audio stack hardening (2026-05-13) — iOS Howler-fallback gate, AUDIOFOCUS=-1 gate, KEEP_AVAUDIOSESSION alignment, 15s watchdog, distinctive vibration. **Requires cordova-plugin-media reinstall** for the install variable to take effect (see C4).
 - **P1.12** battery-opt: broken settings button fix, OEM-banner detection fix, manufacturer-tailored copy, mid-walk OEM-kill heuristic
@@ -927,11 +1014,12 @@ All four batches implemented in one session. JS syntax-checked; no behavioural f
 
 ### Next implementation session (cannot republish this session)
 
+- **P1.31** Android Doze GPS blackout response — pick a fix path after the dedicated Motorola/TCL test session (operational doc, OEM-class detector + tighter location config, BG plugin reconfig, or JS-side stale-callback watchdog with UI escalation)
 - **C5 Power optimization plugin fork** — `isBackgroundRestricted` hard-block, `isPowerSaveMode` soft warn, standby bucket telemetry, modern OEM intent table, fix `RequestOptimizationsMenu` inverted conditional. Unlocks the hard-block path for manufacturer-tailored copy already shipped in P1.12. Est. half a day.
 - **C6 Audiofocus plugin fork extension** — iOS interruption-end without `ShouldResume`: emit `AUDIOFOCUS_GAIN_AVAILABLE`, add `document.resume` retry in JS. Closes the silent-pause-forever failure after Siri / alarm. Est. ~45 min.
 - **P0.5 Fix 1e** Android AlarmManager JS wakeup (only if WebView-suspended-despite-FG-service shows up in telemetry)
-- **P3.5 Plan B** native `getCurrentPosition()` during GPS tasks (only if `_positionSec` staleness shows up)
-- **P3.5 Plan C** native plugin save on `applicationDidEnterBackground` / `onPause` (only if Plan B insufficient)
+- **P3.5 Plan B** native `getCurrentPosition()` during GPS tasks (only if P3.5b telemetry shows `_positionSec` staleness on iOS)
+- **P3.5 Plan C** native plugin save on `applicationDidEnterBackground` / `onPause` (only if Plan B insufficient or iOS shows full localStorage write-loss on kill)
 
 ### Conditional / not yet decided
 
@@ -987,6 +1075,7 @@ All four batches implemented in one session. JS syntax-checked; no behavioural f
 - Step with deliberately broken voice file: voice fires `playerror` → step skips to afterplay automatically; `step_voice_failed` telemetry recorded (P1.19). Devmode shortcut: tools page "Voix HS sur étape courante"
 - Step with no `afterplay.src` (or broken file): voice ends → `DEFAULT_AFTERPLAY_PLAYER` loop plays from `images/afterplay.mp3`; `step_afterplay_fallback` telemetry recorded with `reason` (P1.19). Devmode shortcut: tools page "Afterplay générique sur étape courante"
 - Kill the app mid-step (active step playing voice), relaunch on parcours page: `RESUME_PLAYER` plays once; voice resumes from saved position (P1.20 + P3.5)
+- **iOS double-kill reproducer (P3.5b)** — kill the app once during step N (≥30 s in), wait for relaunch and audio resume, then kill again in the same step ~1 min later. Inspect telemetry for `parcours_store` (trigger `pause` vs `interval`), `voice_snapshot` (`pos > 0` during playback), and the `parcours_restore.resumeStepVoicePos` matching the most recent `parcours_store.resumeStepVoicePos`. Compare with the Android equivalent (Xiaomi or Samsung) where the chain is known to work
 - Android device known to drop `AUDIOFOCUS_GAIN` after a phone call: trigger a call, hang up, leave phone locked. After 60s the auto-retry should re-acquire focus and resume audio; `audiofocus_auto_retry` telemetry recorded (P1.21)
 
 ### LOST state
@@ -994,6 +1083,7 @@ All four batches implemented in one session. JS syntax-checked; no behavioural f
 - Force-kill the app while LOST, relaunch on parcours page: band reappears immediately via `applyLostUI()`; `recover` fires automatically if the walker came back into range while the app was dead
 - Verify `user_lost` / `user_recovered` telemetry pairs surface in the report with median recovery delta
 - Devmode shortcut: tools page "Forcer LOST" / "Sortir de LOST" exercise the same handlers without needing to walk away
+- **P1.30 fresh-but-mid-route start** — clear stored parcours state, walk directly into a non-zero step zone, then drift off-route. The recovery map title under it must read "Suivez la voix..." (or be empty), NOT "Rendez vous au point de départ pour commencer le parcours."
 
 ### Data and startup
 - Start route with no data link after media preload

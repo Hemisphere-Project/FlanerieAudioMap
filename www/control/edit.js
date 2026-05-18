@@ -38,6 +38,24 @@ function toastError(txt) {
     $('#errorToast').toast('show').find('.toast-body').text(txt)
 }
 
+function formatBytes(bytes) {
+    if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
+    const units = ['B', 'KB', 'MB', 'GB', 'TB']
+    let size = bytes
+    let unitIndex = 0
+
+    while (size >= 1024 && unitIndex < units.length - 1) {
+        size /= 1024
+        unitIndex += 1
+    }
+
+    const precision = size >= 100 || unitIndex === 0 ? 0 : 1
+    return size.toLocaleString('fr-FR', {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: precision
+    }) + ' ' + units[unitIndex]
+}
+
 // current file from url
 var parcoursID = window.location.pathname.split('/').pop()
 
@@ -178,6 +196,7 @@ function load() {
                 document.getElementById('pCoords').value = PARCOURS.info.coords
                 document.getElementById('pCoordsLink').href = 'https://www.openstreetmap.org/#map=' + PARCOURS.info.coords 
                 document.getElementById('pCutoff').value = PARCOURS.info.cutoff !== undefined ? PARCOURS.info.cutoff : -1
+                document.getElementById('pMediaSize').textContent = formatBytes(MEDIALIST?.__stats?.totalBytes || 0)
 
                 // Editable all
                 reloading = false

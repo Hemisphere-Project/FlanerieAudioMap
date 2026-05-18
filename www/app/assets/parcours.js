@@ -86,11 +86,27 @@ class Parcours extends EventEmitter {
         this._lostBeyondSince = null;
     }
 
-    snapshotVoicePosition() {
+    snapshotVoicePosition(triggerReason) {
         if (this.state.stepIndex < 0) return
         let step = this.find('steps', this.state.stepIndex)
-        if (!step || !step.player || step.player.playstate !== 'play') return
+        if (!step || !step.player) {
+            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('voice_snapshot_skipped', {
+                step: this.state.stepIndex, reason: !step ? 'no_step' : 'no_player', trigger: triggerReason,
+            })
+            return
+        }
+        let playstate = step.player.playstate
+        if (playstate !== 'play') {
+            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('voice_snapshot_skipped', {
+                step: this.state.stepIndex, reason: 'playstate', playstate, trigger: triggerReason,
+            })
+            return
+        }
         let pos = step.player.voice.seek ? step.player.voice.seek() : 0
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('voice_snapshot', {
+            step: this.state.stepIndex, pos, playstate, trigger: triggerReason,
+            visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
+        })
         if (pos > 0) this.state.resumeStepVoicePos = pos
     }
 
@@ -206,6 +222,13 @@ class Parcours extends EventEmitter {
         // Load State
         if (data.state) this.state = { ...this.state, ...data.state };
         this.state.medialoaded = this.state.mediaPackSize > 0 && this.state.mediaPackLoaded >= this.state.mediaPackSize;
+        if (data.state && typeof TELEMETRY !== 'undefined') TELEMETRY.log('parcours_restore', {
+            stepIndex: this.state.stepIndex,
+            stepDone: this.state.stepDone,
+            resumeStepVoicePos: this.state.resumeStepVoicePos,
+            lost: this.state.lost,
+            reloading,
+        })
 
         // Restore the current step's _done flag from persisted state. Step._done
         // is in-memory only; without this, after a reload lostTarget() and the
@@ -458,13 +481,21 @@ class Parcours extends EventEmitter {
     }
 
     // Store parcours in localStorage
-    store() {
+    store(triggerReason) {
         if (!this.valid()) {
             console.warn('Cannot store parcours: not valid yet');
             return;
         }
-        this.snapshotVoicePosition()
-        try { localStorage.setItem('currentparcours', JSON.stringify(this.export(true))); }
+        this.snapshotVoicePosition(triggerReason)
+        try {
+            localStorage.setItem('currentparcours', JSON.stringify(this.export(true)));
+            if (triggerReason && typeof TELEMETRY !== 'undefined') TELEMETRY.log('parcours_store', {
+                trigger: triggerReason,
+                stepIndex: this.state.stepIndex,
+                resumeStepVoicePos: this.state.resumeStepVoicePos,
+                visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
+            })
+        }
         catch (error) { console.error('Error storing parcours:', error); }
     }
 
@@ -686,18 +717,18 @@ class Parcours extends EventEmitter {
         this.state.geoMode = GEO.mode();
         // 5s periodic snapshot — tight enough that a crash loses at most a few
         // seconds of voice progress.
-        this._voicePosInterval = setInterval(() => this.store(), 5000)
+        this._voicePosInterval = setInterval(() => this.store('interval'), 5000)
         // Cordova app-background (real device).
-        this._pauseHandler = () => this.store()
+        this._pauseHandler = () => this.store('pause')
         document.addEventListener('pause', this._pauseHandler)
         // Page-hide / tab-hide — the only signal a desktop browser reload emits.
         // Without this, a reload never triggers a final store() and the resume
         // position is stuck at whatever the last 5s tick captured.
-        this._hideHandler = () => { if (document.visibilityState === 'hidden') this.store(); }
-        this._pageHideHandler = () => this.store()
+        this._hideHandler = () => { if (document.visibilityState === 'hidden') this.store('visibilitychange'); }
+        this._pageHideHandler = () => this.store('pagehide')
         document.addEventListener('visibilitychange', this._hideHandler)
         window.addEventListener('pagehide', this._pageHideHandler)
-        this.store();
+        this.store('startTracking');
     }
 
     // Stop tracking with GEO

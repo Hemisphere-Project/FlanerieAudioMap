@@ -1695,15 +1695,16 @@ PAGES['parcours'] = () => {
         if (!meta.refire) TELEMETRY.log('step_fire', {step: s._index, name: s._spot.name});
         updateStepsMarkers()
 
-        // First step
-        if (s._index == 0) {
+        // First fire of the run — swap the pre-start title for the run title.
+        // Keys on visibility, not step index: a fresh parcours can fire any
+        // optional step (the sequential-fire-gate short-circuits at currentStep
+        // == -2), so gating on `s._index == 0` left "Rendez vous au point de
+        // départ" stuck behind the recovery map whenever the walker entered
+        // mid-parcours.
+        if ($('#parcours-init').is(':visible')) {
             $('#parcours-init').hide()
             $('#parcours-run').show()
             TYPEWRITE('parcours-run')
-
-            // Show objects
-            // if (PARCOURS.spots.zones) 
-            //     PARCOURS.spots.zones.map(z => z.showMarker())
         }
 
         // Hide map back into audio-first immersion after the first step fires.
