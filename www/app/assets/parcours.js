@@ -22,7 +22,33 @@ class Parcours extends EventEmitter {
     constructor() {
         super()
         this.map = null;
+        // Telemetry events captured before TELEMETRY.start() has run (notably
+        // parcours_restore, which fires during the module-load restore() at the
+        // top of pages.js, ~1500 lines before the parcours-page TELEMETRY.start).
+        // Drained by flushPendingTelemetry() once the session is live.
+        this._pendingTelemetry = [];
         this.clear();
+    }
+
+    // Either log immediately if a session is active, or stash to be drained
+    // when one becomes active. Field test 2026-05-18: parcours_restore events
+    // were lost across all 22 sessions because build() runs at parse time and
+    // _log() is a no-op without a sessionId.
+    _logOrStash(type, data) {
+        if (typeof TELEMETRY === 'undefined') return;
+        if (typeof TELEMETRY.hasSession === 'function' && TELEMETRY.hasSession()) {
+            TELEMETRY.log(type, data);
+        } else {
+            this._pendingTelemetry.push({type: type, data: data});
+        }
+    }
+
+    flushPendingTelemetry() {
+        if (!this._pendingTelemetry.length) return;
+        if (typeof TELEMETRY === 'undefined') return;
+        var drained = this._pendingTelemetry;
+        this._pendingTelemetry = [];
+        drained.forEach(function(e) { TELEMETRY.log(e.type, e.data); });
     }
 
     add(spot) {
@@ -84,30 +110,67 @@ class Parcours extends EventEmitter {
         // Sustain timer is local-only — on relaunch the GPS picture is fresh
         // so we restart the accumulator rather than trusting a stale value.
         this._lostBeyondSince = null;
+        // Last (step|reason|playstate) key emitted as voice_snapshot_skipped —
+        // see _maybeLogSnapshotSkipped for the throttling rationale.
+        this._lastSnapshotSkipKey = null;
     }
 
     snapshotVoicePosition(triggerReason) {
         if (this.state.stepIndex < 0) return
         let step = this.find('steps', this.state.stepIndex)
         if (!step || !step.player) {
-            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('voice_snapshot_skipped', {
+            this._maybeLogSnapshotSkipped({
                 step: this.state.stepIndex, reason: !step ? 'no_step' : 'no_player', trigger: triggerReason,
             })
             return
         }
         let playstate = step.player.playstate
         if (playstate !== 'play') {
-            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('voice_snapshot_skipped', {
+            this._maybeLogSnapshotSkipped({
                 step: this.state.stepIndex, reason: 'playstate', playstate, trigger: triggerReason,
             })
             return
         }
-        let pos = step.player.voice.seek ? step.player.voice.seek() : 0
+        let voice = step.player.voice
+        let pos = voice && voice.seek ? voice.seek() : 0
+        // Cross-check whether the voice player is actually playing the audio.
+        // Field test 2026-05-18 surfaced sessions where playstate='play' but
+        // voice.seek() returned 0 for 5+ minutes (stuck Android cold-load).
+        // Recording the underlying state distinguishes "voice never started"
+        // (audio_playing=false, pos=0) from "voice just started" (audio_playing
+        // true, pos=0) from "voice running normally" (audio_playing=true, pos>0).
+        let actuallyPlaying = false
+        let loadState = 'unknown'
+        try {
+            if (voice) {
+                if (voice._player && typeof voice._player.playing === 'function') {
+                    actuallyPlaying = !!voice._player.playing()
+                }
+                if (typeof voice.loadState === 'function') loadState = voice.loadState()
+            }
+        } catch(e) {}
         if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('voice_snapshot', {
             step: this.state.stepIndex, pos, playstate, trigger: triggerReason,
             visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
+            audio_playing: actuallyPlaying,
+            load_state: loadState,
         })
         if (pos > 0) this.state.resumeStepVoicePos = pos
+        // Reset the skip dedup once we've actually logged a real snapshot —
+        // so the next genuine skip after a play run gets recorded once.
+        this._lastSnapshotSkipKey = null
+    }
+
+    // R4.9: throttle voice_snapshot_skipped to one event per (step, reason,
+    // playstate) transition. The 5s interval would otherwise produce hundreds
+    // of identical events during normal afterplay phases (4,264 across the
+    // 2026-05-18 test) without adding any signal beyond the first occurrence.
+    _maybeLogSnapshotSkipped(payload) {
+        if (typeof TELEMETRY === 'undefined') return
+        let key = (payload.step != null ? payload.step : '?') + '|' + payload.reason + '|' + (payload.playstate || '-')
+        if (this._lastSnapshotSkipKey === key) return
+        this._lastSnapshotSkipKey = key
+        TELEMETRY.log('voice_snapshot_skipped', payload)
     }
 
     currentStep(s = null) {
@@ -222,7 +285,7 @@ class Parcours extends EventEmitter {
         // Load State
         if (data.state) this.state = { ...this.state, ...data.state };
         this.state.medialoaded = this.state.mediaPackSize > 0 && this.state.mediaPackLoaded >= this.state.mediaPackSize;
-        if (data.state && typeof TELEMETRY !== 'undefined') TELEMETRY.log('parcours_restore', {
+        if (data.state) this._logOrStash('parcours_restore', {
             stepIndex: this.state.stepIndex,
             stepDone: this.state.stepDone,
             resumeStepVoicePos: this.state.resumeStepVoicePos,

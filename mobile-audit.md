@@ -1,7 +1,8 @@
 # Mobile Audit Remediation Plan
 
 Original: 2026-04-27  
-Last updated: 2026-05-18 (Round 3 — field test 2026-05-15 on FRAPPAZ_V10-modif_monnot, 13 sessions across 9 devices: off-route popup title fix P1.30, voice-snapshot lifecycle telemetry P3.5b, Android Doze GPS blackout flagged P1.31, fresh-parcours any-step entry confirmed accepted)  
+Last updated: 2026-05-18 (Round 4 telemetry batch — 22 sessions across 8 devices on FLANERIE_GIVORS_V7_CBR: parcours_restore lifecycle fix R4.2, audio_play_timeout truth check + retry R4.4, voice_snapshot truth-check fields R4.5, gps_callback_gap threshold tuning R4.6, step_afterplay_fallback / step_voice_failed step-name enrichment R4.7, user_recovered distance clamp R4.8, voice_snapshot_skipped throttling R4.9. Two field-test items deferred to dedicated outings: Android first-voice cold-load hang R4.1 and Android Doze GPS blackouts R4.3 / P1.31)  
+Previous: 2026-05-18 (Round 3 — field test 2026-05-15 on FRAPPAZ_V10-modif_monnot, 13 sessions across 9 devices: off-route popup title fix P1.30, voice-snapshot lifecycle telemetry P3.5b, Android Doze GPS blackout flagged P1.31, fresh-parcours any-step entry confirmed accepted, iPhone 8 first-install network sensitivity P1.32 — demoted to LOW after the 4G-tether vs domestic-WiFi finding)  
 Previous: 2026-05-14 (Round 2 codebase review: resume `update()` gate P1.23, `init()` no-op listener removal P1.24, LOST↔afterplay/step-progression unification P1.25, GPS stop on walk end P1.26, duplicate `step_done` guard P1.27, page-exit cleanup gaps P1.28, recovery map on default-afterplay P1.29, defensive hardening cluster P2.12, telemetry session key P2.13, resume gate fast-path P2.14, structural refactors P3.6, server resilience C7)  
 Previous: 2026-05-13 (LOST state machine P1.18, voice/afterplay fallback P1.19, RESUME cue P1.20, AUDIOFOCUS auto-retry P1.21, devmode tools page P1.22, paused() crash fix; Architecture Summary + telemetry list aligned with current code)  
 Scope: Cordova launcher + downloaded local webapp, GPS-triggered audio walk, locked-screen pocket usage, published parcours FLANERIE_ELYSEE  
@@ -761,11 +762,181 @@ Files: `www/app/assets/parcours.js`
 
 Regression risk: **LOW** — pure telemetry additions; one signature change (`store()` / `snapshotVoicePosition()` accept an optional `triggerReason`) with all call sites updated.
 
+#### P1.32 Launcher first-install network sensitivity on iPhone 8 / iOS 16.7 [LOW] DEFERRED
+
+Field observation (Bapt's iPhone 8, iOS 16.7.10, 2026-05-15): app installs OK, icon appears on home screen, but the first launch never reaches the webapp — launcher shows "Liaison internet nécessaire !" with apparently working WiFi. App not in iOS Settings either. Originally suspected to be a code regression.
+
+**Update 2026-05-18 (user):** the iPhone 8 boots fine on a regular domestic WiFi. It only stalls when the WiFi is a 4G personal-hotspot tether. So this is most likely **network-layer**, not a code bug — and consistent with iPhone 8 / iOS 16's known weaker behavior on NAT64 / IPv6-only 464XLAT links (carrier hotspots typically present an IPv6-only LAN with NAT64), or MTU/MSS clamping issues on tethered links. Severity demoted from RESEARCH-FIRST regression to LOW operational edge case — workaround is "use real WiFi for the first install on legacy iOS devices."
+
+The code analysis below is retained because it documents the launcher boot path and the diagnostic-improvement opportunities are still worth picking up even though the iPhone 8 lead is no longer the trigger.
+
+**Symptom mechanism (verified from code):**
+
+The text is in [FlanerieCordova/www/index.html:107](../FlanerieCordova/www/index.html), inside `#launcherOne`. Visible-flow:
+1. Splash dismisses
+2. WebView loads `launcher/index.html`; `#deviceready` shows "Démarrage en cours..." (initial CSS state)
+3. `deviceready` fires → `app_prepare()` adds `.ready` class → CSS swaps to "Liaison internet nécessaire !"
+4. Launcher calls `fetchRemote('/update/info')` against `https://flanerie.bloffique-theatre.com`
+5. `.finally(() => app_run())` is reached regardless of whether the fetch resolved or rejected
+6. `app_run()` tries to load the local app from `Library/files/appdata/` — on a fresh install this doesn't exist → throws → `.catch` sets `#launcherOne.style.display = 'block'`, revealing the already-set state
+
+So the symptom is correct: "first install on this phone, cannot reach server, cannot proceed." The "app not in Settings" complaint is a **consequence** of the same root cause: JS never gets far enough to trigger a permission request (location/motion/notifs), so iOS never creates a Settings entry.
+
+**Probable culprits, re-ordered after the WiFi-tether finding:**
+
+1. **NAT64 / IPv6-only 464XLAT on 4G hotspot tether** (HIGH, new lead). When tethering from a 4G iPhone (or many other carriers), the LAN is typically IPv6-only with NAT64 translating to IPv4. Older iOS versions handle 464XLAT less reliably than iOS 26, especially against IPv4-only origins that don't have an AAAA record. If `flanerie.bloffique-theatre.com` is IPv4-only, the iPhone 8 has to rely on iOS 16's DNS64 + NAT64 path, which can stall the first TLS handshake. Easy to confirm: `dig AAAA flanerie.bloffique-theatre.com` from any box — if no AAAA, this is plausible. Fix would be operational (add an AAAA / put it on a CDN with v6) or workaround ("use real WiFi for first install on legacy devices").
+2. **MTU/MSS clamping on the tether** (MEDIUM). Carrier tethers often advertise a smaller MTU than 1500. Large TLS records (cert chain) can fragment poorly. iOS 16's TCP stack is less forgiving than iOS 26.
+3. **`cordova-plugin-cors` XHR clobber × `cordova-ios` 8 incompatibility** (was HIGH, now MEDIUM-LOW). The plugin clobbers `window.XMLHttpRequest` with a custom `NSURLSession` bridge ([plugins/cordova-plugin-cors/plugin.xml](../FlanerieCordova/plugins/cordova-plugin-cors/plugin.xml)). v1.3.0 is unmaintained for years. The arraybuffer response path (`new Uint8Array(JSON.parse(response.response)).buffer`) is fragile to any change in how cordova-ios 8 serializes binary responses to JS. The cordova-ios 7→8 bump in [ab4c482 (2026-05-05)](../FlanerieCordova) lined up with the test window. Demoted because if this were the cause the iPhone 8 would also fail on regular WiFi.
+4. **Binary built with iOS 26 SDK, run on iOS 16** (was MEDIUM-HIGH, now LOW). [after_prepare_ios_patches.js](../FlanerieCordova/hooks/after_prepare_ios_patches.js) strips `#import <netinet6/in6.h>` from `Reachability.m` / `SM_AFHTTPSessionManager.m` / `SM_AFNetworkReachabilityManager.m` because it's private in the iOS 26 SDK. The fallback `<netinet/in.h>` may not provide every IPv6 type the runtime needs on iOS 16. Same demotion logic: if it were code, regular WiFi wouldn't recover.
+5. **TLS / ATS cert-chain edge case** (LOW). No `NSAppTransportSecurity` overrides — relying on iOS defaults. If `flanerie.bloffique-theatre.com`'s certificate chain has been renewed to an intermediate iOS 16's trust store doesn't ship, the TLS handshake fails silently. Verify from a Mac with `nscurl --ats-diagnostics https://flanerie.bloffique-theatre.com`. Same demotion logic.
+
+**Diagnostic + fix paths (independent — none are urgent since the tethering workaround exists):**
+
+- **C — Launcher-level telemetry beacon** before `app_run()` (POST or `navigator.sendBeacon`) carrying `cordova.platformId`, `device.version`, `device.model`, the last error captured, and the `app_check_version` outcome. **Worth doing regardless of P1.32's status** — without it, any launcher-side failure is silent because the webapp's TELEMETRY hasn't started yet. SAFE-TODAY, half-day. Promote to its own ticket when scheduling.
+- **A — Re-enable the launcher's commented `.catch`** ([launcher.js:67-70](../FlanerieCordova/www/launcher.js#L67-L70)) and write the error message + stack into the visible `#launcherOne` content. SAFE-TODAY, ~30 min. Useful in-field debugging aid that pairs well with C.
+- **B — Bypass the plugin clobber on the launcher's `fetchRemote`** by capturing a reference to `window.XMLHttpRequest` before `deviceready` (i.e. before cors's JS clobber runs) and using that, OR switching to native `fetch()`. Only worth running if a future telemetry beacon (C) actually shows an XHR-shaped error on iPhone-8-class devices. Otherwise leave it.
+- **D — Drop `cordova-plugin-cors` entirely** — now a candidate for the broader plugin-trim audit, not specifically for this issue. The webapp's `fetch()` would go through native WKWebView; `<access origin>` + `<allow-navigation>` already whitelist `flanerie.bloffique-theatre.com`. Worth checking whether anything in the webapp still depends on the XHR clobber before pulling. TEST-FIRST.
+- **E — Roll back `cordova-ios` to 7.1.1** — no longer warranted. Skip.
+- **Operational** — recommend "first install on legacy iOS = real WiFi, not 4G tether" in the loaner-phone setup doc. Costs nothing, eliminates the symptom for this device class.
+
+Files (when picked up): `FlanerieCordova/www/launcher.js`, `FlanerieCordova/www/apputils.js`, `FlanerieCordova/www/index.html`, possibly `FlanerieCordova/package.json`
+
 #### Field-test items that turned out NOT to be bugs
 
 - **Sony Xperia X (F5121, Android 8.0.0) "alerts"** — caa0 session emits `gps_callback_gap` / `gps_sleep_suspect` / `gps_stale_callback` / `gps_heartbeat[_ok]` events unique to Sony. Sony still completed all 29 steps. These are the GPS keep-alive system correctly detecting a 15-18 s callback pause on the older Android 8 device and recovering via heartbeat ping. Working as designed; no code change. Worth a one-line explainer in the telemetry viewer rather than treating them as anomalies.
 - **iOS `audio_playerror` on `resume.mp3` / `youlost.mp3` / `afterplay.mp3`** — per user (2026-05-18) these three audio files have not been produced yet; the bundled placeholders are still the `_`-prefixed no-op shims (see Architecture Summary). The Cordova Media plugin errors immediately on play of a non-existent file. Expected and harmless until the files exist. The error serialization (`"[object Object]"`) is still worth tightening to surface the underlying Media error code if these ever become real failure modes.
 - **iPhone 8 / iOS 16.7 "liaison internet nécessaire" screen** (Bapt's device) — no telemetry session was ever created so the failure must be diagnosed off-device. Per user (2026-05-18): deprioritized. Likely an iOS-16-era `NSAppTransportSecurity` quirk; not a fleet issue.
+
+---
+
+### Round 4 (Field test 2026-05-18 — codebase work 2026-05-18)
+
+Test setup: 22 telemetry sessions across 8 unique devices on FLANERIE_GIVORS_V7_CBR (plus two FRAPPAZ_V10 setup tests). Three waves: setup tests (14:45–15:05), main multi-device walk (16:48–17:42, ~10 devices simultaneously), late batch (18:48–19:30, 4 Samsungs). Device fleet: Xiaomi M2101K7AG (Redmi 9T) Android 11, Xiaomi 2201117TY (Redmi Note 11) Android 13, Samsung SM-A415F (A41) Android 12, Samsung SM-A515F (A51) Android 13, Motorola moto g(7) power Android 10, TCL T433D Android 14, Sony F5121 (Xperia X) Android 8, Apple iPhone 13 mini iOS 26.4.2.
+
+Two major field-test items deferred to dedicated outings (R4.1, R4.3 below). One quick-wins batch shipped immediately to unblock the next field test's diagnostics (R4.2 / R4.4 / R4.5 / R4.6 / R4.7 / R4.8 / R4.9).
+
+#### R4.1 Android first-voice cold-load hangs silently [RESEARCH-FIRST] DEFERRED
+
+Field test 2026-05-18: 5 Android sessions (Xiaomi `j4lx`, Samsung A515F `0m39`/`u6wy`/`vw44`, Samsung A415F `1y9f`/`427z`, Moto G7 `kzm4`) failed to start the first voice file of the walk (`GIVORS26_BLOC_01_parc_V8_CBR.mp3`). The 15s [`audio_play_timeout`](www/app/assets/player.js) watchdog fired but the previous version logged and walked away. Worst case (`j4lx`): step 0 fires at t=0.3s, watchdog fires at t=15.3s, then **325 seconds of pos=0.00 while playstate="play"** — PlayerStep state was lying; underlying Howl never actually started. Voice finally played at t=331.6 after a second `audio_play_requested` (most likely triggered by zone re-entry). Walker stood in step 0 for 5.5 minutes hearing silence.
+
+iPhone session (`ywav`) does NOT have this — step 0 plays at t=0.8 and pos advances normally. That is P3.4 NativeMediaPlayer migration paying off on iOS. Android still goes through Howler and inherits exactly the cold-load failure mode P3.4 fixed for iOS.
+
+**R4.4 (this round) makes the watchdog actually attempt recovery** (cross-check actual play state, retry stop+play once if genuinely stuck) — that may close the issue without further work, but needs field validation on the same Xiaomi/Samsung fleet. If R4.4 doesn't recover, options are:
+
+1. **Diagnostic first**: confirm whether the issue is "Howler stuck" (recoverable by stop+play, which R4.4 attempts) or "WebView audio context stuck" (needs a different fix). The new `audio_play_stuck_retry` / `audio_play_stuck` / `audio_play_timeout_self_healed` telemetry will tell us.
+2. **Likely fix**: route Android step voices through `cordova-plugin-media` too — extend `NativeMediaPlayer` to Android (the Media plugin supports MediaPlayer/ExoPlayer natively). Pattern identical to P3.4. Bigger change but matches the iOS resolution.
+3. **Fallback**: pre-warm step 0 voice file at parcours-page entry (proactive `.load()` before step_fire). Doesn't fix the underlying race but moves the cold-load to a quiet moment.
+4. **Operational mitigation today**: brief the team that BLOC_01 on Android may stay silent for ~30 s; if it does, asking the walker to step out and back into the zone usually triggers a successful retry.
+
+Files (when picked up): `www/app/assets/player.js`, possibly `cordova-plugin-media` (Android backend wrapper)
+
+#### R4.2 parcours_restore lifecycle + session_resume payload enrichment ✅ DONE (2026-05-18) [SAFE-TODAY]
+
+**Problem.** Field test 2026-05-18: ZERO `parcours_restore` events across all 22 sessions despite 24 `session_resume` events. The Round 3 / P3.5b diagnostic was non-functional. Root cause: [`PARCOURS.restore()`](www/app/pages.js#L28) runs at pages.js module-parse time → calls `build()` → tries to log `parcours_restore` at [parcours.js:225](www/app/assets/parcours.js#L225), but `TELEMETRY.start()` isn't called until the parcours page is entered at [pages.js:1797](www/app/pages.js#L1797). `_log()` silently no-ops when `sessionId` is null. Companion issue: `session_resume` payload only carried `parcoursId/parcoursName` — no `resume_seek_pos`, so the P3.5 iOS double-kill round-trip remained un-validatable from a single event.
+
+**Resolution.**
+- New `TELEMETRY.hasSession()` predicate so callers can tell whether a session exists yet.
+- New `Parcours._logOrStash()` + `flushPendingTelemetry()` — events emitted before TELEMETRY is live are stashed on the instance, then drained from [PAGES['parcours']](www/app/pages.js#L1797) right after `TELEMETRY.start()`.
+- `TELEMETRY.start(pId, pName, {extra: {…}})` — a new `options.extra` object is merged into the `session_start` / `session_resume` payload. The parcours page passes `resume_seek_pos`, `resume_step_index`, `resume_step_done`, `resume_lost`, `is_resume_branch`.
+
+After this lands, the iOS double-kill reproducer becomes meaningful: `parcours_restore` events will surface in every relaunched session, and `session_resume.resume_seek_pos` carries the restored position directly.
+
+Files: `www/app/assets/parcours.js`, `www/app/assets/telemetry.js`, `www/app/pages.js`
+
+Regression risk: **LOW** — additive telemetry plumbing; no behaviour change for the audio / GPS paths.
+
+#### R4.3 Android Doze GPS blackouts on Motorola / TCL — confirmed repro (P1.31) [RESEARCH-FIRST] DEFERRED
+
+Field test 2026-05-18 reproduced the May-15 pattern cleanly on the same two devices:
+- `kzm4` Motorola moto g(7) power Android 10: **626-second silent gap** between `user_lost` @t=397s and `step_done step 1` @t=1023s. No `user_recovered` ever fired — events just stop, then resume with a step_done burst. Plus 242 `gps_trigger_rejected`.
+- `xh1z` TCL T433D Android 14: **852-second event-stream gap** between `gps_quality_summary` @t=1704 and `session_resume` @t=2556 — 14 minutes of total silence. Session ends shortly after.
+
+Same OEM/OS classes; same Doze-throttling behaviour despite all onboarding gates passing. Options still match the P1.31 backlog, with one new lightweight option preferred for the first attempt:
+
+0. **JS-side gap watchdog with UI escalation** [NEW, cheapest] — when `gps_callback_gap` exceeds 60 s AND motion is non-STILL, paint a "Téléphone en veille — déverrouillez pour continuer" band (similar to the LOST band). Converts a silent 10-minute failure into a 60-second user-actionable signal. No native work. R4.6 (this round) already tunes the gap thresholds so this watchdog won't false-positive on normal keepalive cadences.
+1. **OEM-class detector** — force `stationaryRadius=0` + tighter `distanceFilter` at startup on Motorola/TCL devices. Half-day, no native code.
+2. **Plugin Fix 4 (FusedLocationProvider)** — the heavy option from the P0.5 backlog. Days of work. Only if (0)+(1) aren't enough.
+
+Recommend committing (0) before the next test session because it's almost-free instrumentation that becomes UX, and the same Motorola+TCL devices can validate it in-field.
+
+Files (when picked up): `www/app/assets/geoloc.js`, `www/app/pages.js`, possibly `cordova-background-geolocation-plugin/`
+
+#### R4.4 audio_play_timeout truth check + single-attempt recovery ✅ DONE (2026-05-18) [TEST-FIRST]
+
+**Problem.** Field test 2026-05-18: 19 `audio_play_timeout` events across the test, but ~half were false positives — audio loaded a few seconds *after* the watchdog fired (visible in subsequent `audio_load_ready` + `voice_snapshot` with `pos > 0`). The other half were genuine F1 stuck loads (see R4.1) and the watchdog did nothing about them, just logged and walked away.
+
+**Resolution.** In the 15 s watchdog callback of `PlayerSimple.play()`:
+
+1. **Cross-check** `this._player.playing()` + `this._player.seek()`. If either says audio is actually running, emit `audio_play_timeout_self_healed` instead, mark `_isActive = true`, emit a `play` event (so the parent step lifecycle catches up), and resolve the geo task. The play event was simply lost — no need to fight it.
+2. **Single retry** if genuinely stuck (`!playing && seek === 0`): emit `audio_play_stuck_retry`, stop the underlying player, re-call `this.play(seek, ...)` on the next tick. `_playStuckRetries` capped at 1 so we don't loop on a hopeless file. Resolves the previous geo task explicitly before the retry's `_claimGeoTask()` so no slot leaks.
+3. **Out of retries**: emit `audio_play_stuck` AND the legacy `audio_play_timeout` (with new `actually_playing`, `seek`, `retries` fields) so existing dashboards keep counting. Resolve the geo task as `play-timeout`.
+
+The `play` event handler now resets `_playStuckRetries = 0` on success.
+
+Telemetry: `audio_play_timeout_self_healed`, `audio_play_stuck_retry`, `audio_play_stuck`. Existing `audio_play_timeout` continues but only on the genuine-stuck-out-of-retries path, with truth fields attached.
+
+Files: `www/app/assets/player.js`
+
+Regression risk: **MEDIUM** — touches the play-watchdog path of every audio play call. Self-healed and retry are no-ops on healthy paths (watchdog never fires). Retry path may briefly cut audio if a slow load actually was about to complete; the cross-check before retry minimises this. Validate on the same Xiaomi/Samsung fleet that exhibited the F1 hang.
+
+Acceptance:
+- A successful play that just lost the `play` event surfaces as `audio_play_timeout_self_healed` with `actually_playing=true` and a non-zero seek.
+- Forced stuck load (e.g., dev-mode break) produces `audio_play_stuck_retry` then either a recovery or `audio_play_stuck`.
+- No `audio_play_timeout` events fire on healthy playback paths.
+
+#### R4.5 voice_snapshot truth-check fields ✅ DONE (2026-05-18) [SAFE-TODAY]
+
+**Problem.** Field test 2026-05-18: many sessions show stuck `voice_snapshot` runs with `pos = 0.00` and `playstate = play` for 100+ consecutive 5 s ticks. Could be either "voice never started" (R4.1 stuck cold-load) or "voice already played but PlayerStep state is misreported" — the existing payload couldn't distinguish.
+
+**Resolution.** [snapshotVoicePosition](www/app/assets/parcours.js#L118) now reads the underlying `voice._player.playing()` and `voice.loadState()` directly and includes them as `audio_playing` and `load_state` in the `voice_snapshot` payload. Three observable cases now disambiguate cleanly:
+
+| `pos` | `audio_playing` | `load_state` | Interpretation |
+|---|---|---|---|
+| `0` | `false` | `loading` | Genuinely stuck — R4.1 / Android cold-load failure |
+| `0` | `true` | `loaded` | Voice just started (first tick after play) |
+| `> 0` | `true` | `loaded` | Voice running normally |
+
+Files: `www/app/assets/parcours.js`
+
+Regression risk: **LOW** — pure telemetry enrichment.
+
+#### R4.6 gps_callback_gap threshold tuning ✅ DONE (2026-05-18) [SAFE-TODAY]
+
+**Problem.** iPhone session (`ywav`) emitted 55 `gps_callback_gap`, 20 `gps_sleep_suspect`, 45 `gps_stale_callback` at ~15 s intervals — the exact cadence of the P0.5 Fix 1b NSTimer keepalive. Walk completed cleanly; this is working-as-designed instrumentation noise. Same WAD pattern previously noted on Sony Xperia X (Android 8 Handler keepalive).
+
+**Resolution.** `GPS_CALLBACK_GAP_THRESHOLD` 8000 → 20000, `GPS_SLEEP_SUSPECT_THRESHOLD` 15000 → 30000. Both keepalive sources (iOS NSTimer / Android Handler) fire at 15 s; 20 s catches a genuine missed callback, 30 s requires two consecutive misses for a sleep suspect.
+
+Files: `www/app/assets/geoloc.js`
+
+Regression risk: **LOW** — strictly relaxes thresholds; existing real-blackout signals (R4.3 / P1.31, where gaps are minutes long) remain comfortably above the new cutoffs. Unblocks R4.3 option 0 (JS-side gap watchdog with UI escalation) by making the lower-level event clean.
+
+#### R4.7 step_afterplay_fallback / step_voice_failed step-name enrichment ✅ DONE (2026-05-18) [SAFE-TODAY]
+
+**Problem.** Field test 2026-05-18: 45 `step_afterplay_fallback` events all showed `step: null, step_name: null`. The events fired correctly on FLANERIE_GIVORS_V7_CBR steps 0, 2, 3, 16, 17 (content gap — afterplay files not yet produced for those blocs) but the telemetry couldn't say which steps without cross-referencing the timeline.
+
+**Resolution.** `PlayerStep` now accepts a back-ref to its owning `Step` (`new PlayerStep(this)`), stored as `this._step`. `step_afterplay_fallback` and `step_voice_failed` payloads now include `step` (`_step._index`) and `step_name` (`_step._spot.name`).
+
+Files: `www/app/assets/player.js`, `www/app/assets/spot.js`
+
+Regression risk: **LOW** — additive constructor arg with null default; existing callers unaffected.
+
+#### R4.8 user_recovered distance clamp ✅ DONE (2026-05-18) [SAFE-TODAY]
+
+`distanceToBorder` returns a signed distance (negative when inside the polygon). Field test 2026-05-18 showed `user_recovered` with `distance: -1` (iOS step 1) and `distance: -2` (Samsung A41 step 0) — cosmetic but unexpected. The `user_lost` side always reports positive (recovery target is outside the boundary). Clamped the recovered side to `Math.max(0, ...)` so the field always reads as "distance from boundary".
+
+Files: `www/app/pages.js`
+
+Regression risk: **LOW** — telemetry cosmetic.
+
+#### R4.9 voice_snapshot_skipped throttling ✅ DONE (2026-05-18) [SAFE-TODAY]
+
+**Problem.** Field test 2026-05-18: 4,264 `voice_snapshot_skipped` events across the test (863 on a single Sony session). The 5 s interval would fire one skip per tick during normal afterplay phases — same payload, no new signal after the first occurrence.
+
+**Resolution.** New `_maybeLogSnapshotSkipped()` keys on `(step | reason | playstate)`; only logs when the key changes. A real `voice_snapshot` log clears the dedup so the next genuine skip after a play run gets recorded once. Expected event-volume reduction: 10×–100× on typical walks.
+
+Files: `www/app/assets/parcours.js`
+
+Regression risk: **LOW** — telemetry cleanup only.
 
 ---
 
@@ -972,6 +1143,22 @@ Regression risk: **LOW** — C7.1 is a pure try/catch wrap.
 
 ## Recommended Execution Sequence
 
+### Round 4 implementation (2026-05-18) — ✅ code complete, awaiting next field test
+
+Quick-wins batch triggered by the 2026-05-18 FLANERIE_GIVORS_V7_CBR field test (22 sessions, 8 devices). All JS-only, all SAFE-TODAY (with R4.4 marked TEST-FIRST because it adds retry-on-stuck behaviour to the play watchdog).
+
+- **R4.2** parcours_restore lifecycle fix + session_resume payload enrichment — unblocks the Round 3 / P3.5b diagnostic that fired zero events across all 22 sessions because `build()` ran before `TELEMETRY.start()`.
+- **R4.4** audio_play_timeout truth check + single-attempt recovery — watchdog now cross-checks actual play state, emits `audio_play_timeout_self_healed` if audio was in fact playing, attempts one stop+play retry if genuinely stuck before logging `audio_play_stuck`. Targets the F1 / R4.1 Android first-voice cold-load hang; may close it without further work pending field validation.
+- **R4.5** voice_snapshot truth-check fields — `audio_playing` and `load_state` added so stuck-load runs can be distinguished from "just started" or "running normally" at a glance.
+- **R4.6** GPS gap thresholds raised above the 15 s native keepalive interval (`GPS_CALLBACK_GAP_THRESHOLD` 8000 → 20000, `GPS_SLEEP_SUSPECT_THRESHOLD` 15000 → 30000) — eliminates the iPhone/Sony false-positive noise without weakening detection of the real R4.3 / P1.31 minutes-long blackouts.
+- **R4.7** step_afterplay_fallback + step_voice_failed now carry `step` and `step_name` (PlayerStep gets a back-ref to its owning Step).
+- **R4.8** user_recovered distance clamped to ≥0 (signed distance was leaking negative when recovery happened inside a polygon).
+- **R4.9** voice_snapshot_skipped deduped on `(step, reason, playstate)` transitions — expected 10×–100× event-volume reduction.
+
+Deferred from this round (Round 5 candidates, both require dedicated field-test outings):
+- **R4.1** Android first-voice cold-load hang — primary focus of the next outing. R4.4 takes a first swing at it; validate on the same Xiaomi/Samsung/Moto fleet that reproduced the issue. The new `audio_play_stuck_retry` / `audio_play_stuck` / `audio_play_timeout_self_healed` telemetry will tell us whether R4.4 is enough or whether R4.1 option 2 (`NativeMediaPlayer` extension to Android) is required.
+- **R4.3 / P1.31** Doze GPS blackout on Motorola moto g(7) power + TCL T433D — repro confirmed cleanly this round. Recommend committing R4.3 option 0 (JS-side 60-second gap watchdog with "déverrouillez pour continuer" UI band) before the next session because it's nearly free now that R4.6 has quieted the underlying gap events.
+
 ### Round 3 implementation (2026-05-18) — ✅ code complete, awaiting next field test
 
 Triggered by the 2026-05-15 FRAPPAZ_V10-modif_monnot field test (13 sessions, 9 devices). Two atomic changes, both safe to ship before the next outing because next outing is the only way to validate the iOS instrumentation.
@@ -981,7 +1168,7 @@ Triggered by the 2026-05-15 FRAPPAZ_V10-modif_monnot field test (13 sessions, 9 
 
 Deferred from this round (Round 4 candidates):
 - **P1.31** Android Doze GPS blackout (Motorola moto g(7) power, TCL T433D) — needs a dedicated test session on those specific devices to choose between OEM-class workarounds, BG plugin reconfig, and an OS-level "phone asleep" UI escalation.
-- **iPhone 8 / iOS 16** internet-required screen — deprioritized per user, deferred until the device is back.
+- **P1.32** iPhone 8 / iOS 16.7 launcher first-install — demoted to LOW: the device boots fine on regular domestic WiFi, only stalls on a 4G personal-hotspot tether. Most likely NAT64 / IPv6-only path or MTU clamping on the tether, not a code regression. Operational workaround: "use real WiFi for the first install on legacy iOS." The launcher-telemetry-beacon idea (option C) is still independently valuable — see "Next implementation session".
 
 ### Round 2 implementation (2026-05-14) — ✅ code complete, awaiting field validation
 
@@ -994,8 +1181,15 @@ All four batches implemented in one session. JS syntax-checked; no behavioural f
 
 ### Awaiting field validation (shipped, build pending or untested)
 
+- **R4.2** parcours_restore lifecycle + session_resume payload (2026-05-18) — every relaunched session should now surface `parcours_restore`; `session_resume.resume_seek_pos` should carry the saved voice position directly
+- **R4.4** audio_play_timeout truth check + retry (2026-05-18) — on the Android fleet (Xiaomi M2101K7AG, Samsung A41/A51, Moto G7) that reproduced the F1 / R4.1 cold-load hang, look for `audio_play_timeout_self_healed` (false positives now), `audio_play_stuck_retry` then either recovery or `audio_play_stuck` (genuine stucks). If R4.4 closes the issue, no `audio_play_stuck` appears and BLOC_01 voice starts within seconds on all devices
+- **R4.5** voice_snapshot truth-check fields (2026-05-18) — every `voice_snapshot` should now carry `audio_playing` and `load_state`; cross-reference confirms whether long pos=0 runs are genuine stucks (R4.1) or normal afterplay phases
+- **R4.6** GPS gap threshold tuning (2026-05-18) — iPhone walks should no longer produce 50+ `gps_callback_gap` per session from the NSTimer keepalive; Sony Android 8 should similarly quieten
+- **R4.7** step_afterplay_fallback / step_voice_failed step-name fields (2026-05-18) — every event now carries `step` and `step_name`, not `null`
+- **R4.8** user_recovered distance clamp (2026-05-18) — no more negative distances
+- **R4.9** voice_snapshot_skipped throttling (2026-05-18) — event count per session should drop ~10×–100×
 - **P1.30** off-route popup title (2026-05-18) — verify on a fresh-but-mid-route start that the recovery map no longer overlays the pre-start title
-- **P3.5b / P2.15** voice-snapshot lifecycle telemetry (2026-05-18) — re-run the iOS double-kill reproducer (two crashes in the same step ~1 min apart) and confirm the new event types surface in the report; the answer tells us whether Plan B or Plan C is the right next move
+- **P3.5b / P2.15** voice-snapshot lifecycle telemetry (2026-05-18) — re-run the iOS double-kill reproducer (two crashes in the same step ~1 min apart). With R4.2 in place, expect `parcours_restore.resumeStepVoicePos` to match the most recent pre-kill `parcours_store.resumeStepVoicePos`; if it doesn't, P3.5 Plan B or C is the next move
 - **C2** platform/plugin upgrades — configured, rebuild pending (Android SDK 36 + cordova-ios 8 + plugins)
 - **P1.11b** audio stack hardening (2026-05-13) — iOS Howler-fallback gate, AUDIOFOCUS=-1 gate, KEEP_AVAUDIOSESSION alignment, 15s watchdog, distinctive vibration. **Requires cordova-plugin-media reinstall** for the install variable to take effect (see C4).
 - **P1.12** battery-opt: broken settings button fix, OEM-banner detection fix, manufacturer-tailored copy, mid-walk OEM-kill heuristic
@@ -1015,6 +1209,7 @@ All four batches implemented in one session. JS syntax-checked; no behavioural f
 ### Next implementation session (cannot republish this session)
 
 - **P1.31** Android Doze GPS blackout response — pick a fix path after the dedicated Motorola/TCL test session (operational doc, OEM-class detector + tighter location config, BG plugin reconfig, or JS-side stale-callback watchdog with UI escalation)
+- **Launcher-level telemetry beacon** (extracted from P1.32, option C) — send a `navigator.sendBeacon` from `launcher.js` right before `app_run()` with `cordova.platformId`, `device.version`, `device.model`, last fetchRemote/update error, and the `app_check_version` outcome. Pair with P1.32 option A (re-enable launcher's commented `.catch` so the error appears in the visible launcher state). Without this, any launcher-side failure is silent because the webapp's TELEMETRY hasn't started yet. SAFE-TODAY, half a day. Standalone value — picks up future launcher regressions on any device, not just iPhone 8.
 - **C5 Power optimization plugin fork** — `isBackgroundRestricted` hard-block, `isPowerSaveMode` soft warn, standby bucket telemetry, modern OEM intent table, fix `RequestOptimizationsMenu` inverted conditional. Unlocks the hard-block path for manufacturer-tailored copy already shipped in P1.12. Est. half a day.
 - **C6 Audiofocus plugin fork extension** — iOS interruption-end without `ShouldResume`: emit `AUDIOFOCUS_GAIN_AVAILABLE`, add `document.resume` retry in JS. Closes the silent-pause-forever failure after Siri / alarm. Est. ~45 min.
 - **P0.5 Fix 1e** Android AlarmManager JS wakeup (only if WebView-suspended-despite-FG-service shows up in telemetry)

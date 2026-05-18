@@ -439,11 +439,12 @@ class PlayerSimple extends EventEmitter
     constructor(loop = false, fadetime = 1500) {
         super()
         this._loop = loop
-        this._fadeTime = fadetime 
+        this._fadeTime = fadetime
         this._player = null
         this.isGoingOut = null
         this._playRequested = false
         this._playRequestedTimeout = null
+        this._playStuckRetries = 0
         this._isActive = false
         this._volume = 0
         this._media = null
@@ -593,6 +594,7 @@ class PlayerSimple extends EventEmitter
             }
             if (!this._playRequested) return  // loop iteration — already active, skip re-emit
             this._playRequested = false
+            this._playStuckRetries = 0
             this._isActive = true
             this.emit('play', this._player._src)
             console.log('PlayerSimple play:', this._player._src)
@@ -706,14 +708,99 @@ class PlayerSimple extends EventEmitter
         this._playRequested = true
         clearTimeout(this._playRequestedTimeout)
         this._playRequestedTimeout = setTimeout(() => {
-            if (this._playRequested) {
-                console.warn('PlayerSimple play timeout: resetting stuck _playRequested', this._player ? this._player._src : '?')
+            if (!this._playRequested) return
+            // 15s window covers slow filesystems / large MP3 loads. loaderror/playerror
+            // fire on real failures and resolve the geo task earlier; this is the
+            // last-resort safety net. Field test 2026-05-18: the previous version
+            // logged a timeout and walked away, even if audio was in fact playing
+            // — and made no attempt to recover when it was genuinely stuck (Android
+            // first-voice cold-load failed silently for 5+ minutes on multiple
+            // devices). Now: cross-check actual state, only escalate if truly stuck,
+            // retry once before giving up.
+            let actuallyPlaying = false
+            let seekPos = 0
+            try {
+                if (this._player) {
+                    if (typeof this._player.playing === 'function') actuallyPlaying = !!this._player.playing()
+                    if (typeof this._player.seek === 'function') {
+                        let s = this._player.seek()
+                        if (typeof s === 'number' && !isNaN(s) && s > 0) seekPos = s
+                    }
+                }
+            } catch(e) {}
+
+            // Play event lost but audio is in fact running. Don't fight it —
+            // emit the same audio_play_started the play handler would have, mark
+            // the player active, resolve the geo task. The watchdog did its job.
+            if (actuallyPlaying || seekPos > 0) {
+                console.warn('PlayerSimple play timeout: audio is in fact playing (seek=' + seekPos + ', playing=' + actuallyPlaying + '), recording as self-healed')
                 this._playRequested = false
-                // 15s window covers slow filesystems / large MP3 loads. loaderror/playerror fire
-                // on real failures and resolve the geo task earlier; this is the last-resort safety net.
-                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_play_timeout', {src: this._player ? this._player._src : null, ms: 15000})
-                this._resolveGeoTask('play-timeout')
+                this._playStuckRetries = 0
+                let wasActive = this._isActive
+                this._isActive = true
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_play_timeout_self_healed', {
+                    src: this._player ? this._player._src : null,
+                    seek: seekPos,
+                    actually_playing: actuallyPlaying,
+                    was_active: wasActive,
+                })
+                if (!wasActive) this.emit('play', this._player ? this._player._src : null)
+                this._resolveGeoTask('play-timeout-self-healed')
+                return
             }
+
+            // Genuinely stuck. Retry once: stop the underlying, re-issue play.
+            // On Android (Howler path) the first voice cold-load can hang the
+            // Howl in 'loading' forever; a stop+play forces a fresh attempt.
+            // Cap at 1 retry so we don't loop on a hopeless file.
+            const MAX_STUCK_RETRIES = 1
+            if (this._playStuckRetries < MAX_STUCK_RETRIES) {
+                this._playStuckRetries++
+                console.warn('PlayerSimple play timeout: stuck, retry attempt', this._playStuckRetries, this._player ? this._player._src : '?')
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_play_stuck_retry', {
+                    src: this._player ? this._player._src : null,
+                    attempt: this._playStuckRetries,
+                    ms: 15000,
+                })
+                this._playRequested = false
+                // Resolve the stuck task explicitly so the next play() can claim
+                // a fresh one without leaking the previous slot.
+                this._resolveGeoTask('play-retry-arm')
+                try {
+                    if (this._player && typeof this._player.stop === 'function') this._player.stop()
+                } catch(e) {}
+                // Let stop() unwind on the next tick before re-issuing play().
+                setTimeout(() => {
+                    if (!this._player) return
+                    try { this.play(seek, this._volume || 1.0) } catch(e) {
+                        console.warn('PlayerSimple retry play failed', e)
+                        this._resolveGeoTask('play-retry-error')
+                    }
+                }, 0)
+                return
+            }
+
+            // Out of retries — accept the failure, log, free the geo task.
+            console.warn('PlayerSimple play timeout: giving up after', this._playStuckRetries, 'retries', this._player ? this._player._src : '?')
+            this._playRequested = false
+            this._playStuckRetries = 0
+            if (typeof TELEMETRY !== 'undefined') {
+                TELEMETRY.log('audio_play_stuck', {
+                    src: this._player ? this._player._src : null,
+                    retries: MAX_STUCK_RETRIES,
+                    ms: 15000,
+                })
+                // Keep the legacy event name so existing dashboards/queries don't
+                // silently lose count. New fields tell the truth about state.
+                TELEMETRY.log('audio_play_timeout', {
+                    src: this._player ? this._player._src : null,
+                    ms: 15000,
+                    actually_playing: false,
+                    seek: 0,
+                    retries: MAX_STUCK_RETRIES,
+                })
+            }
+            this._resolveGeoTask('play-timeout')
         }, 15000)
         console.log('PlayerSimple play requested:', this._player._src, 'seek:', seek, 'volume:', volume)
         let bgTask = this._claimGeoTask({ seek: seek })
@@ -933,8 +1020,13 @@ class PlayerSimple extends EventEmitter
 
 class PlayerStep extends EventEmitter
 {
-    constructor() {
+    constructor(step = null) {
         super()
+        // Back-ref to the owning Step. Read-only here — used to tag telemetry
+        // with step_index / step_name (was logged as null/null before, which
+        // made it impossible to tell which step's afterplay was missing in the
+        // FLANERIE_GIVORS_V7_CBR field test).
+        this._step = step
         this.voice   = new PlayerSimple()
         this.afterplay = new PlayerSimple(true)
         this.state = 'off'       // play, afterplay, pause, stop, offlimit
@@ -958,6 +1050,8 @@ class PlayerStep extends EventEmitter
             if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('step_voice_failed', {
                 reason,
                 src: this.voice._src(),
+                step: this._step ? this._step._index : null,
+                step_name: this._step && this._step._spot ? this._step._spot.name : null,
             })
             this.startAfterplay()
         }
@@ -986,6 +1080,8 @@ class PlayerStep extends EventEmitter
             this._defaultAfterplayActive = true
             if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('step_afterplay_fallback', {
                 reason: this.afterplay._loadError ? 'loaderror' : 'no_src',
+                step: this._step ? this._step._index : null,
+                step_name: this._step && this._step._spot ? this._step._spot.name : null,
             })
             if (typeof DEFAULT_AFTERPLAY_PLAYER !== 'undefined' && DEFAULT_AFTERPLAY_PLAYER) {
                 // Stop first — the singleton is shared, so another step may

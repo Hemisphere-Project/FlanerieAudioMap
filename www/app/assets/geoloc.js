@@ -2,8 +2,15 @@ var CALIBRATION_TIME = 2
 var APP_VISIBILITY = 'foreground' // foreground, background
 var LAST_AUDIO_CONTEXT_STATE = null
 var AUDIO_CONTEXT_STATE_BOUND = false
-var GPS_CALLBACK_GAP_THRESHOLD = 8000
-var GPS_SLEEP_SUSPECT_THRESHOLD = 15000
+// Native keepalive (P0.5 Fix 1b: NSTimer on iOS, Handler on Android) re-delivers
+// last-known position every 15s. A gap of 15-20s between callbacks is the normal
+// keepalive cadence — not a problem. Thresholds raised above the keepalive
+// interval so the gap detector only fires on real interruptions.
+// Field test 2026-05-18: iPhone 13 mini emitted 55 false-positive gap events at
+// ~15s intervals matching the NSTimer cycle (Sony Xperia X had the same pattern
+// on Android 8). With these thresholds, those become quiet.
+var GPS_CALLBACK_GAP_THRESHOLD = 20000
+var GPS_SLEEP_SUSPECT_THRESHOLD = 30000
 var ACTIVE_GEO_BACKGROUND_TASK = null
 var IOS_GEO_BACKGROUND_TASK_TIMEOUT = 8000
 

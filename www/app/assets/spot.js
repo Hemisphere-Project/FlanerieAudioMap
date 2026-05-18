@@ -494,8 +494,9 @@ class Step extends Spot
         if (!('voice' in this._spot.media)) this._spot.media.voice = {src: '-', master: 1}
         if (!('afterplay' in this._spot.media)) this._spot.media.afterplay = {src: '-', master: 1}
 
-        // player
-        this.player = new PlayerStep()
+        // player (pass step back-ref so PlayerStep can tag its telemetry with
+        // step index/name without the parent having to wrap every event)
+        this.player = new PlayerStep(this)
         this._done = false
         this._active = false
         this._skipDoneLogged = false

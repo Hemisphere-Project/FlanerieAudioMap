@@ -1794,10 +1794,26 @@ PAGES['parcours'] = () => {
     // Key the telemetry session on the stable pID (the parcours file id), not
     // info.name — info carries only {name,status,coords,cutoff}, so file/id are
     // always undefined and sessions would otherwise group by human name.
+    // Pass restored state via options.extra so the session_start / session_resume
+    // event itself carries the resume position — field test 2026-05-18 showed the
+    // resume_seek_pos field was absent from every session_resume payload, which
+    // made the P3.5 iOS double-kill diagnostic impossible to evaluate.
     TELEMETRY.start(
         PARCOURS.pID || PARCOURS.info.name || '',
-        PARCOURS.info.name || PARCOURS.pID || ''
+        PARCOURS.info.name || PARCOURS.pID || '',
+        {
+            extra: {
+                resume_seek_pos: (PARCOURS.state && PARCOURS.state.resumeStepVoicePos) || 0,
+                resume_step_index: PARCOURS.state ? PARCOURS.state.stepIndex : -2,
+                resume_step_done: PARCOURS.state ? !!PARCOURS.state.stepDone : false,
+                resume_lost: PARCOURS.state ? !!PARCOURS.state.lost : false,
+                is_resume_branch: !!(PARCOURS.valid() && PARCOURS.currentStep() >= 0),
+            }
+        }
     );
+    // Drain any telemetry parcours stashed before the session existed
+    // (parcours_restore from build()@parse-time, etc.).
+    if (typeof PARCOURS.flushPendingTelemetry === 'function') PARCOURS.flushPendingTelemetry();
 
     // First RUN — paint step 0 as the single cyan target (matches updateStepsMarkers).
     if (PARCOURS.currentStep() < 0) {
@@ -2221,7 +2237,9 @@ $('#lost-band-dismiss').off().on('click', (e) => {
 PARCOURS.on('recover', (info) => {
     if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('user_recovered', {
         step: PARCOURS.currentStep(),
-        distance: info ? Math.round(info.distance) : null,
+        // distanceToBorder returns negative when inside the polygon — clamp to 0
+        // for the telemetry so the field always reads as "distance from boundary".
+        distance: info ? Math.max(0, Math.round(info.distance)) : null,
     });
     if (navigator.vibrate) navigator.vibrate([200, 80, 200]);
 

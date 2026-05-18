@@ -210,6 +210,13 @@ var TELEMETRY = (function() {
     function start(pId, pName, options) {
         try {
             options = options || {};
+            // options.extra (object): merged into the session_start/resume payload.
+            // Used by the parcours page to attach restored state (resume_seek_pos,
+            // step_index, lost) so a single session_resume event is enough to know
+            // whether the kill+relaunch round-trip preserved playback position.
+            // Field test 2026-05-18: without this, validating P3.5 on iOS required
+            // cross-referencing across multiple event types.
+            var extra = (options.extra && typeof options.extra === 'object') ? options.extra : null;
             var now = Date.now();
             var stableParcoursId = pId || pName || '';
             var stableParcoursName = pName || pId || '';
@@ -235,10 +242,12 @@ var TELEMETRY = (function() {
                 gpsSummary = _resetGpsSummary();
                 lastGpsTime = 0;
                 _writeStored();
-                _log(sessionHasFlushed ? 'session_resume' : 'session_start', {
+                var resumePayload = {
                     parcoursId: parcoursId,
                     parcoursName: parcoursName
-                });
+                };
+                if (extra) Object.keys(extra).forEach(function(k) { resumePayload[k] = extra[k]; });
+                _log(sessionHasFlushed ? 'session_resume' : 'session_start', resumePayload);
                 _startFlushTimer();
                 console.log('[TELEMETRY] Resumed session', sessionId);
                 return;
@@ -254,11 +263,19 @@ var TELEMETRY = (function() {
             gpsSummary = _resetGpsSummary();
             lastGpsTime = 0;
             _writeStored();
-            _log('session_start', {parcoursId: parcoursId, parcoursName: parcoursName});
+            var startPayload = {parcoursId: parcoursId, parcoursName: parcoursName};
+            if (extra) Object.keys(extra).forEach(function(k) { startPayload[k] = extra[k]; });
+            _log('session_start', startPayload);
             _startFlushTimer();
             console.log('[TELEMETRY] Started session', sessionId);
         } catch(e) { console.warn('[TELEMETRY] start error', e); }
     }
+
+    // True once start() has succeeded and a session id exists, false during the
+    // pre-init window (notably while parcours.restore() runs at pages.js parse
+    // time, before any page calls TELEMETRY.start). Callers in that window must
+    // stash and replay rather than _log() into the void.
+    function hasSession() { return !!sessionId; }
 
     function restart(reason, pId, pName) {
         try {
@@ -418,7 +435,8 @@ var TELEMETRY = (function() {
         log: log,
         gps: gps,
         flush: flush,
-        end: end
+        end: end,
+        hasSession: hasSession
     };
 
 })();
