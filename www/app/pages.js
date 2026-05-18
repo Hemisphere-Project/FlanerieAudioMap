@@ -105,6 +105,8 @@ function clearMotionCheck()
 
 PAGES_CLEANUP['parcours']           = () => {
     clearWakeupNotification();
+    clearTimeout(GPS_DOZE_TIMER);
+    GPS_DOZE_TIMER = null;
     GPSLOST_PLAYER.stop();
     LOST_PLAYER.stop();
     RESUME_PLAYER.stop();
@@ -1923,10 +1925,23 @@ $('body').off('click').on('click', (e) => {
             }
         }
     }
-    // On other pages: reload after 5 taps
+    // On other pages: full restart after 5 taps — same as the title-page bottom
+    // path but available from any screen. End the telemetry session explicitly so
+    // canResume finds no stored session on the next load and starts fresh rather
+    // than resuming the old one. Stop tracking + clear parcours state so the next
+    // run begins clean, not as a kill+relaunch resume.
     else {
         taps++;
-        if (taps == 5) location.reload();
+        if (taps == 5) {
+            console.log('RESTART (tap, page:', currentPage, ')');
+            tapLocked = true;
+            try { PARCOURS.stopTracking(); } catch(e) {}
+            try {
+                TELEMETRY.log('session_restart_click', {reason: 'restart_tap', page: currentPage});
+                TELEMETRY.end();
+            } catch(e) {}
+            setTimeout(() => { PARCOURS.clearStore(); alert('Application réinitialisée'); location.reload(); }, 300);
+        }
     }
     if (tapTimeout) clearTimeout(tapTimeout);
     tapTimeout = setTimeout(() => { taps = 0; tapZone = null; }, 300);
@@ -2258,6 +2273,21 @@ GEO.stateUpdateTimeout = 30 * 1000; // 30s on all platforms — must exceed the 
 // Default GPS-lost copy (reset whenever we re-show the overlay for a transient signal loss).
 const GPSLOST_TEXT_DEFAULT = 'Signal GPS perdu.<br/><br/>Déplacez-vous vers un espace dégagé.<br/>La progression reprend automatiquement dès le retour du signal.';
 
+// GPS Doze escalation (R4.3 option 0 — P1.31).
+// Motorola moto g(7) power and TCL T433D (field tests 2026-05-15 and 2026-05-18)
+// exhibited 10-14 min GPS callback blackouts while the native location service
+// stayed alive — the OS Doze layer stopped delivering callbacks to the foreground
+// service without killing it. stateUpdate('lost') fires after 30s of silence and
+// shows the generic "GPS perdu" overlay, but that copy is useless when the actual
+// fix is to wake the screen. After GPS_DOZE_ESCALATION_MS more seconds without
+// recovery, we overwrite the overlay with actionable Doze-specific copy.
+const GPS_DOZE_ESCALATION_MS = 30000;  // 30s after GPS-lost fires = ~60s from last real callback
+const GPSLOST_TEXT_DOZE =
+    '<b>Téléphone en veille</b><br/><br/>' +
+    'Votre téléphone a suspendu la localisation GPS en arrière-plan.<br/><br/>' +
+    'Déverrouillez l\'écran quelques secondes — la progression reprend automatiquement.';
+var GPS_DOZE_TIMER = null;
+
 // Returns a "Précision GPS: <Xm>" prefix when we have a recent fix, otherwise ''.
 // Helps the walker correlate "no signal" with the last known accuracy.
 function gpsPrecisionPrefix() {
@@ -2305,6 +2335,30 @@ function probeGpsHealth() {
         if (h.authorization !== null && h.authorization !== BackgroundGeolocation.AUTHORIZED) return showGpsRevokedOverlay('auth');
         if (h.bgLocationOk === false) return showGpsRevokedOverlay('auth');
     });
+}
+
+// Called GPS_DOZE_ESCALATION_MS after GPS-lost fires if signal hasn't recovered.
+// Overwrites the generic "Signal GPS perdu" copy with actionable Doze guidance.
+// Guards re-checked at call time so we don't fire on a now-stationary walker
+// or if a more specific overlay (revoked / battery-kill) already took over.
+function showDozeEscalation() {
+    GPS_DOZE_TIMER = null;
+    if (currentPage !== 'parcours') return;
+    if (GPSSIGNAL_OK) return;          // signal came back before timer fired
+    if (GPSREVOKED) return;            // revoked overlay already showing
+    if (GEO.motionIsStationary) return;// walker stopped — Doze is expected here
+    if (GEO.mode() === 'simulate') return;
+    var gapMs = (GEO.lastTimeUpdate != null) ? (Date.now() - GEO.lastTimeUpdate) : null;
+    console.warn('GPS Doze escalation: no callback for', gapMs, 'ms');
+    TELEMETRY.log('gps_doze_suspect', {
+        step: PARCOURS.currentStep(),
+        gap_ms: gapMs ? Math.round(gapMs) : null,
+        motion_stationary: !!GEO.motionIsStationary,
+        platform: typeof PLATFORM !== 'undefined' ? PLATFORM : 'unknown',
+        manufacturer: (typeof device !== 'undefined' && device) ? device.manufacturer : null,
+    });
+    if (navigator.vibrate) navigator.vibrate([300, 150, 300]);
+    setGpsLostOverlay({html: GPSLOST_TEXT_DOZE});
 }
 
 // Re-emitted by geoloc.js whenever the bg-geo plugin reports a non-AUTHORIZED status.
@@ -2374,8 +2428,16 @@ GEO.on('stateUpdate', (state) => {
         // Concurrent with the transient-loss overlay, probe system state.
         // If GPS was revoked in settings, the probe escalates to the revoked overlay.
         probeGpsHealth();
+        // Arm the Doze escalation: if signal doesn't return within
+        // GPS_DOZE_ESCALATION_MS, overwrite the generic copy with actionable
+        // "déverrouillez l'écran" guidance (R4.3 option 0).
+        clearTimeout(GPS_DOZE_TIMER);
+        GPS_DOZE_TIMER = setTimeout(showDozeEscalation, GPS_DOZE_ESCALATION_MS);
     }
     if (state == 'ok') {
+        // Signal recovered — cancel any pending Doze escalation.
+        clearTimeout(GPS_DOZE_TIMER);
+        GPS_DOZE_TIMER = null;
         GPSSIGNAL_OK = true;
         // Drop any stale sustain timestamp — a value from before the signal
         // dropped would let LOST fire on the very first recovered tick instead
