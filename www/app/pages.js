@@ -1925,23 +1925,10 @@ $('body').off('click').on('click', (e) => {
             }
         }
     }
-    // On other pages: full restart after 5 taps — same as the title-page bottom
-    // path but available from any screen. End the telemetry session explicitly so
-    // canResume finds no stored session on the next load and starts fresh rather
-    // than resuming the old one. Stop tracking + clear parcours state so the next
-    // run begins clean, not as a kill+relaunch resume.
+    // On other pages: reload after 5 taps
     else {
         taps++;
-        if (taps == 5) {
-            console.log('RESTART (tap, page:', currentPage, ')');
-            tapLocked = true;
-            try { PARCOURS.stopTracking(); } catch(e) {}
-            try {
-                TELEMETRY.log('session_restart_click', {reason: 'restart_tap', page: currentPage});
-                TELEMETRY.end();
-            } catch(e) {}
-            setTimeout(() => { PARCOURS.clearStore(); alert('Application réinitialisée'); location.reload(); }, 300);
-        }
+        if (taps == 5) location.reload();
     }
     if (tapTimeout) clearTimeout(tapTimeout);
     tapTimeout = setTimeout(() => { taps = 0; tapZone = null; }, 300);
