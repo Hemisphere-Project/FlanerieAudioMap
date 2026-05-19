@@ -1378,8 +1378,11 @@ PAGES['checkbatteryopt'] = () => {
 
     if (!plugin || PLATFORM !== 'android' || typeof device === 'undefined') return PAGE('rdv');
 
-    var apiLevel = parseInt(device.version.split('.')[0], 10);
-    if (apiLevel < 23) return PAGE('rdv');
+    // device.version is the Android OS version string ("13" for Android 13 = API 33).
+    // The minimum API for isIgnoringBatteryOptimizations is 23 = Android 6.0.
+    // Threshold must be compared against OS version (<6), NOT API level (<23).
+    var osVersion = parseInt(device.version.split('.')[0], 10);
+    if (osVersion < 6) return PAGE('rdv');
 
     clearBatteryOptCheck();
     var family = batteryKillFamily();
@@ -1456,7 +1459,7 @@ PAGES['checkbatteryopt'] = () => {
                 if (currentPage !== 'checkbatteryopt') return;
                 if (isRestricted) {
                     if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('background_restricted', {
-                        manufacturer: device.manufacturer, model: device.model, apiLevel,
+                        manufacturer: device.manufacturer, model: device.model, os_version: osVersion,
                     });
                     $('#checkbatteryopt-desc').hide();
                     $('#checkbatteryopt-restricted').show();
@@ -1479,7 +1482,7 @@ PAGES['checkbatteryopt'] = () => {
         if (currentPage !== 'checkbatteryopt') return;
         plugin.IsIgnoringBatteryOptimizations()
             .then(isIgnoring => {
-                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('battery_opt', { ignoring: isIgnoring, manufacturer: device.manufacturer, family, apiLevel });
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('battery_opt', { ignoring: isIgnoring, manufacturer: device.manufacturer, family, os_version: osVersion });
                 if (isIgnoring) { PAGE('rdv'); return; }
 
                 // First failure: trigger native dialog (ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
