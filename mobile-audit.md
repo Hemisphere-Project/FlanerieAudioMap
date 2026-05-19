@@ -1,7 +1,8 @@
 # Mobile Audit Remediation Plan
 
 Original: 2026-04-27  
-Last updated: 2026-05-19 (Round 5 — native plugin work targeting Samsung A41 BLOC_14→BLOC_15 OEM-kill repro from 2026-05-18 colleague report: audiofocus mediaPlayback foreground service keepalive R5.1, power-optimization `IsBackgroundRestricted()` detection R5.2 closing the urgent subset of C5, audiofocus iOS interruption-without-ShouldResume R5.3 closing the full C6 backlog. Requires plugin reinstall + APK rebuild + Play Store upgrade)  
+Last updated: 2026-05-19 (Round 6 — `checkbatteryopt` silent-bypass root-cause fix R6.1: `device.version` is OS version string not API level, `apiLevel < 23` was always true, page has bypassed itself on every device since introduction; `IsPowerSaveMode` hard block R6.2: power save now Gate 0 in `check()`, walker cannot proceed while battery saver is on; diagnostic telemetry R6.3: `session_diag` + `power_state_at_parcours` logged at parcours entry)
+Previous: 2026-05-19 (Round 5 — native plugin work targeting Samsung A41 BLOC_14→BLOC_15 OEM-kill repro from 2026-05-18 colleague report: audiofocus mediaPlayback foreground service keepalive R5.1, power-optimization `IsBackgroundRestricted()` detection R5.2 closing the urgent subset of C5, audiofocus iOS interruption-without-ShouldResume R5.3 closing the full C6 backlog. Requires plugin reinstall + APK rebuild + Play Store upgrade)  
 Previous: 2026-05-18 (Round 4 telemetry batch — 22 sessions across 8 devices on FLANERIE_GIVORS_V7_CBR: parcours_restore lifecycle fix R4.2, audio_play_timeout truth check + retry R4.4, voice_snapshot truth-check fields R4.5, gps_callback_gap threshold tuning R4.6, step_afterplay_fallback / step_voice_failed step-name enrichment R4.7, user_recovered distance clamp R4.8, voice_snapshot_skipped throttling R4.9. Two field-test items deferred to dedicated outings: Android first-voice cold-load hang R4.1 and Android Doze GPS blackouts R4.3 / P1.31)  
 Previous: 2026-05-18 (Round 3 — field test 2026-05-15 on FRAPPAZ_V10-modif_monnot, 13 sessions across 9 devices: off-route popup title fix P1.30, voice-snapshot lifecycle telemetry P3.5b, Android Doze GPS blackout flagged P1.31, fresh-parcours any-step entry confirmed accepted, iPhone 8 first-install network sensitivity P1.32 — demoted to LOW after the 4G-tether vs domestic-WiFi finding)  
 Previous: 2026-05-14 (Round 2 codebase review: resume `update()` gate P1.23, `init()` no-op listener removal P1.24, LOST↔afterplay/step-progression unification P1.25, GPS stop on walk end P1.26, duplicate `step_done` guard P1.27, page-exit cleanup gaps P1.28, recovery map on default-afterplay P1.29, defensive hardening cluster P2.12, telemetry session key P2.13, resume gate fast-path P2.14, structural refactors P3.6, server resilience C7)  
@@ -514,8 +515,10 @@ Events:
 - AudioFocus: `audiofocus_loss`, `audiofocus_gain`, `audiofocus_auto_retry` (attempt) (P1.21)
 - iOS: `ios_native_fallback`, iOS background task begin/end
 - Battery/OEM: `bg_stop_repeated`, `battery_kill_overlay`
+- Battery opt checks: `power_save_mode {on}`, `battery_opt {ignoring, manufacturer, family, os_version}`, `background_restricted {manufacturer, model, os_version}`
 - Permissions: `motion_authorized`, `motion_check`
 - Misc: `restart`, warm/cold trigger context, `checkaudio_fail`
+- Diagnostic (R6.3): `session_diag {apk_version, webapp_hash, platform, manufacturer, model, os_version, plugin_power_opt, plugin_power_IsPowerSaveMode, plugin_power_IsBackgroundRestricted, plugin_power_IsIgnoringBattOpt, plugin_audiofocus, plugin_bgloc, plugin_permissions, devmode}`, `power_state_at_parcours {power_save, bg_restricted, ignoring_batt_opt}`
 - Devmode tools (P1.22): `tools_force_lost`, `tools_clear_lost`, `tools_force_voice_fail`, `tools_force_afterplay_fallback`, `tools_show_resume_overlay`
 
 Per-session derived fields in `server.js` + `scripts/telemetry-report.js`: `lostRecoveryMedianMs`, `userLostCount`, `userRecoveredCount`, `voiceFailCount`, `afterplayFallbackCount` / `afterplayFallbackNoSrc` / `afterplayFallbackLoadError`, `audiofocusRetryCount`, `audiofocusRetryMaxAttempt`. CLI report adds `Lost`, `Rec~`, `VFail`, `ApFb` columns.
@@ -1038,7 +1041,7 @@ Catch-up batch landed alongside R5.1–R5.3 because the plugin rebuild + Play St
 
 **R5.4.a — `RequestOptimizationsMenu` inverted conditional fixed (closes C5 sub-item).** The Java method previously guarded the `startActivity(...)` call with `if (pm.isIgnoringBatteryOptimizations(packageName))` — so the settings menu only opened when the app was *already* whitelisted (i.e. when the user didn't need it). The action has no API restriction tied to whitelist state; guard removed. The FlanerieAudioMap JS layer (P1.12) had been routing around the bug via `GEO.showAppSettings()`; the workaround can be unwound at the JS level next time someone touches that code. Files: `cordova-plugin-power-optimization/src/android/PowerOptimization.java`.
 
-**R5.4.b — `IsPowerSaveMode()` soft-warning (closes C5 sub-item).** New plugin method wrapping `PowerManager.isPowerSaveMode()` (API 21+). Surfaced in `checkbatteryopt` as a non-blocking banner — "⚠️ L'économiseur de batterie est activé. La balade peut être moins fluide. Désactivez-le si possible avant de commencer." Probed every check tick so toggling the saver in Settings while on the page updates the banner. Telemetry: `power_save_mode {on: bool}`. The walker may genuinely need the battery saver for the day so this is *advisory*, not a hard block. Files: `cordova-plugin-power-optimization/src/android/PowerOptimization.java`, `cordova-plugin-power-optimization/www/PowerOptimization.js`, `www/app/pages.js` (`refreshPowerSaveBanner` helper), `www/app/app.html` (`#checkbatteryopt-powersave` banner).
+**R5.4.b — `IsPowerSaveMode()` detection (closes C5 sub-item).** New plugin method wrapping `PowerManager.isPowerSaveMode()` (API 21+). Initially shipped as a non-blocking advisory banner. Upgraded to a hard block in R6.2 — battery saver prevents GPS and audio continuity in the pocket, so the walker must disable it before proceeding. Files: `cordova-plugin-power-optimization/src/android/PowerOptimization.java`, `cordova-plugin-power-optimization/www/PowerOptimization.js`, `www/app/pages.js`, `www/app/app.html` (`#checkbatteryopt-powersave` banner). See R6.2 for the hard-block implementation.
 
 **R5.4.c — OEM intent table expansion (closes C5 sub-item).** Added 6 modern OEM activities to `Constants.java`: Samsung One UI 4+ (legacy `AppSleepListActivity` + newer `AppSleepingActivity`), OnePlus chain-launch, OPPO/Realme ColorOS startup, Vivo FunTouch BgStartUpManager, Honor MagicOS StartupNormalAppListActivity. `ProtectedApps.HaveProtectedAppIntent()` filters out intents that don't resolve on the current device, so it's safe to include all variants. Particularly relevant for the Samsung A41 fleet: the One UI 4+ Sleeping Apps page is now reachable via `ProtectedAppCheck(true)`. Files: `cordova-plugin-power-optimization/src/android/Constants.java`.
 
@@ -1064,6 +1067,120 @@ Both strings populate `NSLocationAlwaysUsageDescription`, `NSLocationWhenInUseUs
 #### R5.4 regression risk
 
 **LOW** across the board. R5.4.a removes a useless guard (the call path was already routed around). R5.4.b/c/d are additive. R5.4.e is a string change. R5.4.f is a single DOM element with a string. None of these alter the audio path, the GPS path, or the parcours lifecycle.
+
+---
+
+### Round 6
+
+Field test 2026-05-19 on Unihertz Jelly Star (Android 13). Battery saver was enabled before launch; walker reached the parcours with no warning. Telemetry confirmed `power_save: true` at parcours entry — the `checkbatteryopt` page had bypassed itself completely.
+
+#### R6.1 `checkbatteryopt` OS-version-vs-API-level bypass ✅ DONE (2026-05-19) [SAFE-TODAY]
+
+Root cause: `device.version` in Cordova returns the **Android OS version string** (e.g. `"13"` for Android 13 = API 33). The bypass guard was:
+
+```javascript
+var apiLevel = parseInt(device.version.split('.')[0], 10);
+if (apiLevel < 23) return PAGE('rdv');  // API 23 = Android 6.0
+```
+
+`"13" < 23` is always `true` — `checkbatteryopt` has silently skipped itself on every device since the page was introduced. None of the three battery-opt checks (power save, background restriction, Doze whitelist) have ever run in production.
+
+Fix: compare OS version against the OS version milestone (6.0 = Android 6.0 = API 23), not against the API level:
+
+```javascript
+// device.version is the Android OS version string ("13" for Android 13).
+// isIgnoringBatteryOptimizations() requires API 23 = Android 6.0.
+var osVersion = parseInt(device.version.split('.')[0], 10);
+if (osVersion < 6) return PAGE('rdv');
+```
+
+Variable renamed `apiLevel` → `osVersion` throughout `checkbatteryopt` to prevent recurrence. The same pattern in `geoloc.js` (`< 10` for `ACCESS_BACKGROUND_LOCATION`) and `checknotifications` (`< 13`) correctly compares OS version against OS version milestones — no change needed there.
+
+Files: `www/app/pages.js` (`PAGES['checkbatteryopt']` entry block).
+
+Regression risk: **NONE for the fix itself.** The page previously never ran; it now runs as intended. On Android < 6 (practically extinct) the bypass still fires.
+
+#### R6.2 `IsPowerSaveMode` hard block ✅ DONE (2026-05-19) [SAFE-TODAY]
+
+After R6.1 unblocked the page, `IsPowerSaveMode` was still only a soft advisory banner (R5.4.b). Battery saver cuts background CPU and network, which will kill GPS continuity and audio playback mid-walk. Changed to a hard block: walker cannot advance while battery saver is active.
+
+`check()` completely rewritten as a three-gate sequential pipeline:
+
+**Gate 0 — Power save mode (hard block).** Queried first, before everything else. If `IsPowerSaveMode()` returns true, the page shows the block copy and restarts the poll timer. No further checks are performed until battery saver is disabled. Page advances automatically within one poll tick (1.5 s) of the saver being turned off.
+
+```
+Gate 0: IsPowerSaveMode()
+  → true : show #checkbatteryopt-powersave, restart poll, STOP
+  → false: continue to Gate 1
+Gate 1: IsBackgroundRestricted()   (API 28+)
+  → true : show #checkbatteryopt-restricted, restart poll, STOP
+  → false: continue to runDozeCheck()
+runDozeCheck: IsIgnoringBatteryOptimizations()
+  → true : PAGE('rdv') — all clear
+  → false: show Doze dialog, poll
+```
+
+`refreshPowerSaveBanner()` helper removed; logic inlined in the sequential flow.
+
+Banner copy changed from advisory ("peut être moins fluide") to a hard-block instruction:
+> L'**économiseur de batterie** est activé sur votre téléphone. Flanerie sera interrompue en pleine balade.
+> Désactivez-le avant de commencer : **Paramètres → Batterie → Économiseur de batterie → Désactiver**.
+> La balade reprendra automatiquement.
+
+No skip button — the previous "Continuer quand même" path was rejected: battery saver kills the walk, so enforcement is mandatory.
+
+Telemetry: `power_save_mode {on: bool}` logged at each Gate 0 evaluation.
+
+Files: `www/app/pages.js` (`check()`, `runDozeCheck()` rewrite), `www/app/app.html` (`#checkbatteryopt-powersave` copy).
+
+Regression risk: **LOW.** `checkbatteryopt` was broken and inert before R6.1; any device that previously sailed through will now block if battery saver is on. That is the intended behaviour.
+
+#### R6.3 Diagnostic telemetry at parcours entry ✅ DONE (2026-05-19) [SAFE-TODAY]
+
+Two new events logged immediately after `PARCOURS.flushPendingTelemetry()` on `PAGES['parcours']` entry. Motivated by the diagnosis session where battery saver was on but no evidence appeared in telemetry because `checkbatteryopt` never emitted anything.
+
+**`session_diag`** — synchronous device/plugin inventory:
+
+| Field | Value |
+|---|---|
+| `apk_version` | `document.APPVERSION` (launcher version code) |
+| `webapp_hash` | `localStorage.APPHASH` (SHA256 of downloaded app zip) |
+| `platform` | `PLATFORM` (android/ios/browser) |
+| `manufacturer`, `model`, `os_version` | from `device.*` |
+| `plugin_power_opt` | bool — PowerOptimization plugin present |
+| `plugin_power_IsPowerSaveMode` | bool — method available |
+| `plugin_power_IsBackgroundRestricted` | bool — method available |
+| `plugin_power_IsIgnoringBattOpt` | bool — method available |
+| `plugin_audiofocus` | bool |
+| `plugin_bgloc` | bool — BackgroundGeolocation present |
+| `plugin_permissions` | bool |
+| `devmode` | bool |
+
+**`power_state_at_parcours`** — async power state snapshot (fires after `session_diag`, same tick):
+
+| Field | Value |
+|---|---|
+| `power_save` | `IsPowerSaveMode()` result or `"n/a"` / `"error:…"` |
+| `bg_restricted` | `IsBackgroundRestricted()` result |
+| `ignoring_batt_opt` | `IsIgnoringBatteryOptimizations()` result |
+
+Only logged on Android when the PowerOptimization plugin is present. `Promise.all` collects all three concurrently.
+
+These events land even when `checkbatteryopt` is bypassed (e.g. first-install fast path, or a future skip), giving a baseline snapshot for every session.
+
+Files: `www/app/pages.js` (`PAGES['parcours']` entry block, IIFE after `flushPendingTelemetry`).
+
+Regression risk: **NONE** — read-only probes, no side effects.
+
+#### R6 verification (2026-05-19)
+
+Confirmed on Unihertz Jelly Star (Android 13) after deploying R6.1 + R6.2 + R6.3:
+
+- `session_diag` event present in session, `plugin_power_IsPowerSaveMode: true`.
+- `power_state_at_parcours: {power_save: true, bg_restricted: false, ignoring_batt_opt: false}` confirmed plugin reads correctly.
+- With battery saver ON at launch: `#checkbatteryopt-powersave` block banner visible; walk cannot proceed.
+- Disabling battery saver in Settings: page auto-advanced within ~1.5 s.
+- Doze whitelist dialog appeared and walk proceeded normally after whitelisting.
 
 ---
 
