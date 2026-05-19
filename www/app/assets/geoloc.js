@@ -27,6 +27,31 @@ function _geoTaskTelemetry(type, data) {
     if (typeof TELEMETRY !== 'undefined') TELEMETRY.log(type, data)
 }
 
+function getBackgroundGeolocationPlugin() {
+    if (typeof BackgroundGeolocation !== 'undefined' && BackgroundGeolocation) {
+        return BackgroundGeolocation
+    }
+
+    if (typeof window !== 'undefined' && window.BackgroundGeolocation) {
+        return window.BackgroundGeolocation
+    }
+
+    if (typeof cordova !== 'undefined' && typeof cordova.require === 'function') {
+        try {
+            let plugin = cordova.require('cordova-background-geolocation-plugin.BackgroundGeolocation')
+            if (plugin && typeof window !== 'undefined' && !window.BackgroundGeolocation) {
+                window.BackgroundGeolocation = plugin
+            }
+            return plugin || null
+        }
+        catch (e) {
+            return null
+        }
+    }
+
+    return null
+}
+
 function _finishGeoBackgroundTask(task, status, extra) {
     if (!task || task.ended) return
 
@@ -46,8 +71,9 @@ function _finishGeoBackgroundTask(task, status, extra) {
     _geoTaskTelemetry('ios_bg_task_end', Object.assign({ status: status }, payload))
 
     try {
-        if (typeof BackgroundGeolocation !== 'undefined' && BackgroundGeolocation && typeof BackgroundGeolocation.endTask === 'function') {
-            BackgroundGeolocation.endTask(task.taskKey)
+        let bgGeo = getBackgroundGeolocationPlugin()
+        if (bgGeo && typeof bgGeo.endTask === 'function') {
+            bgGeo.endTask(task.taskKey)
         }
     }
     catch (e) {
@@ -306,12 +332,12 @@ class GeoLoc extends EventEmitter {
                 this.lastTimeUpdate !== null &&
                 (Date.now() - this.lastTimeUpdate) > this.stateUpdateTimeout * 0.6 &&
                 this.runMode === 'gps' &&
-                typeof BackgroundGeolocation !== 'undefined') {
+                getBackgroundGeolocationPlugin()) {
                 this._heartbeat();
             }
 
             // Reactive heartbeat: already lost — try to recover
-            if (this.stateUpdate === 'lost' && this.runMode === 'gps' && typeof BackgroundGeolocation !== 'undefined') {
+            if (this.stateUpdate === 'lost' && this.runMode === 'gps' && getBackgroundGeolocationPlugin()) {
                 this._heartbeat();
             }
         }, 1000);
@@ -332,7 +358,13 @@ class GeoLoc extends EventEmitter {
         console.log('[HEARTBEAT] GPS lost — requesting current location');
         if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_heartbeat', {visibility: APP_VISIBILITY});
 
-        BackgroundGeolocation.getCurrentLocation(
+        let bgGeo = getBackgroundGeolocationPlugin()
+        if (!bgGeo) {
+            this._heartbeatInProgress = false;
+            return;
+        }
+
+        bgGeo.getCurrentLocation(
             (location) => {
                 console.log('[HEARTBEAT] Got location:', location.latitude, location.longitude, 'acc:', location.accuracy);
                 var position = {
@@ -622,39 +654,42 @@ class GeoLoc extends EventEmitter {
 
     // showSystemSettings()
     showLocationSettings() {
-        if (typeof BackgroundGeolocation === 'undefined') {
+        let bgGeo = getBackgroundGeolocationPlugin()
+        if (!bgGeo) {
             console.warn('BackgroundGeolocation is not defined');
             return;
         }
         if (cordova.platformId == 'android') {
-            BackgroundGeolocation.showLocationSettings();
+            bgGeo.showLocationSettings();
         }
         else if (cordova.platformId == 'ios') {
             // Apple removed support for `prefs:` deep-links to system pages, but
             // openURL: UIApplicationOpenSettingsURLString still opens the app's own
             // Settings page (Réglages > Flanerie) where Position can be toggled.
-            BackgroundGeolocation.showAppSettings();
+            bgGeo.showAppSettings();
         }
     }
 
     // showAppSettings()
     showAppSettings() {
-        if (typeof BackgroundGeolocation === 'undefined') {
+        let bgGeo = getBackgroundGeolocationPlugin()
+        if (!bgGeo) {
             console.warn('BackgroundGeolocation is not defined');
             return;
         }
-        BackgroundGeolocation.showAppSettings();
+        bgGeo.showAppSettings();
     }
 
     // Check if geoloc is enabled
     checkEnabled() {
         return new Promise((resolve, reject) => {
-            if (typeof BackgroundGeolocation === 'undefined') {
+            let bgGeo = getBackgroundGeolocationPlugin()
+            if (!bgGeo) {
                 console.warn('BackgroundGeolocation is not defined');
                 resolve('BackgroundGeolocation is not defined');
                 return;
             }
-            BackgroundGeolocation.checkStatus(function(status) {
+            bgGeo.checkStatus(function(status) {
                 if (status.locationServicesEnabled) resolve();
                 else reject('gps-no-location');
             });
@@ -686,8 +721,9 @@ class GeoLoc extends EventEmitter {
     checkHealth() {
         return new Promise((resolve) => {
             let out = { servicesEnabled: null, authorization: null, bgLocationOk: null }
-            if (typeof BackgroundGeolocation === 'undefined') return resolve(out)
-            BackgroundGeolocation.checkStatus((status) => {
+            let bgGeo = getBackgroundGeolocationPlugin()
+            if (!bgGeo) return resolve(out)
+            bgGeo.checkStatus((status) => {
                 out.servicesEnabled = !!status.locationServicesEnabled
                 out.authorization = status.authorization
                 this.checkBackgroundLocationAndroid()
@@ -700,18 +736,19 @@ class GeoLoc extends EventEmitter {
     // Check auth
     checkAuthorized() {
         return new Promise((resolve, reject) => {
-            if (typeof BackgroundGeolocation === 'undefined') {
+            let bgGeo = getBackgroundGeolocationPlugin()
+            if (!bgGeo) {
                 console.warn('BackgroundGeolocation is not defined');
                 resolve();
                 return;
             }
-            BackgroundGeolocation.checkStatus(function(status) {
-                if (status.authorization == BackgroundGeolocation.AUTHORIZED) {
+            bgGeo.checkStatus(function(status) {
+                if (status.authorization == bgGeo.AUTHORIZED) {
                     console.log('[INFO] BackgroundGeolocation auth is OK: ' + status.authorization);
                     return resolve()
                 }
 
-                if (status.authorization == BackgroundGeolocation.AUTHORIZED_FOREGROUND) {
+                if (status.authorization == bgGeo.AUTHORIZED_FOREGROUND) {
                     console.warn('[WARNING] BackgroundGeolocation auth is partial: ' + status.authorization);
                     return reject('gps-error-authorization')
                 }
@@ -729,7 +766,7 @@ class GeoLoc extends EventEmitter {
             this.init('gps');
             
             // test if BackgroundGeolocation is available
-            if (typeof BackgroundGeolocation !== 'undefined') {
+            if (getBackgroundGeolocationPlugin()) {
                 CALIBRATION_TIME = 1;
                 return backgroundGeoloc(this._callbackPosition.bind(this), this._callbackError.bind(this))
                         .then(() => { resolve(); })
@@ -771,9 +808,10 @@ class GeoLoc extends EventEmitter {
             navigator.geolocation.clearWatch(this.watchId);
             this.watchId = null;
         }
-        if (typeof BackgroundGeolocation !== 'undefined' && BackgroundGeolocation) {
+        let bgGeo = getBackgroundGeolocationPlugin()
+        if (bgGeo) {
             backgroundGeolocIntentionalStop = true;
-            try { BackgroundGeolocation.stop(); }
+            try { bgGeo.stop(); }
             catch (e) { console.warn('[GEO] stopGeoloc failed:', e); }
         }
         this.runMode = 'off';
@@ -806,21 +844,23 @@ var backgroundGeolocResolve = null;
 var backgroundGeolocReject = null;
 var backgroundGeolocIntentionalStop = false;
 
-if (typeof BackgroundGeolocation !== 'undefined') {
+let initialBackgroundGeolocation = getBackgroundGeolocationPlugin()
+if (initialBackgroundGeolocation) {
     console.log('[INFO] BackgroundGeolocation is available');
-    BackgroundGeolocation.removeAllListeners();
-    BackgroundGeolocation.checkStatus(function(status) {
+    initialBackgroundGeolocation.removeAllListeners();
+    initialBackgroundGeolocation.checkStatus(function(status) {
         if (status.isRunning) {
             console.log('[INFO] BackgroundGeolocation service is running, stop it');
             backgroundGeolocIntentionalStop = true;
-            BackgroundGeolocation.stop();
+            initialBackgroundGeolocation.stop();
         }
     });
 }
 
 function prepareBackgroundGeoloc(positionCallback, errorCallback) 
 {
-    if (typeof BackgroundGeolocation === 'undefined') {
+    let bgGeo = getBackgroundGeolocationPlugin()
+    if (!bgGeo) {
         console.error('BackgroundGeolocation is not defined');
         return false;
     }
@@ -832,9 +872,9 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
     else {
         console.log('[INFO] Setting up BackgroundGeolocation');
     
-        BackgroundGeolocation.configure({
-            locationProvider: BackgroundGeolocation.RAW_PROVIDER,
-            desiredAccuracy: BackgroundGeolocation.HIGH_ACCURACY,
+        bgGeo.configure({
+            locationProvider: bgGeo.RAW_PROVIDER,
+            desiredAccuracy: bgGeo.HIGH_ACCURACY,
             stationaryRadius: 0.01,
             distanceFilter: 0,
             pauseLocationUpdates: false,
@@ -851,15 +891,15 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
         });
     }
 
-    BackgroundGeolocation.removeAllListeners();
+    bgGeo.removeAllListeners();
 
-    BackgroundGeolocation.on('location', function(location) {
+    bgGeo.on('location', function(location) {
         console.log('[INFO] BackgroundGeolocation location: ', JSON.stringify(location));
 
         // handle your locations here
         // to perform long running operation on iOS
         // you need to create background task
-        BackgroundGeolocation.startTask(function(taskKey) {
+        bgGeo.startTask(function(taskKey) {
             var position = {
                 simulate: false,
                 timestamp: location.time,
@@ -880,13 +920,13 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
         });
     });
 
-    BackgroundGeolocation.on('stationary', function(location) {
+    bgGeo.on('stationary', function(location) {
         // Stationary is informational — the plugin keeps running with RAW_PROVIDER + stopDetection:false.
         // We emit the position so GPS-lost detection stays satisfied, without stop/start churn.
         console.log('[INFO] BackgroundGeolocation stationary location: ', JSON.stringify(location));
         if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('bg_geo_stationary', {lat: location.latitude, lng: location.longitude, acc: location.accuracy});
 
-        BackgroundGeolocation.startTask(function(taskKey) {
+        bgGeo.startTask(function(taskKey) {
             var position = {
                 simulate: false,
                 timestamp: location.time,
@@ -907,7 +947,7 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
         });
     });
 
-    BackgroundGeolocation.on('stop', function() {
+    bgGeo.on('stop', function() {
         console.log('[INFO] BackgroundGeolocation service has been stopped');
         if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('bg_geo_stop', {intentional: backgroundGeolocIntentionalStop});
 
@@ -917,13 +957,13 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
         // Only restart if the stop was not intentional (e.g. OS killed the service)
         if (!backgroundGeolocIntentionalStop) {
             console.log('[INFO] Unexpected stop — restarting BackgroundGeolocation');
-            BackgroundGeolocation.start();
+            bgGeo.start();
         }
         backgroundGeolocIntentionalStop = false;
     });
 
 
-    BackgroundGeolocation.on('error', function(error) {
+    bgGeo.on('error', function(error) {
         console.log('[ERROR] BackgroundGeolocation error:', error.code, error.message);
         if (backgroundGeolocReject) {
             backgroundGeolocReject(error);
@@ -934,12 +974,12 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
         }
     });
 
-    BackgroundGeolocation.on('start', function() {
+    bgGeo.on('start', function() {
         console.log('[INFO] BackgroundGeolocation service has been started');
         if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('bg_geo_start', {});
 
-        BackgroundGeolocation.checkStatus(function(status) {
-            if (status.authorization !== BackgroundGeolocation.AUTHORIZED) {
+        bgGeo.checkStatus(function(status) {
+            if (status.authorization !== bgGeo.AUTHORIZED) {
                 setTimeout(function() {
                     if (backgroundGeolocReject) {
                         backgroundGeolocReject('gps-error-authorization');
@@ -957,18 +997,18 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
         })
     });
 
-    BackgroundGeolocation.on('authorization', function(status) {
+    bgGeo.on('authorization', function(status) {
         console.log('[INFO] BackgroundGeolocation authorization status: ' + status);
         if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('bg_geo_authorization', {status: status});
 
-        if (status !== BackgroundGeolocation.AUTHORIZED) {
+        if (status !== bgGeo.AUTHORIZED) {
             console.warn('[WARN] BackgroundGeolocation not fully authorized, status:', status);
             // Emit non-blocking event — the UI layer (pages.js) can respond without freezing GPS
             if (typeof GEO !== 'undefined') GEO.emit('authorizationChanged', status);
         }
     });
 
-    BackgroundGeolocation.on('background', function() {
+    bgGeo.on('background', function() {
         console.log('[INFO] App is in background');
         APP_VISIBILITY = 'background';
         if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('app_visibility', {state: 'background'});
@@ -977,7 +1017,7 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
         document.dispatchEvent(new Event('pause'));
     });
 
-    BackgroundGeolocation.on('foreground', function() {
+    bgGeo.on('foreground', function() {
         console.log('[INFO] App is in foreground');
         APP_VISIBILITY = 'foreground';
         resumeAudioContext('foreground');
@@ -987,7 +1027,7 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
         document.dispatchEvent(new Event('resume'));
     });
 
-    BackgroundGeolocation.on('activity', function(activity) {
+    bgGeo.on('activity', function(activity) {
         if (!GEO.motionAuthorized) {
             GEO.motionAuthorized = true;
             if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('motion_authorized', {type: activity.type});
@@ -1021,12 +1061,13 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
 
 function checkBGPosition() {
     return new Promise((resolve, reject) => {
-        if (typeof BackgroundGeolocation === 'undefined' || !BackgroundGeolocation) {
+        let bgGeo = getBackgroundGeolocationPlugin()
+        if (!bgGeo) {
             console.warn('BackgroundGeolocation is not defined');
             resolve(GEO.lastPosition);
             return;
         }
-        BackgroundGeolocation.getCurrentLocation(
+        bgGeo.getCurrentLocation(
             function(location) {
               // Got a location, now start background tracking
               resolve(location)
@@ -1047,8 +1088,17 @@ function checkBGPosition() {
 // via cordova-plugin-android-permissions (correct Cordova Activity context) before calling
 // start(), so the plugin never needs to show its own dialog.
 function _geolocRequestPermissionThenStart(status) {
-    const alreadyAuthorized = status.authorization === BackgroundGeolocation.AUTHORIZED ||
-                              status.authorization === BackgroundGeolocation.AUTHORIZED_FOREGROUND;
+    let bgGeo = getBackgroundGeolocationPlugin()
+    if (!bgGeo) {
+        if (backgroundGeolocReject) {
+            backgroundGeolocReject('BackgroundGeolocation is not defined');
+            backgroundGeolocReject = backgroundGeolocResolve = null;
+        }
+        return
+    }
+
+    const alreadyAuthorized = status.authorization === bgGeo.AUTHORIZED ||
+                              status.authorization === bgGeo.AUTHORIZED_FOREGROUND;
 
     if (!alreadyAuthorized &&
         typeof cordova !== 'undefined' &&
@@ -1060,7 +1110,7 @@ function _geolocRequestPermissionThenStart(status) {
             function(permStatus) {
                 if (permStatus.hasPermission) {
                     console.log('[INFO] ACCESS_FINE_LOCATION granted — starting BackgroundGeolocation');
-                    BackgroundGeolocation.start();
+                    bgGeo.start();
                 } else {
                     console.error('[ERROR] Location permission denied by user');
                     if (backgroundGeolocReject) {
@@ -1079,7 +1129,7 @@ function _geolocRequestPermissionThenStart(status) {
         );
     } else {
         // Already authorized or permissions plugin not available — start directly
-        BackgroundGeolocation.start();
+        bgGeo.start();
     }
 }
 
@@ -1088,14 +1138,10 @@ function backgroundGeoloc(positionCallback, errorCallback) {
     return new Promise((resolve, reject) => {
 
         // check if variable is defined 
-        if (typeof BackgroundGeolocation === 'undefined') {
+        let bgGeo = getBackgroundGeolocationPlugin()
+        if (!bgGeo) {
             console.error('BackgroundGeolocation is not defined');
             reject('BackgroundGeolocation is not defined');
-            return;
-        }
-        if (!BackgroundGeolocation) {
-            console.error('BackgroundGeolocation is not available');
-            reject('BackgroundGeolocation is not available');
             return;
         }
 
@@ -1104,7 +1150,7 @@ function backgroundGeoloc(positionCallback, errorCallback) {
 
         prepareBackgroundGeoloc(positionCallback, errorCallback);
     
-        BackgroundGeolocation.checkStatus(function(status) {
+        bgGeo.checkStatus(function(status) {
             console.log('[INFO] BackgroundGeolocation service is running', status.isRunning);
             console.log('[INFO] BackgroundGeolocation services enabled', status.locationServicesEnabled);
             console.log('[INFO] BackgroundGeolocation auth status: ' + status.authorization);
