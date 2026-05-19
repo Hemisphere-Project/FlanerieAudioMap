@@ -1919,6 +1919,52 @@ PAGES['parcours'] = () => {
     // (parcours_restore from build()@parse-time, etc.).
     if (typeof PARCOURS.flushPendingTelemetry === 'function') PARCOURS.flushPendingTelemetry();
 
+    // Diagnostic snapshot at parcours entry — the earliest point where TELEMETRY
+    // has a session. checkbatteryopt runs before TELEMETRY.start() so anything
+    // logged there is silently dropped; this is the only reliable place to
+    // capture device + plugin + power state for post-hoc analysis.
+    (function() {
+        var po = (typeof cordova !== 'undefined' && cordova.plugins && cordova.plugins.PowerOptimization)
+            ? cordova.plugins.PowerOptimization : null;
+        var af = (typeof cordova !== 'undefined' && cordova.plugins && cordova.plugins.audiofocus)
+            ? cordova.plugins.audiofocus : null;
+
+        // Synchronous facts — logged immediately.
+        TELEMETRY.log('session_diag', {
+            // APK build number + downloaded webapp zip hash (changes on every deploy)
+            apk_version:  document.APPVERSION  || null,
+            webapp_hash:  localStorage.getItem('APPHASH') || null,
+            // Device identity
+            platform:     PLATFORM,
+            manufacturer: (typeof device !== 'undefined') ? device.manufacturer : null,
+            model:        (typeof device !== 'undefined') ? device.model        : null,
+            os_version:   (typeof device !== 'undefined') ? device.version      : null,
+            // Plugin presence
+            plugin_power_opt:   !!po,
+            plugin_power_IsPowerSaveMode:        !!(po && typeof po.IsPowerSaveMode          === 'function'),
+            plugin_power_IsBackgroundRestricted: !!(po && typeof po.IsBackgroundRestricted   === 'function'),
+            plugin_power_IsIgnoringBattOpt:      !!(po && typeof po.IsIgnoringBatteryOptimizations === 'function'),
+            plugin_audiofocus:  !!af,
+            plugin_bgloc:       !!(typeof BackgroundGeolocation !== 'undefined'),
+            plugin_permissions: !!(typeof cordova !== 'undefined' && cordova.plugins && cordova.plugins.permissions),
+            // Runtime flags
+            devmode: !!DEVMODE,
+        });
+
+        // Async power state — separate event so the sync facts land first.
+        if (!po || PLATFORM !== 'android') return;
+        var ps = (typeof po.IsPowerSaveMode          === 'function') ? po.IsPowerSaveMode().catch(function(e)          { return 'error:'+e; }) : Promise.resolve('n/a');
+        var br = (typeof po.IsBackgroundRestricted   === 'function') ? po.IsBackgroundRestricted().catch(function(e)   { return 'error:'+e; }) : Promise.resolve('n/a');
+        var ig = (typeof po.IsIgnoringBatteryOptimizations === 'function') ? po.IsIgnoringBatteryOptimizations().catch(function(e) { return 'error:'+e; }) : Promise.resolve('n/a');
+        Promise.all([ps, br, ig]).then(function(r) {
+            TELEMETRY.log('power_state_at_parcours', {
+                power_save:         r[0],
+                bg_restricted:      r[1],
+                ignoring_batt_opt:  r[2],
+            });
+        });
+    })();
+
     // First RUN — paint step 0 as the single cyan target (matches updateStepsMarkers).
     if (PARCOURS.currentStep() < 0) {
         console.log('FIRST RUN')
