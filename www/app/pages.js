@@ -1422,61 +1422,56 @@ PAGES['checkbatteryopt'] = () => {
 
     var dialogShown = false;
 
-    // SOFT warning: phone-wide battery saver. Returns a Promise<bool> so callers
-    // can chain: true = power save is on and banner was shown, false = off/unavailable.
-    // Also shows/hides the "Continuer quand même" skip button.
-    function refreshPowerSaveBanner() {
-        if (typeof plugin.IsPowerSaveMode !== 'function') return Promise.resolve(false);
-        return plugin.IsPowerSaveMode()
-            .then(isOn => {
-                if (currentPage !== 'checkbatteryopt') return false;
-                $('#checkbatteryopt-powersave').toggle(!!isOn);
-                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('power_save_mode', {on: !!isOn});
-                return !!isOn;
-            })
-            .catch(() => false);
-    }
-
     function check() {
         BATTOPT_TIMER = null;
         if (currentPage !== 'checkbatteryopt') return;
 
-        // First gate: background restriction (API 28+ via C5). Hard-block if
-        // the user (or OEM policy) explicitly restricted the app's background
-        // activity — Doze whitelist alone won't save us; the kill happens
-        // anyway. Field test 2026-05-18 traced the Samsung A41 mid-walk kills
-        // to this exact layer. Plugin returns false on API < 28 (signal
-        // didn't exist) so older Android fast-paths through.
-        var bgRestrictedCheck = (typeof plugin.IsBackgroundRestricted === 'function')
-            ? plugin.IsBackgroundRestricted()
+        // Gate 0: power-save mode. Hard-block before everything else — if the
+        // phone-wide battery saver is on, Doze exemption and bg-restriction
+        // fixes are irrelevant, the OS will still throttle us mid-walk.
+        // IsPowerSaveMode() is a synchronous OS query wrapped in Cordova, so it
+        // resolves almost instantly.
+        var powerSaveCheck = (typeof plugin.IsPowerSaveMode === 'function')
+            ? plugin.IsPowerSaveMode().catch(() => false)
             : Promise.resolve(false);
 
-        bgRestrictedCheck.then(isRestricted => {
+        powerSaveCheck.then(psOn => {
             if (currentPage !== 'checkbatteryopt') return;
-            if (isRestricted) {
-                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('background_restricted', {
-                    manufacturer: device.manufacturer, model: device.model, apiLevel,
-                });
-                // Swap to restricted copy + show Settings deep link. Keep polling
-                // so the page auto-advances when the user fixes it in Settings.
-                $('#checkbatteryopt-desc').hide();
-                $('#checkbatteryopt-restricted').show();
-                $('#checkbatteryopt-settings').show();
+            $('#checkbatteryopt-powersave').toggle(!!psOn);
+            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('power_save_mode', {on: !!psOn});
+            if (psOn) {
+                // Hard-block. Poll loop auto-advances the moment it's disabled.
                 BATTOPT_TIMER = setTimeout(check, BATTOPT_POLL_MS);
                 return;
             }
-            // Not restricted (or pre-API 28). Restore the normal copy if the
-            // restricted view was previously shown, then run the Doze
-            // whitelist flow as before.
-            $('#checkbatteryopt-restricted').hide();
-            $('#checkbatteryopt-desc').show();
-            runDozeCheck();
-        }).catch(error => {
-            // Probe itself failed — don't hold the user up; fall through to
-            // the Doze check (existing behaviour for API < 28 or plugin error).
-            console.warn('[BATTOPT] IsBackgroundRestricted probe failed:', error);
-            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('background_restricted', { error: String(error) });
-            runDozeCheck();
+
+            // Gate 1: background restriction (API 28+). Hard-block if the user /
+            // OEM policy explicitly restricted background activity for the app.
+            // Field test 2026-05-18 traced Samsung A41 mid-walk kills to this layer.
+            var bgRestrictedCheck = (typeof plugin.IsBackgroundRestricted === 'function')
+                ? plugin.IsBackgroundRestricted()
+                : Promise.resolve(false);
+
+            bgRestrictedCheck.then(isRestricted => {
+                if (currentPage !== 'checkbatteryopt') return;
+                if (isRestricted) {
+                    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('background_restricted', {
+                        manufacturer: device.manufacturer, model: device.model, apiLevel,
+                    });
+                    $('#checkbatteryopt-desc').hide();
+                    $('#checkbatteryopt-restricted').show();
+                    $('#checkbatteryopt-settings').show();
+                    BATTOPT_TIMER = setTimeout(check, BATTOPT_POLL_MS);
+                    return;
+                }
+                $('#checkbatteryopt-restricted').hide();
+                $('#checkbatteryopt-desc').show();
+                runDozeCheck();
+            }).catch(error => {
+                console.warn('[BATTOPT] IsBackgroundRestricted probe failed:', error);
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('background_restricted', { error: String(error) });
+                runDozeCheck();
+            });
         });
     }
 
@@ -1485,22 +1480,7 @@ PAGES['checkbatteryopt'] = () => {
         plugin.IsIgnoringBatteryOptimizations()
             .then(isIgnoring => {
                 if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('battery_opt', { ignoring: isIgnoring, manufacturer: device.manufacturer, family, apiLevel });
-                if (isIgnoring) {
-                    // Doze exemption already granted. Still check power-save mode before
-                    // advancing — without this the banner never appears when the app is
-                    // already whitelisted (IsPowerSaveMode resolves after PAGE('rdv') fires).
-                    refreshPowerSaveBanner().then(psOn => {
-                        if (currentPage !== 'checkbatteryopt') return;
-                        if (psOn) {
-                            // Hard-block: stay on page until power save is disabled.
-                            // Poll loop auto-advances as soon as it's off.
-                            BATTOPT_TIMER = setTimeout(check, BATTOPT_POLL_MS);
-                        } else {
-                            PAGE('rdv');
-                        }
-                    });
-                    return;
-                }
+                if (isIgnoring) { PAGE('rdv'); return; }
 
                 // First failure: trigger native dialog (ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
                 if (!dialogShown) {
