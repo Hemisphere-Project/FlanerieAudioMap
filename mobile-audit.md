@@ -967,7 +967,7 @@ Files:
 - `cordova-plugin-audiofocus/src/android/AudioFocus.java` (`keepaliveActive` flag, two new actions, `cancelFocus` guard)
 - `cordova-plugin-audiofocus/src/ios/AudioFocus.m` (symmetric methods, observer registration extracted)
 - `cordova-plugin-audiofocus/www/AudioFocus.js` (`startKeepalive` / `stopKeepalive` exports)
-- `cordova-plugin-audiofocus/plugin.xml` / `package.json` (version bump 1.3.1 → 1.4.0)
+- `cordova-plugin-audiofocus/plugin.xml` / `package.json` (version bump 1.3.1 → 1.4.1 — 1.4.0 was R5.1+R5.3 only; 1.4.1 also includes R5.4.d notification tap intent)
 - `www/app/pages.js` (call sites in `PAGES['parcours']` enter + `PAGES_CLEANUP['parcours']`)
 
 Requires plugin reinstall: `cordova plugin remove cordova-plugin-audiofocus && cordova plugin add ~/Bakery/cordova-plugin-audiofocus`. Add to C4 build checklist.
@@ -1031,6 +1031,39 @@ Acceptance:
 - iPhone: trigger Siri mid-walk, dismiss. Audio resumes within 1 s, soft double-pulse felt.
 - iPhone: foreground app after a system alarm. `AUDIOFOCUS_GAIN_AVAILABLE` reaches JS or, if not, `audiofocus_resume_retry` fires on `document.resume` and audio recovers.
 - Healthy walks with no interruptions: no new events surface.
+
+#### R5.4 Store-submission polish bundle ✅ DONE (2026-05-19) [SAFE-TODAY]
+
+Catch-up batch landed alongside R5.1–R5.3 because the plugin rebuild + Play Store submission opens the window cheaply. Five small items; each is independently shippable and individually low-risk.
+
+**R5.4.a — `RequestOptimizationsMenu` inverted conditional fixed (closes C5 sub-item).** The Java method previously guarded the `startActivity(...)` call with `if (pm.isIgnoringBatteryOptimizations(packageName))` — so the settings menu only opened when the app was *already* whitelisted (i.e. when the user didn't need it). The action has no API restriction tied to whitelist state; guard removed. The FlanerieAudioMap JS layer (P1.12) had been routing around the bug via `GEO.showAppSettings()`; the workaround can be unwound at the JS level next time someone touches that code. Files: `cordova-plugin-power-optimization/src/android/PowerOptimization.java`.
+
+**R5.4.b — `IsPowerSaveMode()` soft-warning (closes C5 sub-item).** New plugin method wrapping `PowerManager.isPowerSaveMode()` (API 21+). Surfaced in `checkbatteryopt` as a non-blocking banner — "⚠️ L'économiseur de batterie est activé. La balade peut être moins fluide. Désactivez-le si possible avant de commencer." Probed every check tick so toggling the saver in Settings while on the page updates the banner. Telemetry: `power_save_mode {on: bool}`. The walker may genuinely need the battery saver for the day so this is *advisory*, not a hard block. Files: `cordova-plugin-power-optimization/src/android/PowerOptimization.java`, `cordova-plugin-power-optimization/www/PowerOptimization.js`, `www/app/pages.js` (`refreshPowerSaveBanner` helper), `www/app/app.html` (`#checkbatteryopt-powersave` banner).
+
+**R5.4.c — OEM intent table expansion (closes C5 sub-item).** Added 6 modern OEM activities to `Constants.java`: Samsung One UI 4+ (legacy `AppSleepListActivity` + newer `AppSleepingActivity`), OnePlus chain-launch, OPPO/Realme ColorOS startup, Vivo FunTouch BgStartUpManager, Honor MagicOS StartupNormalAppListActivity. `ProtectedApps.HaveProtectedAppIntent()` filters out intents that don't resolve on the current device, so it's safe to include all variants. Particularly relevant for the Samsung A41 fleet: the One UI 4+ Sleeping Apps page is now reachable via `ProtectedAppCheck(true)`. Files: `cordova-plugin-power-optimization/src/android/Constants.java`.
+
+**R5.4.d — Audiofocus notification tap-to-open.** [`AudioFocusService.java`](cordova-plugin-audiofocus/src/android/AudioFocusService.java) now sets a `PendingIntent` on the persistent foreground-service notification, pointing at the app's main `LaunchIntent`. Without this, tapping the notification did nothing. The notification stays `IMPORTANCE_MIN` so should remain hidden on most devices, but Android 13+ surfaces some foreground-service notifications regardless — when it does, tapping now returns the walker to the app. `PendingIntent.FLAG_IMMUTABLE` added (required on Android 12+). Files: `cordova-plugin-audiofocus/src/android/AudioFocusService.java`.
+
+**R5.4.e — iOS usage descriptions: French + specific.** [`FlanerieCordova/package.json`](../FlanerieCordova/package.json) `cordova-background-geolocation-plugin` plugin variables changed from the upstream defaults ("This app always requires location tracking" / "This app requires motion detection") to walker-specific French copy. Apple reviewers consistently reject vague English strings in non-English-targeted apps:
+
+- `ALWAYS_USAGE_DESCRIPTION`: "Flanerie utilise votre position GPS pour déclencher les scènes audio sur le parcours, même lorsque l'écran est verrouillé et le téléphone dans la poche. La localisation continue est nécessaire pendant toute la balade."
+- `MOTION_USAGE_DESCRIPTION`: "Flanerie utilise les capteurs de mouvement pour distinguer les pauses d'écoute des déplacements, et éviter de fausses alertes \"GPS perdu\" lorsque vous êtes immobile."
+
+Both strings populate `NSLocationAlwaysUsageDescription`, `NSLocationWhenInUseUsageDescription`, `NSLocationAlwaysAndWhenInUseUsageDescription`, and `NSMotionUsageDescription` at install time. Files: `FlanerieCordova/package.json`.
+
+**R5.4.f — App version visible to operator.** Reads `document.APPVERSION` (set by the launcher via `cordova.getAppVersion.getVersionCode`) and renders it discreetly at the bottom of the `select` page along with the platform tag. Format: `v12 · android`. Operators can read the version off the phone before handing it over; walkers can read it back during support calls. Falls back gracefully when `APPVERSION` isn't set (browser dev, electron). Files: `www/app/pages.js` (`PAGES['select']` tail), `www/app/app.html` (`#select-version` element).
+
+#### R5.4 verification
+
+- iOS usage strings appear in French in the iOS permission dialogs on first install.
+- `RequestOptimizationsMenu` opens the system Doze whitelist page when called from a non-whitelisted state (test on a fresh install before granting).
+- `IsPowerSaveMode` banner appears in `checkbatteryopt` when battery saver is on; disappears within ~1.5 s (one poll tick) of being turned off.
+- Audiofocus notification (if visible) opens the app when tapped.
+- `select` page shows version + platform string at the bottom in 75% opacity.
+
+#### R5.4 regression risk
+
+**LOW** across the board. R5.4.a removes a useless guard (the call path was already routed around). R5.4.b/c/d are additive. R5.4.e is a string change. R5.4.f is a single DOM element with a string. None of these alter the audio path, the GPS path, or the parcours lifecycle.
 
 ---
 
@@ -1254,6 +1287,7 @@ Native plugin work targeting the 2026-05-18 Samsung SM-A415F (A41) BLOC_14→BLO
 - **R5.1** Audiofocus plugin keepalive — `mediaPlayback` foreground service stays alive for the duration of a parcours, not just while audio focus is held. The targeted fix for the Samsung A41 mid-walk kills.
 - **R5.2** Power Optimization plugin `IsBackgroundRestricted()` — closes the highest-impact subset of the C5 backlog. `checkbatteryopt` now hard-blocks when the user's app is explicitly background-restricted, with explicit Samsung Settings-path copy.
 - **R5.3** Audiofocus plugin (iOS) interruption-without-`ShouldResume` — closes the full C6 backlog item. Adds `AUDIOFOCUS_GAIN_AVAILABLE` event + JS auto-resume with `document.resume` safety retry.
+- **R5.4** Store-submission polish bundle (Tier-1 catch-up bundled with the same plugin rebuild): `RequestOptimizationsMenu` inverted-conditional fix (R5.4.a, closes C5 sub-item); `IsPowerSaveMode()` soft warning (R5.4.b, closes C5 sub-item); OEM intent table expansion — Samsung One UI 4+, OnePlus, OPPO/Realme, Vivo, Honor (R5.4.c, closes C5 sub-item); audiofocus notification tap-to-open `PendingIntent` (R5.4.d); iOS usage descriptions to French + walker-specific (R5.4.e); app version visible to operator on the `select` page (R5.4.f). All SAFE-TODAY, all additive.
 
 **Build steps required:**
 ```bash

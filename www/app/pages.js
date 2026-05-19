@@ -270,6 +270,19 @@ PAGES['select'] = (list) => {
     // DEV: diagnostic + tools buttons
     $('#select-diagnostic').off().on('click', () => PAGE('diagnostic'));
     $('#select-tools').off().on('click', () => PAGE('tools'));
+
+    // App version (operator-facing): shows the build number set by the
+    // launcher (`document.APPVERSION` from cordova.getAppVersion). Useful
+    // for support: walker reads the number to the operator before handing
+    // the phone. Falls back gracefully outside Cordova (browser dev).
+    var versionStr = '';
+    if (typeof document.APPVERSION !== 'undefined' && document.APPVERSION) {
+        versionStr = 'v' + document.APPVERSION;
+    }
+    if (typeof PLATFORM !== 'undefined' && PLATFORM) {
+        versionStr = versionStr ? (versionStr + ' · ' + PLATFORM) : PLATFORM;
+    }
+    $('#select-version').text(versionStr);
 }
 
 //
@@ -1403,9 +1416,27 @@ PAGES['checkbatteryopt'] = () => {
         .catch(() => {});
 
     var dialogShown = false;
+
+    // SOFT warning: phone-wide battery saver. Doesn't block — the user may
+    // genuinely need it on for the day — but we tell them the walk audio
+    // quality may degrade. Probed every check tick so toggling the saver
+    // in Settings while on this page updates the banner.
+    function refreshPowerSaveBanner() {
+        if (typeof plugin.IsPowerSaveMode !== 'function') return;
+        plugin.IsPowerSaveMode()
+            .then(isOn => {
+                if (currentPage !== 'checkbatteryopt') return;
+                $('#checkbatteryopt-powersave').toggle(!!isOn);
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('power_save_mode', {on: !!isOn});
+            })
+            .catch(() => {});
+    }
+
     function check() {
         BATTOPT_TIMER = null;
         if (currentPage !== 'checkbatteryopt') return;
+
+        refreshPowerSaveBanner();
 
         // First gate: background restriction (API 28+ via C5). Hard-block if
         // the user (or OEM policy) explicitly restricted the app's background
