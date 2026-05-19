@@ -676,7 +676,7 @@ class Step extends Spot
             let seekPos = 0
             if (action === 'play' && wasCurrentStep && PARCOURS.state.resumeStepVoicePos > 0) {
                 seekPos = Math.max(0, PARCOURS.state.resumeStepVoicePos - 3)
-                PARCOURS.state.resumeStepVoicePos = 0
+                PARCOURS.state.resumeStepVoicePos = seekPos
             }
             telemetryLog('step_audio_trigger', {
                 step: this._index,

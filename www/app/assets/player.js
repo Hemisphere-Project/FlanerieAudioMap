@@ -314,6 +314,7 @@ class NativeMediaPlayer extends EventEmitter {
                 this._loaded = true
                 this.emit('load', this._src)
                 if (this._pendingSeekSec !== null) {
+                    this._positionSec = this._pendingSeekSec
                     this._media.seekTo(this._pendingSeekSec * 1000)
                     this._pendingSeekSec = null
                 }
@@ -343,7 +344,7 @@ class NativeMediaPlayer extends EventEmitter {
         this._positionPollInterval = setInterval(() => {
             if (!this._media) return
             this._media.getCurrentPosition(
-                (pos) => { if (pos >= 0) this._positionSec = pos },
+                (pos) => { if (pos > 0) this._positionSec = pos },
                 () => {}
             )
         }, 250)
@@ -502,7 +503,11 @@ class PlayerSimple extends EventEmitter
 
     _logAudioTelemetry(type, error, extra = {}) {
         let src = this._src()
-        let message = String(error)
+        let message = typeof error === 'string' ? error
+            : typeof error === 'number' ? String(error)
+            : (error && error.message) ? error.message
+            : (error && error.code != null) ? ('MediaError:' + error.code)
+            : JSON.stringify(error)
         let signature = type + '|' + (src || '-') + '|' + message
         let now = Date.now()
 
