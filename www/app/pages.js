@@ -105,6 +105,7 @@ function clearMotionCheck()
 
 PAGES_CLEANUP['parcours']           = () => {
     clearWakeupNotification();
+    stopGpsStatusPaint();
     clearTimeout(GPS_DOZE_TIMER);
     GPS_DOZE_TIMER = null;
     GPSLOST_PLAYER.stop();
@@ -134,12 +135,32 @@ PAGES_CLEANUP['checknotifications'] = () => clearNotificationPermissionCheck();
 PAGES_CLEANUP['checkbatteryopt']    = () => clearBatteryOptCheck();
 PAGES_CLEANUP['checkbgloc']         = () => clearBgLocCheck();
 PAGES_CLEANUP['checkmotion']        = () => clearMotionCheck();
-PAGES_CLEANUP['checkgeo']           = () => {
-    // The CHECKGEO interval only paints #gps-status / #gps-precision, which
-    // live in the parcours page DOM — leaving it running for the whole app
-    // lifetime is pure waste.
+// #gps-status / #gps-precision live in the parcours page DOM, so the painter
+// runs while we're on checkgeo (preparation) and on parcours (the walk).
+// Stop it on every other page to avoid running it for the whole app lifetime.
+function stopGpsStatusPaint() {
     if (CHECKGEO) { clearInterval(CHECKGEO); CHECKGEO = null; }
-};
+}
+function startGpsStatusPaint() {
+    stopGpsStatusPaint();
+    CHECKGEO = setInterval(() => {
+        const gpsImg = document.getElementById('gps-status');
+        if (gpsImg) gpsImg.src = gpsImg.src.replace(/gps-(on|off)\.png/, GEO.alive() ? 'gps-on.png' : 'gps-off.png');
+
+        // GPS precision badge: bucket-coloured, refreshed every tick alongside
+        // the on/off icon. Hidden when no recent fix is known.
+        const $prec = $('#gps-precision');
+        let p = GEO && GEO.lastPosition;
+        if (!GEO.alive() || !p || !p.coords || typeof p.coords.accuracy !== 'number') {
+            $prec.attr('class', 'bucket-unknown').text('—');
+        } else {
+            let acc = Math.round(p.coords.accuracy);
+            let bucket = typeof gpsAccuracyBucket === 'function' ? gpsAccuracyBucket(acc) : 'unknown';
+            $prec.attr('class', 'bucket-' + bucket).text(acc + ' m');
+        }
+    }, 1000);
+}
+PAGES_CLEANUP['checkgeo']           = stopGpsStatusPaint;
 
 function PAGE(name, ...args)
 {
@@ -1025,23 +1046,7 @@ PAGES['checkgeo'] = () => {
         });
     }
 
-    if (CHECKGEO) clearInterval(CHECKGEO);
-    CHECKGEO = setInterval(() => {
-        const gpsImg = document.getElementById('gps-status');
-        gpsImg.src = gpsImg.src.replace(/gps-(on|off)\.png/, GEO.alive() ? 'gps-on.png' : 'gps-off.png');
-
-        // GPS precision badge: bucket-coloured, refreshed every tick alongside
-        // the on/off icon. Hidden when no recent fix is known.
-        const $prec = $('#gps-precision');
-        let p = GEO && GEO.lastPosition;
-        if (!GEO.alive() || !p || !p.coords || typeof p.coords.accuracy !== 'number') {
-            $prec.attr('class', 'bucket-unknown').text('—');
-        } else {
-            let acc = Math.round(p.coords.accuracy);
-            let bucket = typeof gpsAccuracyBucket === 'function' ? gpsAccuracyBucket(acc) : 'unknown';
-            $prec.attr('class', 'bucket-' + bucket).text(acc + ' m');
-        }
-    }, 1000);
+    startGpsStatusPaint();
 }
 
 var retryAuth = 0;
@@ -1708,6 +1713,10 @@ PAGES['parcours'] = () => {
 
     SILENT_PLAYER.play(); // Play silent track to keep audio session alive
     scheduleWakeupNotification();
+    // The #gps-status / #gps-precision badges live in this page's DOM, so the
+    // painter has to run here. checkgeo also starts it for its own gating, but
+    // its cleanup tears it down before we arrive — restart it on the walk.
+    startGpsStatusPaint();
 
     // Hold the audiofocus plugin's mediaPlayback foreground service ACTIVE
     // for the duration of the walk, not just while audio focus is held.
