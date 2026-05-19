@@ -1422,26 +1422,24 @@ PAGES['checkbatteryopt'] = () => {
 
     var dialogShown = false;
 
-    // SOFT warning: phone-wide battery saver. Doesn't block — the user may
-    // genuinely need it on for the day — but we tell them the walk audio
-    // quality may degrade. Probed every check tick so toggling the saver
-    // in Settings while on this page updates the banner.
+    // SOFT warning: phone-wide battery saver. Returns a Promise<bool> so callers
+    // can chain: true = power save is on and banner was shown, false = off/unavailable.
+    // Also shows/hides the "Continuer quand même" skip button.
     function refreshPowerSaveBanner() {
-        if (typeof plugin.IsPowerSaveMode !== 'function') return;
-        plugin.IsPowerSaveMode()
+        if (typeof plugin.IsPowerSaveMode !== 'function') return Promise.resolve(false);
+        return plugin.IsPowerSaveMode()
             .then(isOn => {
-                if (currentPage !== 'checkbatteryopt') return;
+                if (currentPage !== 'checkbatteryopt') return false;
                 $('#checkbatteryopt-powersave').toggle(!!isOn);
                 if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('power_save_mode', {on: !!isOn});
+                return !!isOn;
             })
-            .catch(() => {});
+            .catch(() => false);
     }
 
     function check() {
         BATTOPT_TIMER = null;
         if (currentPage !== 'checkbatteryopt') return;
-
-        refreshPowerSaveBanner();
 
         // First gate: background restriction (API 28+ via C5). Hard-block if
         // the user (or OEM policy) explicitly restricted the app's background
@@ -1487,7 +1485,22 @@ PAGES['checkbatteryopt'] = () => {
         plugin.IsIgnoringBatteryOptimizations()
             .then(isIgnoring => {
                 if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('battery_opt', { ignoring: isIgnoring, manufacturer: device.manufacturer, family, apiLevel });
-                if (isIgnoring) { PAGE('rdv'); return; }
+                if (isIgnoring) {
+                    // Doze exemption already granted. Still check power-save mode before
+                    // advancing — without this the banner never appears when the app is
+                    // already whitelisted (IsPowerSaveMode resolves after PAGE('rdv') fires).
+                    refreshPowerSaveBanner().then(psOn => {
+                        if (currentPage !== 'checkbatteryopt') return;
+                        if (psOn) {
+                            // Hard-block: stay on page until power save is disabled.
+                            // Poll loop auto-advances as soon as it's off.
+                            BATTOPT_TIMER = setTimeout(check, BATTOPT_POLL_MS);
+                        } else {
+                            PAGE('rdv');
+                        }
+                    });
+                    return;
+                }
 
                 // First failure: trigger native dialog (ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
                 if (!dialogShown) {
