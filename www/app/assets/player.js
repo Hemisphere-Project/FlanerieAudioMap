@@ -53,12 +53,41 @@ document.addEventListener('deviceready', function() {
             resumeAllPlayers();
             AUDIOFOCUS = 1;
             $('#resume-overlay').hide();
+        } else if (focusState === "AUDIOFOCUS_GAIN_AVAILABLE") {
+            // C6 (iOS): interruption ended but the system did NOT signal
+            // ShouldResume (typical after Siri, alarms, sometimes calls). The
+            // native side has already successfully called setActive:YES, so
+            // the session is live; we just don't have the system's blessing
+            // to auto-resume. For the Flanerie sole-app walking experience
+            // (pocketed walker, no other audio context to preserve), the
+            // walker-correct behaviour IS to resume — otherwise audio stays
+            // paused forever and the walker doesn't see the resume overlay
+            // through their pocket. Use a softer double-pulse to signal the
+            // difference vs a hard GAIN, then resume.
+            if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+            restoreDuckedPlayers();
+            resumeAllPlayers();
+            AUDIOFOCUS = 1;
+            $('#resume-overlay').hide();
         } else if (focusState === "AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK") {
             duckPlayingPlayers();
         }
     });
     console.log('[AudioFocus] plugin available. Audio focus will be handled.');
     requestAudioFocus();
+
+    // Safety retry: if the app comes to foreground and we're still in a
+    // "focus lost, players paused" state (e.g. iOS interruption that didn't
+    // emit ShouldResume AND the GAIN_AVAILABLE path didn't reach us because
+    // the JS layer was suspended), re-request focus on the next user gesture.
+    // This is a no-op when audio is already running (AUDIOFOCUS === 1) so it
+    // can't accidentally fight a healthy state.
+    document.addEventListener('resume', function() {
+        if (AUDIOFOCUS === 0 && PAUSED_PLAYERS.length > 0) {
+            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audiofocus_resume_retry', {paused: PAUSED_PLAYERS.length});
+            requestAudioFocus();
+        }
+    });
 });
 
 // setInterval(() => {

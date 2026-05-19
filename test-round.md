@@ -2,7 +2,7 @@
 
 **Context:** Pre-show validation. Production with real visitors in 2 days.  
 **Build:** Round 4 telemetry batch (R4.2–R4.9) + R4.3 GPS Doze watchdog deployed.  
-**Parcours under test:** FLANERIE_GIVORS_V7_CBR (test) → FLANERIE_ELYSEE (show)  
+**Parcours under test:** FLANERIE_GIVORS_V7_CBR
 **Constraint:** No Cordova rebuild, no plugin changes. JS webapp only.
 
 ---

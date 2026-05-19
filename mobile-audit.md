@@ -1,7 +1,8 @@
 # Mobile Audit Remediation Plan
 
 Original: 2026-04-27  
-Last updated: 2026-05-18 (Round 4 telemetry batch — 22 sessions across 8 devices on FLANERIE_GIVORS_V7_CBR: parcours_restore lifecycle fix R4.2, audio_play_timeout truth check + retry R4.4, voice_snapshot truth-check fields R4.5, gps_callback_gap threshold tuning R4.6, step_afterplay_fallback / step_voice_failed step-name enrichment R4.7, user_recovered distance clamp R4.8, voice_snapshot_skipped throttling R4.9. Two field-test items deferred to dedicated outings: Android first-voice cold-load hang R4.1 and Android Doze GPS blackouts R4.3 / P1.31)  
+Last updated: 2026-05-19 (Round 5 — native plugin work targeting Samsung A41 BLOC_14→BLOC_15 OEM-kill repro from 2026-05-18 colleague report: audiofocus mediaPlayback foreground service keepalive R5.1, power-optimization `IsBackgroundRestricted()` detection R5.2 closing the urgent subset of C5, audiofocus iOS interruption-without-ShouldResume R5.3 closing the full C6 backlog. Requires plugin reinstall + APK rebuild + Play Store upgrade)  
+Previous: 2026-05-18 (Round 4 telemetry batch — 22 sessions across 8 devices on FLANERIE_GIVORS_V7_CBR: parcours_restore lifecycle fix R4.2, audio_play_timeout truth check + retry R4.4, voice_snapshot truth-check fields R4.5, gps_callback_gap threshold tuning R4.6, step_afterplay_fallback / step_voice_failed step-name enrichment R4.7, user_recovered distance clamp R4.8, voice_snapshot_skipped throttling R4.9. Two field-test items deferred to dedicated outings: Android first-voice cold-load hang R4.1 and Android Doze GPS blackouts R4.3 / P1.31)  
 Previous: 2026-05-18 (Round 3 — field test 2026-05-15 on FRAPPAZ_V10-modif_monnot, 13 sessions across 9 devices: off-route popup title fix P1.30, voice-snapshot lifecycle telemetry P3.5b, Android Doze GPS blackout flagged P1.31, fresh-parcours any-step entry confirmed accepted, iPhone 8 first-install network sensitivity P1.32 — demoted to LOW after the 4G-tether vs domestic-WiFi finding)  
 Previous: 2026-05-14 (Round 2 codebase review: resume `update()` gate P1.23, `init()` no-op listener removal P1.24, LOST↔afterplay/step-progression unification P1.25, GPS stop on walk end P1.26, duplicate `step_done` guard P1.27, page-exit cleanup gaps P1.28, recovery map on default-afterplay P1.29, defensive hardening cluster P2.12, telemetry session key P2.13, resume gate fast-path P2.14, structural refactors P3.6, server resilience C7)  
 Previous: 2026-05-13 (LOST state machine P1.18, voice/afterplay fallback P1.19, RESUME cue P1.20, AUDIOFOCUS auto-retry P1.21, devmode tools page P1.22, paused() crash fix; Architecture Summary + telemetry list aligned with current code)  
@@ -940,6 +941,99 @@ Regression risk: **LOW** — telemetry cleanup only.
 
 ---
 
+### Round 5 (Native plugin work for Samsung A41 BLOC_15 crashes — 2026-05-19)
+
+Triggered by post-2026-05-18 colleague report of two phones crashing during/near BLOC_15 on FLANERIE_GIVORS_V7_CBR. Telemetry analysis (see [memory: project-test-findings-20260518](./.claude/projects/-home-mgr-Bakery-FlanerieAudioMap/memory/project_test_findings_20260518.md)) traced the crashes to OEM battery kills on Samsung SM-A415F (A41, Android 12) — specifically during the BLOC_14 → BLOC_15 transition when BLOC_15's MUSIC file is finishing its background load while BLOC_14 audio is still playing. Pattern reproduced cleanly across 4 sessions on the same device class.
+
+Constraint: a Play Store upgrade is acceptable for this issue (vs the earlier "no FlanerieCordova/plugin changes before show" constraint). Three coordinated changes — one is the targeted fix, the other two are the C5/C6 backlog items that pair naturally with the same plugin rebuild.
+
+#### R5.1 Audiofocus plugin: mediaPlayback foreground service keepalive ✅ DONE (2026-05-19) [TEST-FIRST]
+
+**Problem.** [`AudioFocusService.java`](cordova-plugin-audiofocus/src/android/AudioFocusService.java) starts a `FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK` foreground service on every `AUDIOFOCUS_REQUEST_GRANTED` and stops it on `cancelFocus()`. Between two audio-focus requests (e.g. while background-loading BLOC_15 audio while BLOC_14 is winding down), the service is briefly not running. Samsung's One UI 4+ battery optimizer uses exactly the `mediaPlayback` flag to decide whether to kill the process — those silent gaps are when the kill lands. Field test 2026-05-18: 4 of 4 Samsung A415F walks crashed around the BLOC_14→BLOC_15 boundary.
+
+**Resolution.** Two new plugin actions `startKeepalive()` / `stopKeepalive()`:
+
+- `startKeepalive()` → starts the foreground service, sets a `keepaliveActive` flag.
+- `cancelFocus()` → only stops the foreground service when `keepaliveActive == false` (existing call sites that don't opt into keepalive still see the original behaviour).
+- `stopKeepalive()` → clears the flag, stops the service.
+
+JS wiring in [`PAGES['parcours']`](www/app/pages.js): call `startKeepalive()` on parcours-page entry; the existing [`PAGES_CLEANUP['parcours']`](www/app/pages.js) calls `stopKeepalive()` on cleanup (which covers walk end via `PAGES['end']`, page-switch on resume flows, devmode tools navigation, etc.).
+
+iOS path is symmetric for API uniformity but largely defensive: `startKeepalive` sets `AVAudioSessionCategoryPlayback`, calls `setActive:YES`, and registers the interruption observer ahead of the first audio play. UIBackgroundModes:audio already handles the actual process-lifetime guarantee on iOS, so the iOS impact is minor — but it pairs cleanly with R5.3 (C6).
+
+Telemetry: `audiofocus_keepalive_started`, `audiofocus_keepalive_stopped`, `audiofocus_keepalive_error`.
+
+Files:
+- `cordova-plugin-audiofocus/src/android/AudioFocus.java` (`keepaliveActive` flag, two new actions, `cancelFocus` guard)
+- `cordova-plugin-audiofocus/src/ios/AudioFocus.m` (symmetric methods, observer registration extracted)
+- `cordova-plugin-audiofocus/www/AudioFocus.js` (`startKeepalive` / `stopKeepalive` exports)
+- `cordova-plugin-audiofocus/plugin.xml` / `package.json` (version bump 1.3.1 → 1.4.0)
+- `www/app/pages.js` (call sites in `PAGES['parcours']` enter + `PAGES_CLEANUP['parcours']`)
+
+Requires plugin reinstall: `cordova plugin remove cordova-plugin-audiofocus && cordova plugin add ~/Bakery/cordova-plugin-audiofocus`. Add to C4 build checklist.
+
+Regression risk: **MEDIUM** — changes a process-lifetime signal Android uses for battery decisions. Verify on a Samsung A41 walk (full 45-min duration) before production. Verify on a non-restrictive device (e.g. Pixel) that the persistent foreground notification isn't visually distracting (it's `IMPORTANCE_MIN` so should stay hidden, but worth confirming).
+
+Acceptance:
+- Samsung A415F (Android 12) completes a 45-minute walk without `session_resume` events between BLOC_14 and BLOC_15.
+- `audiofocus_keepalive_started` fires once on parcours entry, `audiofocus_keepalive_stopped` fires once on cleanup or end.
+- No accumulation of foreground services across walks (logcat: only one AudioFocusService instance running).
+
+#### R5.2 Power Optimization plugin: IsBackgroundRestricted() detection ✅ DONE (2026-05-19) [SAFE-TODAY]
+
+Closes the **C5 IsBackgroundRestricted** sub-item ahead of the full C5 fork. The rest of C5 (standby bucket, OEM intent table expansion, hibernation whitelist) stays open.
+
+**Problem.** Samsung One UI 4+ has a *separate* "Background usage limits" setting (Unrestricted / Optimized / Restricted) that lives above the Doze whitelist. A user (or Samsung's auto-policy on infrequently-used apps) can flip this to "Restricted" and the app will be killed mid-session even though `IsIgnoringBatteryOptimizations()` returns true. This was previously undetectable from JS.
+
+**Resolution.** New `IsBackgroundRestricted()` plugin method that wraps `ActivityManager.isBackgroundRestricted()` (API 28+, returns `false` on older Android because the signal didn't exist). [`PAGES['checkbatteryopt']`](www/app/pages.js) now probes this first; if true, swaps the page copy to "L'activité en arrière-plan est restreinte" with explicit Settings path ("Paramètres → Applications → Flanerie → Batterie → Sans restriction") and the existing Settings deep-link button, then polls until cleared. If false (or pre-API 28), the existing Doze whitelist flow runs unchanged.
+
+Telemetry: `background_restricted` event with manufacturer / model / apiLevel.
+
+Files:
+- `FlanerieCordova/plugins/cordova-plugin-power-optimization/src/android/PowerOptimization.java` (new `IsBackgroundRestricted` action + method, `ActivityManager` import)
+- `FlanerieCordova/plugins/cordova-plugin-power-optimization/www/PowerOptimization.js` (new export)
+- `FlanerieCordova/plugins/cordova-plugin-power-optimization/plugin.xml` / `package.json` (version bump 0.0.3 → 0.1.0)
+- `www/app/pages.js` (split `checkbatteryopt` `check()` into a new `runDozeCheck()` helper, prepend `IsBackgroundRestricted` probe)
+- `www/app/app.html` (`#checkbatteryopt-restricted` paragraph element with Samsung-targeted copy)
+
+NOTE: this edit is in-place on `FlanerieCordova/plugins/cordova-plugin-power-optimization/` because no fork exists at `~/Bakery/cordova-plugin-power-optimization/` yet. The audiofocus pattern (`~/Bakery/cordova-plugin-audiofocus/` as the canonical source, mirrored into `FlanerieCordova/plugins/...` at install time) should be replicated for power-optimization in a follow-up cleanup — for now the deployed copy IS the source of truth.
+
+Regression risk: **LOW** — additive plugin method; JS gate only activates when the underlying API exists AND returns true.
+
+Acceptance:
+- Samsung A41 with "Restricted" set in Settings → `checkbatteryopt` shows the restricted copy + Settings button, polls until user changes to Unrestricted, then auto-advances.
+- Samsung A41 with "Optimized" or "Unrestricted" → existing Doze flow runs, no false restricted-state UI.
+- Android < 9 device → plugin returns `false`, page passes through to Doze flow as before.
+
+#### R5.3 Audiofocus plugin (iOS): interruption without ShouldResume ✅ DONE (2026-05-19) [SAFE-TODAY]
+
+Closes the **C6** backlog item. Pairs naturally with R5.1 since the same plugin rebuild deploys both.
+
+**Problem.** [`AudioFocus.m`](cordova-plugin-audiofocus/src/ios/AudioFocus.m) previously only reactivated AVAudioSession and emitted `AUDIOFOCUS_GAIN` when `AVAudioSessionInterruptionOptionShouldResume` was present on the interruption-end notification. Per Apple docs the option may be absent — typically after Siri, sometimes after a call, routinely after alarms/timers. When absent, the previous code did nothing: `pauseAllPlayers()` had already run on interruption-begin, the resume-overlay was hidden in the walker's pocket, and audio stayed paused forever.
+
+**Resolution.** In the `AVAudioSessionInterruptionTypeEnded` branch, always attempt `setActive:YES`. Then:
+
+- If `ShouldResume` is set AND activation succeeded → emit hard `AUDIOFOCUS_GAIN` (same as before).
+- Else if activation succeeded → emit new `AUDIOFOCUS_GAIN_AVAILABLE` event.
+- Else (`setActive` failed) → emit nothing; next user gesture (foreground) re-attempts via the document-resume safety retry.
+
+JS-side handling in [`player.js`](www/app/assets/player.js): new branch on `AUDIOFOCUS_GAIN_AVAILABLE` — for Flanerie's sole-app pocketed-walker use case, auto-resume IS the walker-correct behaviour (no other audio context to preserve). Uses a softer double-pulse vibration `[200, 100, 200]` to differentiate from a hard `AUDIOFOCUS_GAIN`. Also adds a `document.addEventListener('resume', ...)` safety retry: if foregrounding finds `AUDIOFOCUS === 0` with paused players, re-call `requestAudioFocus()` to catch the case where the JS layer was suspended during the interruption-end notification.
+
+Telemetry: `audiofocus_change` with state `AUDIOFOCUS_GAIN_AVAILABLE`; `audiofocus_resume_retry` when the document-resume retry path fires.
+
+Files:
+- `cordova-plugin-audiofocus/src/ios/AudioFocus.m` (`handleInterruption` rewritten; observer registration extracted to `registerInterruptionObserver`; iOS `startKeepalive`/`stopKeepalive` from R5.1 also live here)
+- `www/app/assets/player.js` (`onFocusChange` adds `AUDIOFOCUS_GAIN_AVAILABLE` branch; `document.resume` retry handler)
+
+Regression risk: **LOW** — fallback path only fires when the previous path would have silently failed. Conservative variant (vibrate + resume on iOS) chosen over the more aggressive variant (skip the new event, emit hard `GAIN` unconditionally) so the walker still gets a tactile signal that something happened.
+
+Acceptance:
+- iPhone: trigger Siri mid-walk, dismiss. Audio resumes within 1 s, soft double-pulse felt.
+- iPhone: foreground app after a system alarm. `AUDIOFOCUS_GAIN_AVAILABLE` reaches JS or, if not, `audiofocus_resume_retry` fires on `document.resume` and audio recovers.
+- Healthy walks with no interruptions: no new events surface.
+
+---
+
 ### C: Cordova container findings
 
 #### C1 Audiofocus plugin ✅ DONE (2026-05-05, follow-up 2026-05-06)
@@ -991,7 +1085,11 @@ No reproducible build checklist or smoke-test script. Add a minimal one (Android
 - `cordova-plugin-media` — install variable `KEEP_AVAUDIOSESSION_ALWAYS_ACTIVE` changed `NO` → `YES` (2026-05-13, P1.11b). Variable is read at plugin install time only; existing builds keep the old value. Required step on next build: `cordova plugin remove cordova-plugin-media && cordova plugin add cordova-plugin-media@7.0.0` OR `cordova platform remove ios && cordova platform add ios`.
 - After build: verify `platforms/ios/App/config.xml` contains `<preference name="KeepAVAudioSessionAlwaysActive" value="YES" />` (lowercased key `keepavaudiosessionalwaysactive` is what `CDVSound.m:38` actually reads).
 
-#### C5 Deferred plugin fork — power optimization [open, scheduled next session]
+#### C5 Deferred plugin fork — power optimization [PARTIAL — `IsBackgroundRestricted` shipped 2026-05-19 as R5.2; rest open]
+
+**2026-05-19 update:** the `IsBackgroundRestricted()` sub-item — the single biggest missing signal called out below — shipped under [R5.2](#r52-power-optimization-plugin-isbackgroundrestricted-detection--done-2026-05-19-safe-today). The plugin method, JS wrapper, and `checkbatteryopt` hard-block gate are all in place. The remaining items below (standby bucket, hibernation whitelist, OEM intent table expansion, `RequestOptimizationsMenu` conditional fix) stay open for a follow-up session. The fork directory at `~/Bakery/cordova-plugin-power-optimization/` still doesn't exist — R5.2 was applied in-place on the deployed copy; promote to a proper fork as part of the next round.
+
+
 
 **Status:** scoped 2026-05-13, deferred (cannot republish the app this session). The JS-only fixes for known bugs and manufacturer-tailored copy are already shipped under P1.12 — this entry covers what requires forking `cordova-plugin-power-optimization` (currently `github:snt1017/cordova-plugin-power-optimization`) and adding native code.
 
@@ -1062,7 +1160,13 @@ Current coverage: Xiaomi (1 partial), Samsung (4 intents all pre-Android 10), Hu
 
 **Regression risk after fork:** **MEDIUM** — hard-blocking on `isBackgroundRestricted` will catch real users whose phones are misconfigured; need a clear escape path (Settings deep link + retry) and field validation on a Samsung device known to background-restrict by default.
 
-#### C6 Deferred audiofocus plugin fork extension — iOS interruption without ShouldResume [open, scheduled next session]
+#### C6 Audiofocus plugin (iOS): interruption without ShouldResume ✅ DONE (2026-05-19 as [R5.3](#r53-audiofocus-plugin-ios-interruption-without-shouldresume--done-2026-05-19-safe-today))
+
+Closed. The conservative variant from the original C6 plan (`AUDIOFOCUS_GAIN_AVAILABLE` + JS-side auto-resume with soft vibration + `document.resume` safety retry) shipped under R5.3. The aggressive variant (emit hard `AUDIOFOCUS_GAIN` unconditionally) was not chosen — the soft signal gives the walker tactile feedback that the system did something, without lying about ShouldResume.
+
+Original problem statement and plan retained below for context.
+
+
 
 **Status:** scoped 2026-05-13, deferred (requires native iOS code change in the audiofocus fork; cannot republish this session). Surfaced by the audio-stack review on the same date.
 
@@ -1142,6 +1246,37 @@ Regression risk: **LOW** — C7.1 is a pure try/catch wrap.
 ---
 
 ## Recommended Execution Sequence
+
+### Round 5 implementation (2026-05-19) — ✅ code complete, awaiting Samsung A41 build test
+
+Native plugin work targeting the 2026-05-18 Samsung SM-A415F (A41) BLOC_14→BLOC_15 OEM-kill repro. Requires a Cordova rebuild (Android + iOS) and plugin reinstall before deployment; a Play Store upgrade is the intended distribution path.
+
+- **R5.1** Audiofocus plugin keepalive — `mediaPlayback` foreground service stays alive for the duration of a parcours, not just while audio focus is held. The targeted fix for the Samsung A41 mid-walk kills.
+- **R5.2** Power Optimization plugin `IsBackgroundRestricted()` — closes the highest-impact subset of the C5 backlog. `checkbatteryopt` now hard-blocks when the user's app is explicitly background-restricted, with explicit Samsung Settings-path copy.
+- **R5.3** Audiofocus plugin (iOS) interruption-without-`ShouldResume` — closes the full C6 backlog item. Adds `AUDIOFOCUS_GAIN_AVAILABLE` event + JS auto-resume with `document.resume` safety retry.
+
+**Build steps required:**
+```bash
+# In FlanerieCordova/
+cordova plugin remove cordova-plugin-audiofocus
+cordova plugin add ~/Bakery/cordova-plugin-audiofocus
+cordova plugin remove cordova-plugin-power-optimization
+cordova plugin add ./plugins/cordova-plugin-power-optimization
+# (Or: cordova platform remove android ios && cordova platform add android ios)
+cordova build android
+cordova build ios
+```
+
+**Validation matrix (run before Play Store push):**
+- Samsung A41 (SM-A415F, Android 12) full 45-minute walk on the new build → no `session_resume` between BLOC_14 and BLOC_15. `audiofocus_keepalive_started` fires once, `audiofocus_keepalive_stopped` fires once.
+- Samsung A41 with "Background usage limits: Restricted" set in Settings → `checkbatteryopt` shows the new restricted-state UI and polls until cleared.
+- iPhone: trigger Siri mid-walk and dismiss → audio resumes within ~1 s with soft double-pulse, telemetry shows `audiofocus_change {state: 'AUDIOFOCUS_GAIN_AVAILABLE'}`.
+- Healthy walks on a non-restrictive device (Pixel, recent Samsung S/A5x) → no new events surface; baseline behaviour unchanged.
+
+Deferred from this round:
+- **R4.1** Android first-voice cold-load — still pending field validation of R4.4. Independent of Samsung A41 issue.
+- **R4.3 / P1.31** Doze GPS blackouts on Motorola / TCL — independent of Samsung A41 issue; the JS-side gap watchdog option remains the cheapest fix.
+- **Full C5 fork** (standby bucket, hibernation whitelist, OEM intent table expansion, `RequestOptimizationsMenu` conditional, proper `~/Bakery/cordova-plugin-power-optimization/` fork) — R5.2 took the urgent subset only.
 
 ### Round 4 implementation (2026-05-18) — ✅ code complete, awaiting next field test
 

@@ -118,6 +118,17 @@ PAGES_CLEANUP['parcours']           = () => {
     // Detach the parcours-page PARCOURS handlers so a re-entry doesn't stack them.
     PARCOURS_PAGE_HANDLERS.forEach(h => PARCOURS.off(h.event, h.fn));
     PARCOURS_PAGE_HANDLERS = [];
+    // Release the audiofocus mediaPlayback keepalive — leaving the parcours
+    // page (end or page-switch) means no more sustained audio is expected,
+    // and a lingering foreground service after walk end is exactly the kind
+    // of "battery hog" signal we don't want to give the OEM next session.
+    if (typeof cordova !== 'undefined' && cordova.plugins && cordova.plugins.audiofocus &&
+        typeof cordova.plugins.audiofocus.stopKeepalive === 'function') {
+        cordova.plugins.audiofocus.stopKeepalive(
+            () => { if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audiofocus_keepalive_stopped', {}); },
+            (err) => { if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audiofocus_keepalive_error', {phase: 'stop', error: String(err)}); }
+        );
+    }
 };
 PAGES_CLEANUP['checknotifications'] = () => clearNotificationPermissionCheck();
 PAGES_CLEANUP['checkbatteryopt']    = () => clearBatteryOptCheck();
@@ -1396,6 +1407,47 @@ PAGES['checkbatteryopt'] = () => {
         BATTOPT_TIMER = null;
         if (currentPage !== 'checkbatteryopt') return;
 
+        // First gate: background restriction (API 28+ via C5). Hard-block if
+        // the user (or OEM policy) explicitly restricted the app's background
+        // activity — Doze whitelist alone won't save us; the kill happens
+        // anyway. Field test 2026-05-18 traced the Samsung A41 mid-walk kills
+        // to this exact layer. Plugin returns false on API < 28 (signal
+        // didn't exist) so older Android fast-paths through.
+        var bgRestrictedCheck = (typeof plugin.IsBackgroundRestricted === 'function')
+            ? plugin.IsBackgroundRestricted()
+            : Promise.resolve(false);
+
+        bgRestrictedCheck.then(isRestricted => {
+            if (currentPage !== 'checkbatteryopt') return;
+            if (isRestricted) {
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('background_restricted', {
+                    manufacturer: device.manufacturer, model: device.model, apiLevel,
+                });
+                // Swap to restricted copy + show Settings deep link. Keep polling
+                // so the page auto-advances when the user fixes it in Settings.
+                $('#checkbatteryopt-desc').hide();
+                $('#checkbatteryopt-restricted').show();
+                $('#checkbatteryopt-settings').show();
+                BATTOPT_TIMER = setTimeout(check, BATTOPT_POLL_MS);
+                return;
+            }
+            // Not restricted (or pre-API 28). Restore the normal copy if the
+            // restricted view was previously shown, then run the Doze
+            // whitelist flow as before.
+            $('#checkbatteryopt-restricted').hide();
+            $('#checkbatteryopt-desc').show();
+            runDozeCheck();
+        }).catch(error => {
+            // Probe itself failed — don't hold the user up; fall through to
+            // the Doze check (existing behaviour for API < 28 or plugin error).
+            console.warn('[BATTOPT] IsBackgroundRestricted probe failed:', error);
+            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('background_restricted', { error: String(error) });
+            runDozeCheck();
+        });
+    }
+
+    function runDozeCheck() {
+        if (currentPage !== 'checkbatteryopt') return;
         plugin.IsIgnoringBatteryOptimizations()
             .then(isIgnoring => {
                 if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('battery_opt', { ignoring: isIgnoring, manufacturer: device.manufacturer, family, apiLevel });
@@ -1625,6 +1677,23 @@ PAGES['parcours'] = () => {
 
     SILENT_PLAYER.play(); // Play silent track to keep audio session alive
     scheduleWakeupNotification();
+
+    // Hold the audiofocus plugin's mediaPlayback foreground service ACTIVE
+    // for the duration of the walk, not just while audio focus is held.
+    // Field test 2026-05-18: Samsung A41 (Android 12) consistently killed the
+    // process during silent gaps (background loading of the next step's audio
+    // while the current voice was playing). The FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+    // flag is the documented Android signal for "this process is doing user-
+    // visible media work — do not kill"; keeping it asserted continuously
+    // closes the kill window. iOS path is defensive (setActive:YES + ensures
+    // the interruption observer is registered ahead of the first play).
+    if (typeof cordova !== 'undefined' && cordova.plugins && cordova.plugins.audiofocus &&
+        typeof cordova.plugins.audiofocus.startKeepalive === 'function') {
+        cordova.plugins.audiofocus.startKeepalive(
+            () => { if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audiofocus_keepalive_started', {}); },
+            (err) => { if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audiofocus_keepalive_error', {phase: 'start', error: String(err)}); }
+        );
+    }
     
     if (testplayer) {
         testplayer.stop();
