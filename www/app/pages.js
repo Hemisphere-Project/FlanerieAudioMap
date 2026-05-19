@@ -1212,7 +1212,8 @@ PAGES['checkmotion'] = () => {
             $('#checkmotion-desc').html(
                 "Flanerie a besoin du capteur de mouvement pour détecter vos pauses pendant la marche.<br /><br />" +
                 "Sans cette autorisation, des fausses alertes \"GPS perdu\" se déclencheront en poche.<br /><br />" +
-                "Réglages > Flanerie > <u>Mouvement et forme</u>"
+                "Ouvrez les Réglages, puis activez <u>Mouvement et fitness</u> pour Flanerie :<br />" +
+                "<b>Réglages &gt; Apps &gt; Flanerie &gt; Mouvement et fitness</b>"
             );
             $('#checkmotion-settings').show();
             $('#checkmotion-retry').show();

@@ -673,11 +673,19 @@ class GeoLoc extends EventEmitter {
     // showAppSettings()
     showAppSettings() {
         let bgGeo = getBackgroundGeolocationPlugin()
-        if (!bgGeo) {
-            console.warn('BackgroundGeolocation is not defined');
+        if (bgGeo) {
+            bgGeo.showAppSettings();
             return;
         }
-        bgGeo.showAppSettings();
+        // Fallback: call native method directly via Cordova bridge if the plugin
+        // global is unreachable (can happen if document.write() was used to load
+        // the app HTML without re-running cordova.js).
+        if (typeof cordova !== 'undefined' && cordova.exec) {
+            console.warn('BackgroundGeolocation global missing — calling showAppSettings via cordova.exec');
+            cordova.exec(null, null, 'BackgroundGeolocation', 'showAppSettings', []);
+            return;
+        }
+        console.warn('BackgroundGeolocation is not defined and cordova.exec unavailable');
     }
 
     // Check if geoloc is enabled
