@@ -7,7 +7,9 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node server.js",
-    "telemetry:report": "node scripts/telemetry-report.js"
+    "telemetry:report": "node scripts/telemetry-report.js",
+    "telemetry:analyze": "node telemetry/scripts/analyze.mjs",
+    "telemetry:session": "node telemetry/scripts/session.mjs"
   },
   "author": "",
   "license": "ISC",

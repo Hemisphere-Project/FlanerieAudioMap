@@ -633,6 +633,26 @@ class Parcours extends EventEmitter {
         return out;
     }
 
+    // The set of steps the walker may legitimately be standing in for LOST
+    // evaluation: reachableSteps() PLUS the current step even when its audio
+    // is done. A finished step keeps looping its afterplay, so lingering there
+    // is expected — LOST must not flag a walker who is correctly inside the
+    // zone they just heard. reachableSteps() itself stays done-strict, because
+    // the sequential fire-gate must still exclude done steps from re-firing.
+    lostReachableSteps() {
+        let reachable = this.reachableSteps();
+        // Empty means the parcours is finished (last step done) or has no
+        // steps — keep it empty so evaluateLostState bails and never enters
+        // LOST after the walk is over.
+        if (!reachable.length) return reachable;
+        let idx = this.state.stepIndex;
+        if (idx >= 0) {
+            let cur = this.find('steps', idx);
+            if (cur && !reachable.includes(cur)) reachable = [cur, ...reachable];
+        }
+        return reachable;
+    }
+
     // The single step the walker should aim for right now — the nearest of the
     // reachable set. Used by the LOST distance UI and the map marker painter.
     // Falls back to the first reachable step when there's no position fix yet.
@@ -653,12 +673,14 @@ class Parcours extends EventEmitter {
 
     // LOST evaluation.
     //   Entry: the walker has been further than LOST_ENTER_M from the NEAREST
-    //     reachable step (see reachableSteps()) for a sustained LOST_SUSTAIN_MS.
-    //     Measuring against the nearest reachable step means heading toward a
-    //     step past an optional one is not wrongly flagged.
-    //   Exit: the walker is back INSIDE any reachable step — they've caught up.
-    //     update() then resumes and Step.updatePosition's own branches resume
-    //     the active step or fire the step they walked into.
+    //     step in lostReachableSteps() for a sustained LOST_SUSTAIN_MS.
+    //     Measuring against the nearest of that set means heading toward a
+    //     step past an optional one is not wrongly flagged; including the
+    //     current step even when done means a walker lingering in a finished
+    //     step's looping afterplay is not flagged either.
+    //   Exit: the walker is back INSIDE any step of that set — they've caught
+    //     up. The 'recover' handler in pages.js resumes the active step's
+    //     audio; Step.updatePosition fires the step they walked into.
     // Emits 'lost' on entry and 'recover' on exit — UI/audio handlers in
     // pages.js react. The stationary gate and the GPSSIGNAL_OK gate filter
     // pocketed pauses and GPS-signal-loss windows.
@@ -671,7 +693,7 @@ class Parcours extends EventEmitter {
 
         if (this.state.stepIndex < 0) return; // not started — rdv page handles distance UX
 
-        let reachable = this.reachableSteps();
+        let reachable = this.lostReachableSteps();
         if (!reachable.length) return; // last step done or no parcours
 
         if (this.state.lost) {

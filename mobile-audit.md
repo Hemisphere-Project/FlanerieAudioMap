@@ -1,7 +1,9 @@
 # Mobile Audit Remediation Plan
 
 Original: 2026-04-27  
-Last updated: 2026-05-19 (Round 6 — `checkbatteryopt` silent-bypass root-cause fix R6.1: `device.version` is OS version string not API level, `apiLevel < 23` was always true, page has bypassed itself on every device since introduction; `IsPowerSaveMode` hard block R6.2: power save now Gate 0 in `check()`, walker cannot proceed while battery saver is on; diagnostic telemetry R6.3: `session_diag` + `power_state_at_parcours` logged at parcours entry)
+Last updated: 2026-05-20 (Round 7 — field test 2026-05-20 telemetry batch, FLANERIE_GIVORS, ~39 visitor walks: iOS 26.3.x background-GPS blackout P1.34, iOS step-narration playerror R7.1, recovery-map auto-open regression R7.2, iOS audiofocus-request-fail flood R7.3. New reusable analysis tooling in `telemetry/scripts/` R7.0)  
+Previous: 2026-05-20 (P1.33 — Android GPS cold-start: `RawLocationProvider` also requests `NETWORK_PROVIDER` + delivers last-known-network fix immediately on start)  
+Previous: 2026-05-19 (Round 6 — `checkbatteryopt` silent-bypass root-cause fix R6.1: `device.version` is OS version string not API level, `apiLevel < 23` was always true, page has bypassed itself on every device since introduction; `IsPowerSaveMode` hard block R6.2: power save now Gate 0 in `check()`, walker cannot proceed while battery saver is on; diagnostic telemetry R6.3: `session_diag` + `power_state_at_parcours` logged at parcours entry)
 Previous: 2026-05-19 (Round 5 — native plugin work targeting Samsung A41 BLOC_14→BLOC_15 OEM-kill repro from 2026-05-18 colleague report: audiofocus mediaPlayback foreground service keepalive R5.1, power-optimization `IsBackgroundRestricted()` detection R5.2 closing the urgent subset of C5, audiofocus iOS interruption-without-ShouldResume R5.3 closing the full C6 backlog. Requires plugin reinstall + APK rebuild + Play Store upgrade)  
 Previous: 2026-05-18 (Round 4 telemetry batch — 22 sessions across 8 devices on FLANERIE_GIVORS_V7_CBR: parcours_restore lifecycle fix R4.2, audio_play_timeout truth check + retry R4.4, voice_snapshot truth-check fields R4.5, gps_callback_gap threshold tuning R4.6, step_afterplay_fallback / step_voice_failed step-name enrichment R4.7, user_recovered distance clamp R4.8, voice_snapshot_skipped throttling R4.9. Two field-test items deferred to dedicated outings: Android first-voice cold-load hang R4.1 and Android Doze GPS blackouts R4.3 / P1.31)  
 Previous: 2026-05-18 (Round 3 — field test 2026-05-15 on FRAPPAZ_V10-modif_monnot, 13 sessions across 9 devices: off-route popup title fix P1.30, voice-snapshot lifecycle telemetry P3.5b, Android Doze GPS blackout flagged P1.31, fresh-parcours any-step entry confirmed accepted, iPhone 8 first-install network sensitivity P1.32 — demoted to LOW after the 4G-tether vs domestic-WiFi finding)  
@@ -731,6 +733,8 @@ Not fixed in this round. Options to consider:
 
 Probably needs a dedicated field-test session on the specific moto g(7) power + TCL T433D devices before committing to a fix path.
 
+**2026-05-20 update:** the same blackout pattern is now confirmed on **iOS** — see **P1.34**. Today's fleet didn't include the moto g(7) power / TCL T433D so P1.31 itself didn't reproduce, but the iOS finding makes option 4 (JS-side callback-gap watchdog) the most promising path: a watchdog that distinguishes real GPS callbacks from keepalive ticks would cover both platforms at once.
+
 Files (when picked up): `www/app/assets/geoloc.js`, possibly `cordova-background-geolocation-plugin/`
 
 #### P1.31b Fresh-parcours any-step entry — ACCEPTED BEHAVIOR (2026-05-18)
@@ -804,6 +808,47 @@ So the symptom is correct: "first install on this phone, cannot reach server, ca
 - **Operational** — recommend "first install on legacy iOS = real WiFi, not 4G tether" in the loaner-phone setup doc. Costs nothing, eliminates the symptom for this device class.
 
 Files (when picked up): `FlanerieCordova/www/launcher.js`, `FlanerieCordova/www/apputils.js`, `FlanerieCordova/www/index.html`, possibly `FlanerieCordova/package.json`
+
+#### P1.33 Android GPS cold-start TTFF — 2–5 min warmup on `RAW_PROVIDER` [TEST-FIRST]
+
+**Problem.** On devices where GPS has not been used recently, the first usable position can take 2–5 minutes to appear. Two compounding causes:
+
+1. **`RawLocationProvider` uses `GPS_PROVIDER` exclusively on SDK > 30.** ([RawLocationProvider.java:95–110](../cordova-background-geolocation-plugin/android/common/src/main/java/com/marianhello/bgloc/provider/RawLocationProvider.java#L95-L110)). Raw GPS cold-start TTFF without network-assisted data (A-GPS from Google Play Services' `FusedLocationProvider`) is typically 2–5 min. Network / WiFi location — which is near-instant — is never requested.
+
+2. **JS accuracy gate rejects all warmup fixes.** ([geoloc.js:492](www/app/assets/geoloc.js#L492)). During warmup GPS typically reports accuracy 100–500 m. Any fix with `accuracy > 30` is silently discarded for trigger purposes. Combined with cause 1, the walker sees no position for the full cold-start window.
+
+The keepalive in `RawLocationProvider` ([line 119](../cordova-background-geolocation-plugin/android/common/src/main/java/com/marianhello/bgloc/provider/RawLocationProvider.java#L119)) calls `getLastKnownLocation(GPS_PROVIDER)` which returns `null` on a cold start, so it provides no relief.
+
+**Fix — `RawLocationProvider.onStart()`: also request `NETWORK_PROVIDER` and deliver the last known network fix immediately.**
+
+In `onStart()`, after the existing GPS request:
+
+```java
+// existing GPS request
+locationManager.requestLocationUpdates(provider, mConfig.getInterval(), mConfig.getDistanceFilter(), this);
+
+// NEW: also listen to network for fast initial fix while GPS warms up
+if (locationManager.getAllProviders().contains(LocationManager.NETWORK_PROVIDER)) {
+    locationManager.requestLocationUpdates(LocationManager.NETWORK_PROVIDER,
+        mConfig.getInterval(), mConfig.getDistanceFilter(), this);
+    Location networkCached = locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
+    if (networkCached != null &&
+            (System.currentTimeMillis() - networkCached.getTime()) < 60_000) {
+        handleLocation(networkCached); // instant coarse fix while GPS warms up
+    }
+}
+```
+
+In `onStop()`, add a matching `removeUpdates` for `NETWORK_PROVIDER`.
+
+The `onLocationChanged` callback already handles any provider — network fixes will arrive with accuracy ~50–200 m and pass through the plugin pipeline. The JS-side 30 m accuracy gate will still reject them for step triggering, but `lastPosition` and `lastTimeUpdate` are updated so the map shows the user's location and GPS-lost does not fire. Once GPS acquires a better fix, it naturally takes over since GPS accuracy will be ≤ 30 m.
+
+**Files to modify:**
+- `cordova-background-geolocation-plugin/android/common/src/main/java/com/marianhello/bgloc/provider/RawLocationProvider.java` — `onStart()` and `onStop()`
+
+**Estimated effort:** ~1 hour including rebuild and APK test.
+
+**Regression risk:** LOW. The change only adds a second provider during warmup; GPS behaviour is untouched. Network locations are already handled by `onLocationChanged` which routes through the same `handleLocation` path as GPS. The only new failure mode is a `SecurityException` if `NETWORK_PROVIDER` is unavailable — guarded by `getAllProviders().contains()` check. Requires APK rebuild and a field test on a cold-GPS Android device to confirm sub-30-second first fix.
 
 #### Field-test items that turned out NOT to be bugs
 
@@ -1184,6 +1229,85 @@ Confirmed on Unihertz Jelly Star (Android 13) after deploying R6.1 + R6.2 + R6.3
 
 ---
 
+### Round 7 (Field test 2026-05-20 — FLANERIE_GIVORS)
+
+Field test 2026-05-20 on FLANERIE_GIVORS (`flanerie_givors_v7_cbr`, 17 steps). **~39 genuine visitor walks** in a single morning wave (08:57–10:50): ~30 completed, 8 finished incomplete, 3 aborted at startup. Pre-08:57 sessions were staff tests; the SM-A515F spare phone produced ~26 short re-arm sessions between handoffs; the afternoon was operator phone-checks only. Two webapp builds were live (`fdf504c8…` early, `2f77776e…` after ~09:19).
+
+**Headline: every Android walk that started, completed, with continuous GPS. Every incomplete or degraded walk was an iPhone.** The day splits into two distinct iOS failure modes (P1.34 GPS, R7.1 audio) plus a parcours-specific UX regression (R7.2).
+
+#### R7.0 Reusable telemetry analysis tooling ✅ DONE (2026-05-20) [SAFE-TODAY]
+
+`telemetry/scripts/analyze.mjs` (day/fleet report) and `session.mjs` (single-session drill-down), sharing `common.mjs` — plain Node ESM, no deps. Wired as `npm run telemetry:analyze` / `telemetry:session`. `analyze` produces the completion table, device-reuse map, GPS-blackout scan, anomaly flags and build-version split; `--cutoff=HHMM` buckets pre-opening tests and `--operator=SM-A515F` buckets the spare phone out of visitor stats. `session` prints the step timeline, GPS gaps, route progression and an audio-error breakdown that separates harmless placeholder jingles from real step-voice failures. A companion Claude Code skill (`.claude/skills/telemetry-analysis/`) records the workflow and the field-day conventions (local-time filenames, the SM-A515F spare phone, phone reuse). Complements the older `scripts/telemetry-report.js` flat table.
+
+Files: `telemetry/scripts/{analyze,session,common}.mjs`, `telemetry/scripts/README.md`, `package.json`, `.claude/skills/telemetry-analysis/SKILL.md`.
+
+#### P1.34 iOS background-GPS blackout on locked devices [RESEARCH-FIRST] NEW
+
+The iOS counterpart of the Android Doze blackout (P1.31). Three of three **iOS 26.3.1** devices froze GPS callbacks for multi-minute windows mid-walk while pocketed:
+
+| Session | Device | iOS | GPS gaps (>90 s) | Effect |
+|---|---|---|---|---|
+| `51nv` | iPhone 16 (`iPhone17,5`) | 26.3.1 | 158 s, 343 s, **835 s**, 196 s | route jumped step 8→13; ~5 blocs silent |
+| `ibk6` | iPhone SE3 (`iPhone14,5`) | 26.3.1 | 153 s, **540 s**, 219 s, 339 s | route jumped 2→7 and 12→15 |
+| `mq3z` | `iPhone14,5` | 26.3.1 | **459 s**, 448 s | only 4 steps fired in 24 min |
+
+During each gap the walker kept walking but no `gps` callback arrived, so no `step_fire` — the route engine froze, then on the next real fix jumped several steps and burst-fired `step_done` + `step_skip_done`. The walker hears **silence across 4–5 blocs** with no signal that anything is wrong.
+
+The same `iPhone14,5` hardware was clean on iOS 18.5 (`4rma`) and blacked out on 26.3.1 (`ibk6`). iOS 26.4.2 devices had mostly clean in-walk GPS (`4zq0`, `c7qo` completed contiguous); iOS 18.x clean; **all 21 Android walks clean**. This isolates the regression to **iOS 26.3.x background location** — possibly already addressed by Apple in 26.4 (small sample; needs confirmation).
+
+**Why the walker gets no warning.** The v2.4.0 NSTimer keepalive (P0.5 Fix 1b) re-delivers the *last known* position every 15 s. That refreshes `lastTimeUpdate`, so the 30 s GPS-lost timeout (P1.5c) never expires — no `#gpslost-overlay`, no vibration. The keepalive successfully hides the blackout from the lost-detector but does nothing to advance the route: a stale fix is not a new fix. The walk stalls silently.
+
+Not fixed in this round. Options:
+1. **Distinguish stale-keepalive ticks from real fixes in the GPS-lost logic** (the JS-side watchdog from P1.31 option 4, now cross-platform). Track real-callback freshness separately from keepalive ticks; a multi-minute real-callback gap during non-STILL motion would surface the existing `#gpslost-overlay` ("Téléphone en veille — déverrouillez pour continuer"). Cheapest, covers Android Doze (P1.31) and iOS 26.3.x in one fix.
+2. Native investigation in the BG-geolocation fork — whether `allowsBackgroundTimeExtension`, significant-location-changes, or a `CLLocationManager` reconfigure can keep callbacks alive on iOS 26.3.x. Pairs with the P0.5 Fix 3/4 backlog.
+3. Operationally, if iOS 26.3.x can't be fixed before a show: advise those visitors to keep the screen awake, or hand them an Android loaner.
+
+Needs a dedicated iOS field test, ideally a 26.3.1 and a 26.4.x device side by side, to confirm the OS-version split before committing to a native fix.
+
+Files (when picked up): `www/app/assets/geoloc.js`, `www/app/pages.js`, possibly `cordova-background-geolocation-plugin/`.
+
+#### R7.1 iOS step-narration playback errors [TEST-FIRST]
+
+Distinct from P1.34 — real audio failures, not GPS. Three iOS sessions threw repeated `audio_playerror` on actual `BLOC_*` narration files (not the known-harmless `resume/afterplay/youlost.mp3` placeholder jingles, Round 3 #2):
+
+- `rumx` (`iPhone14,5`, iOS 26.4.2) — 27 step-voice `audio_playerror`, `step_voice_failed` on BLOC_15 + BLOC_16, 3 mid-walk relaunches.
+- `vigi` (`iPhone14,7`, iOS 26.4.2) — 21 step-voice `audio_playerror`, `step_voice_failed` on BLOC_14/15/16.
+- `mq3z` (`iPhone14,5`, iOS 26.3.1) — 5 step-voice `audio_playerror`, `step_voice_failed` on BLOC_02/03.
+
+`step_voice_failed` short-circuits the step to `startAfterplay()` (P1.19) — but every GIVORS step ships `afterplay.src = "-"` (see R7.2), so the fallback is silent: the walker gets a **dead bloc**, no narration at all. The pattern spans iOS 26.3.1 and 26.4.2, so it is not the same OS-version signature as P1.34.
+
+Next step: the `audio_playerror` payload serialises the Cordova Media error as `"[object Object]"` (already flagged Round 3 #2). Tightening it to surface the underlying error code is now worth doing — without it the root cause (decode failure? audio-session deactivation? file truncated in the media pack?) can't be distinguished. SAFE-TODAY telemetry tightening, then re-test before attempting a fix.
+
+Files: `www/app/assets/player.js` (error serialisation).
+
+#### R7.2 Recovery map auto-opens on every default-afterplay step ✅ FIX IDENTIFIED [TEST-FIRST]
+
+`map_opened` fired with `source: default_afterplay` ~120 times across the day — the dominant cause of mid-walk map openings (vs `manual` ~80, `lost` 9). Root cause: every FLANERIE_GIVORS step has `afterplay.src = "-"` (no per-step afterplay, by content design), so `step_afterplay_fallback` (~150 events, **all** `reason: no_src`) is the *normal* path for this parcours, not an exception. P1.29 wired `DEFAULT_AFTERPLAY_PLAYER.on('play') → openMapForRecovery({source:'default_afterplay'})` on the assumption that reaching the default afterplay means the step's real afterplay failed. For a parcours that ships no per-step afterplay at all, that assumption is wrong: the recovery map pops open unprompted at every stationary listening spot, ~2–3× per walk.
+
+Fix: gate the map-open on the *reason*. P1.29 should call `openMapForRecovery` only when the default afterplay is a genuine fallback from a **broken** step afterplay (`reason: loaderror`), not when the step simply never had one (`reason: no_src`). `PlayerStep._needsDefaultAfterplay()` already distinguishes the two cases — expose the reason to the `play` handler and skip the map-open for `no_src`. `step_afterplay_fallback` telemetry is unaffected.
+
+Files: `www/app/pages.js` (`DEFAULT_AFTERPLAY_PLAYER.on('play')` handler), `www/app/assets/player.js` (`_needsDefaultAfterplay` reason exposure).
+
+Regression risk: **LOW** — narrows an existing trigger; the `loaderror` case (real failure) still opens the recovery map.
+
+#### R7.3 iOS audiofocus_request_fail flood [RESEARCH-FIRST]
+
+`audiofocus_request_fail` fired **~4,900 times on iOS** vs 52 on Android. Concentrated on `4zq0` (1,545) and `c7qo` (1,446) — ~97 % of audio-focus requests failing on those two sessions. Both still completed the walk, so it is not a confirmed walk-breaker, but it shows the iOS keepalive / zone / offlimit players repeatedly failing to acquire audio focus in the background. Android requests succeed normally (`892p`: 275 ok / 14 fail). Per-session counts vary wildly on identical hardware (`iPhone14,2`: `6epi` 80 fails, `4zq0` 1,545), so it is session-state-dependent, not a clean device or OS split. Worth a `player.js` review of whether iOS should request audio focus per-play at all for the silent keepalive player — the request is plausibly redundant there. Diagnostic only this round.
+
+Files (when picked up): `www/app/assets/player.js`, `cordova-plugin-audiofocus/`.
+
+#### R7.4 Android observations — no action
+
+- **Resume churn:** `f743` (Samsung A15) relaunched **7×** mid-walk; `wjfo` / `mqgf` 4× each. The Round 4 resume machinery (`step_refire_current`, `parcours_restore`) recovered every one — all completed with contiguous steps. No fix needed; the resume path works as designed, but A1x-class devices remain crash-prone.
+- **Aborted starts:** `f6x2`, `vsrc`, `ufax` died at step 0 within 3 min; `vsrc` / `5eb0` showed `audio_play_stuck` + `audio_play_timeout` at launch (R4.1 / R4.4 territory). `5eb0` was reinited and the retry (`9qf4`) completed cleanly — reinit remains an effective operator recovery.
+- No Android GPS gaps over 120 s on any of the 21 Android walks. P1.31 (Doze blackout) did not reproduce; the fleet didn't include the moto g(7) power / TCL T433D.
+
+#### R7.5 Telemetry-loss caveat
+
+`ffqz` (Xiaomi `2201117TY`) flushed only 716 events in 42 min — the telemetry beacon never drained (offline, no flush-on-reconnect). The route shows completion but the session is not assessable. A buffered-telemetry flush-on-reconnect would close this blind spot (relates to the C7 server-resilience backlog); deferred.
+
+---
+
 ### C: Cordova container findings
 
 #### C1 Audiofocus plugin ✅ DONE (2026-05-05, follow-up 2026-05-06)
@@ -1494,6 +1618,7 @@ All four batches implemented in one session. JS syntax-checked; no behavioural f
 
 ### Next implementation session (cannot republish this session)
 
+- **P1.33** Android GPS cold-start warmup — add `NETWORK_PROVIDER` request + last-known-network fix delivery in `RawLocationProvider.onStart()`. Requires plugin rebuild + APK. Est. ~1 hour.
 - **P1.31** Android Doze GPS blackout response — pick a fix path after the dedicated Motorola/TCL test session (operational doc, OEM-class detector + tighter location config, BG plugin reconfig, or JS-side stale-callback watchdog with UI escalation)
 - **Launcher-level telemetry beacon** (extracted from P1.32, option C) — send a `navigator.sendBeacon` from `launcher.js` right before `app_run()` with `cordova.platformId`, `device.version`, `device.model`, last fetchRemote/update error, and the `app_check_version` outcome. Pair with P1.32 option A (re-enable launcher's commented `.catch` so the error appears in the visible launcher state). Without this, any launcher-side failure is silent because the webapp's TELEMETRY hasn't started yet. SAFE-TODAY, half a day. Standalone value — picks up future launcher regressions on any device, not just iPhone 8.
 - **C5 Power optimization plugin fork** — `isBackgroundRestricted` hard-block, `isPowerSaveMode` soft warn, standby bucket telemetry, modern OEM intent table, fix `RequestOptimizationsMenu` inverted conditional. Unlocks the hard-block path for manufacturer-tailored copy already shipped in P1.12. Est. half a day.

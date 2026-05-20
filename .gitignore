@@ -2,9 +2,8 @@ certs/
 media/
 parcours/
 _tmp/
-telemetry/
+telemetry/*.json
 guest_password.json
-.claude/*
 *.code-workspace
 
 # Logs

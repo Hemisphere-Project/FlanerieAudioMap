@@ -1,0 +1,141 @@
+#!/usr/bin/env node
+// session.mjs — deep drill-down on a single telemetry session.
+//
+// Usage:
+//   node telemetry/scripts/session.mjs <session-id-fragment> [options]
+//
+// Examples:
+//   node telemetry/scripts/session.mjs 51nv
+//   node telemetry/scripts/session.mjs 20260520_091844_51nv --gap=60
+//
+// Options:
+//   --dir=PATH      Telemetry directory (default: SFTP mount, see common.mjs)
+//   --gap=SECONDS   GPS gap threshold to report (default 90)
+//   --types         Also print the full event-type histogram
+//
+// Prints: completion, step timeline, GPS gaps, route progression, audio-error
+// breakdown (jingle placeholders vs real step narration), and resume history —
+// the signals needed to tell a GPS blackout from an audio failure from a crash.
+
+import fs from 'fs';
+import path from 'path';
+import { DEFAULT_DIR, parseFileName, parseArgs, classifyAudioSrc,
+         gpsGaps, summarize, fmtDuration } from './common.mjs';
+
+const opts = parseArgs(process.argv.slice(2), { dir: DEFAULT_DIR, gap: '90' });
+const fragment = opts._[0];
+if (!fragment || opts.help || opts.h) {
+  console.log('Usage: node telemetry/scripts/session.mjs <session-id-fragment> [--dir=] [--gap=SECONDS] [--types]');
+  process.exit(fragment ? 0 : 1);
+}
+
+const matches = fs.readdirSync(opts.dir)
+  .filter(f => parseFileName(f) && f.includes(fragment));
+if (!matches.length) {
+  console.error(`No session file matches "${fragment}" in ${opts.dir}`);
+  process.exit(1);
+}
+if (matches.length > 1) {
+  console.error(`"${fragment}" matches ${matches.length} files — be more specific:`);
+  for (const f of matches) console.error('  ' + f);
+  process.exit(1);
+}
+
+const file = matches[0];
+const json = JSON.parse(fs.readFileSync(path.join(opts.dir, file), 'utf8'));
+const s = summarize({ file, meta: parseFileName(file), json });
+const ev = json.events || [];
+const t0 = ev.length ? ev[0].t : 0;
+const min = t => `${((t - t0) / 60000).toFixed(1)}min`;
+
+// --- header ----------------------------------------------------------------
+console.log(`# ${file}`);
+console.log(`  session    ${json.sessionId}`);
+console.log(`  parcours   ${json.parcoursName || '?'}  (${json.parcoursId || '?'})`);
+console.log(`  device     ${s.deviceModel}  ${s.manufacturer}  ${s.platform} ${s.osVersion}`);
+console.log(`  started    ${json.startTime}   (file local ${s.localClock})`);
+console.log(`  duration   ${fmtDuration(s.durationMs)}   events: ${s.eventCount}`);
+if (s.diag) {
+  console.log(`  build      apk=${s.diag.apk_version}  webapp=${String(s.diag.webapp_hash || '').slice(0, 12)}  devmode=${s.diag.devmode}`);
+}
+if (s.powerState) console.log(`  power      ${JSON.stringify(s.powerState)}`);
+
+// --- completion ------------------------------------------------------------
+console.log('\n## Completion');
+console.log(`  steps fired:  [${s.stepsFired.join(', ')}]${s.stepsContiguous ? '' : '   <- NON-CONTIGUOUS (steps skipped)'}`);
+console.log(`  steps done:   [${s.stepsDone.join(', ')}]`);
+console.log(`  max step:     ${s.maxStep ?? '-'}`);
+if (s.resumeStepIndex != null) {
+  console.log(`  resumed at:   step ${s.resumeStepIndex} (done=${s.resumeStepDone})  <- this session began as a resume`);
+}
+
+// --- step timeline ---------------------------------------------------------
+const stepTypes = new Set(['step_fire', 'step_done', 'step_skip_done',
+  'step_refire_current', 'step_resume_current', 'session_resume', 'session_restart']);
+console.log('\n## Step / resume timeline');
+for (const e of ev) {
+  if (!stepTypes.has(e.type)) continue;
+  const step = e.data && e.data.step;
+  console.log(`  ${min(e.t).padStart(8)}  ${e.type.padEnd(20)} ${step != null ? 'step ' + step : ''}`
+    + `${e.data && e.data.reason ? '  reason=' + e.data.reason : ''}`);
+}
+
+// --- GPS gaps + route progression ------------------------------------------
+const { fixCount, gaps } = gpsGaps(ev, Number(opts.gap) * 1000);
+console.log(`\n## GPS  (${fixCount} fixes, ${gaps.length} gap(s) >= ${opts.gap}s)`);
+for (const g of gaps) {
+  console.log(`  GAP ${String(Math.round(g.ms / 1000)).padStart(5)}s   ${min(g.fromT)} -> ${min(g.toT)}`);
+}
+console.log('  route progression (route_probe currentStep changes):');
+let last = null;
+for (const e of ev) {
+  if (e.type !== 'route_probe' || !e.data) continue;
+  if (e.data.currentStep !== last) {
+    console.log(`    step ${e.data.currentStep}  @${min(e.t)}`);
+    last = e.data.currentStep;
+  }
+}
+
+// --- audio errors ----------------------------------------------------------
+const audioErr = ev.filter(e => e.type === 'audio_playerror' || e.type === 'audio_loaderror');
+console.log(`\n## Audio errors  (${audioErr.length})`);
+console.log(`  by kind: jingle=${s.audioErrByKind.jingle} (placeholder assets, harmless)  `
+  + `step_voice=${s.audioErrByKind.step_voice} (REAL narration failures)  other=${s.audioErrByKind.other}`);
+const realErrSrcs = {};
+for (const e of audioErr) {
+  if (classifyAudioSrc(e.data && e.data.src) !== 'step_voice') continue;
+  const name = String(e.data.src).split('/').pop();
+  realErrSrcs[name] = (realErrSrcs[name] || 0) + 1;
+}
+for (const [name, n] of Object.entries(realErrSrcs)) console.log(`    x${n}  ${name}`);
+const voiceFail = ev.filter(e => e.type === 'step_voice_failed');
+if (voiceFail.length) {
+  console.log('  step_voice_failed:');
+  for (const e of voiceFail) {
+    console.log(`    step ${e.data && e.data.step}  reason=${e.data && e.data.reason}  ${String((e.data && e.data.src) || '').split('/').pop()}`);
+  }
+}
+
+// --- summary flags ---------------------------------------------------------
+console.log('\n## Other signals');
+console.log(`  resumes=${s.resumes}  restarts=${s.restarts}  `
+  + `audioTimeout=${s.audioTimeout}  audioStuck=${s.audioStuck}`);
+console.log(`  afterplayFallback=${s.afterplayFallback} (no_src=${s.afterplayFallbackNoSrc})  `
+  + `userLost=${s.userLost}/rec=${s.userRecovered}`);
+console.log(`  audiofocus: requestFail=${s.audiofocusRequestFail} requestOk=${s.audiofocusRequestOk} loss=${s.audiofocusLoss}`);
+console.log(`  map_opened sources: ${JSON.stringify(countBy(s.mapOpened))}`);
+console.log(`  gps: triggerRejected=${s.gpsTriggerRejected} stale=${s.gpsStale} `
+  + `sleepSuspect=${s.gpsSleepSuspect} revoked=${s.gpsRevoked}  avgAcc=${s.gpsAvgAcc ? s.gpsAvgAcc.toFixed(1) : '-'}`);
+
+if (opts.types) {
+  console.log('\n## Event-type histogram');
+  for (const [t, n] of Object.entries(s.types).sort((a, b) => b[1] - a[1])) {
+    console.log(`  ${t.padEnd(30)} ${n}`);
+  }
+}
+
+function countBy(arr) {
+  const o = {};
+  for (const x of arr) o[x] = (o[x] || 0) + 1;
+  return o;
+}

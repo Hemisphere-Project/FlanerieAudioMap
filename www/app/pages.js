@@ -2399,8 +2399,20 @@ PARCOURS.on('recover', (info) => {
 
     clearLostUI();
 
-    // Active-step resume + next-step fire are handled by Step.updatePosition's
-    // own branches on the next position tick (the LOST gate is now off).
+    // Resume the audio that on('lost') paused. Step.updatePosition runs again
+    // later in this same update() pass, but it early-returns for a _done step
+    // (afterplay phase, spot.js) and never reaches its resume branch — so a
+    // walker who caught up standing inside a finished step's looping afterplay
+    // would otherwise stay silent. Resume the active step directly here when
+    // the walker recovered INTO it (info.target is that same step). If they
+    // caught up by reaching a later step instead, leave it: Step.updatePosition
+    // fires that step. resume() is a no-op once the player is already playing.
+    let recoveredInto = info && info.target;
+    let activeStep = PARCOURS.find('steps', PARCOURS.currentStep());
+    if (activeStep && recoveredInto === activeStep &&
+        activeStep.player && activeStep.player.isPaused()) {
+        activeStep.player.resume();
+    }
 });
 
 // GPS LOST
