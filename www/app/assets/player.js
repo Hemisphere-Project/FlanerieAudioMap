@@ -1111,19 +1111,22 @@ class PlayerStep extends EventEmitter
         this.state = 'afterplay'
 
         if (this._needsDefaultAfterplay()) {
-            this._defaultAfterplayActive = true
-            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('step_afterplay_fallback', {
-                reason: this.afterplay._loadError ? 'loaderror' : 'no_src',
-                step: this._step ? this._step._index : null,
-                step_name: this._step && this._step._spot ? this._step._spot.name : null,
-            })
-            if (typeof DEFAULT_AFTERPLAY_PLAYER !== 'undefined' && DEFAULT_AFTERPLAY_PLAYER) {
-                // Stop first — the singleton is shared, so another step may
-                // still be fading it out from its own teardown.
-                DEFAULT_AFTERPLAY_PLAYER.stop()
-                if (DEFAULT_AFTERPLAY_PLAYER.isLoaded()) DEFAULT_AFTERPLAY_PLAYER.play()
-                // If isLoaded() is false the bundled afterplay.mp3 is missing —
-                // stay silent rather than retry or surface an error.
+            let isLastStep = this._step && allSteps.length > 0 && !allSteps.some(s => s._index > this._step._index)
+            if (!isLastStep) {
+                this._defaultAfterplayActive = true
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('step_afterplay_fallback', {
+                    reason: this.afterplay._loadError ? 'loaderror' : 'no_src',
+                    step: this._step ? this._step._index : null,
+                    step_name: this._step && this._step._spot ? this._step._spot.name : null,
+                })
+                if (typeof DEFAULT_AFTERPLAY_PLAYER !== 'undefined' && DEFAULT_AFTERPLAY_PLAYER) {
+                    // Stop first — the singleton is shared, so another step may
+                    // still be fading it out from its own teardown.
+                    DEFAULT_AFTERPLAY_PLAYER.stop()
+                    if (DEFAULT_AFTERPLAY_PLAYER.isLoaded()) DEFAULT_AFTERPLAY_PLAYER.play()
+                    // If isLoaded() is false the bundled afterplay.mp3 is missing —
+                    // stay silent rather than retry or surface an error.
+                }
             }
         } else {
             this.afterplay.play()
