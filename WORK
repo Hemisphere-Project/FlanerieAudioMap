@@ -158,17 +158,11 @@ Couleur Current / Next zone
 
 REU 12 mai
 
-
-
-
 // TEST
 OK Out of zone: unload Area -> plus d'audio -> "GPS out" message et montrer la carte 
 
-
-
 // STARTED, to continue
 -> review NO AUDIO situations (lost too far, audio playback error, file end, ..., after crash but hors zone)
-
 -> first start (after install): freeze on splash screen 
 
 // NEEDS www/app/images/afterplay.mp3 
@@ -193,3 +187,25 @@ OK CBR / VBR / format check ! allow only MP3
 OK Audio test initial: is supposed to loop 
 OK Alert Restart : confirmer la re-init
 OK on Restart: check update / check media / reinit all
+
+
+***********************
+
+REU post Givors 22 mai
+
+- switch autre appli -> it kills
+- analyser la journée
+- check GPS jump 
+- GPS warmup
+
+- 4/5x post SAS -> pas de déclenchement de la première zone,
+nécessite de refaire le onboarding 
+
+- iphone 13: launcher freeze initial DL, 
+Thomas N. -> changement de réseau 
+Erwan -> kill all apps to solve
+
+- Téléphones de prêts => ceinture et bretelle 
+=> Options développeurs !
+
+- motion auth sur android necessaire ?
