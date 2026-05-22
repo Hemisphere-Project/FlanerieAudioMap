@@ -203,7 +203,103 @@ iOS 26.3.1 shows notably worse GPS continuity than 26.4.2. The 8–14min gaps on
 
 ---
 
-## 8. Priority issues
+## 8. Session classification
+
+### EXCLUDE — Noise / test / post-walk (45 sessions)
+
+| Sub-category | Sessions | Count |
+|---|---|---|
+| Pre-opening tests | `juow` `x0w3` `6wvb` `xcak` `95am` `faoy` `df6e` | 7 |
+| SM-A515F re-arm blips (≤5min, 0 steps) | `yevh` `qetf` `mert` `lv8k` `quo5` `29p4` `524v` `hnto` `xsct` `jv47` + end-of-day cluster 17:10–17:28 | ~30 |
+| Operator test between loans | `1r8h` | 1 |
+| Post-walk idle (app left open after completion) | `7p2j` `xuyx` `9hjo` `mwbo` `tg6o` | 5 |
+| Resumed already-finished session | `4o57` `xhde` | 2 |
+
+**Total excluded: ~45**
+
+---
+
+### VALID — Clean full completions (32 sessions)
+
+`2d5g` `pw5b` `k8ps` `kctv` `6epi` `ogro` `5kd4` `232o` `mqlj` `168c` `4zq0` `892p` `4fu5` `c7qo` `h6os` `dyo5` `9qf4` `knj6` `bi6k` `189t` `bm1g` `akbc` `5kkz` `yapj` `781m` `9iyw` `p04e` `n6id` `sqvb` `0d5l` `2tqf` `0vvc`
+
+**Total: 32**
+
+---
+
+### VALID (with issues) — Completed but walk recovered (8 sessions)
+
+| Id | Device | OS | Resumes | Audio errors | Notes |
+|---|---|---|---|---|---|
+| `f743` | SM-A155F | Android 16 | 7 | 0 | OEM-killed repeatedly, all steps done |
+| `mqgf` | 22111317G | Android 14 | 4 | 0 | 4 crashes steps 12–16, clean |
+| `wjfo` | SM-A045F | Android 14 | 4 | 15 | BLOC_10/15/16 audio failures |
+| `2j5u` | RMX3286 | Android 13 | 3 | 0 | Clean |
+| `h6os` | SM-A156B | Android 16 | 2 | 0 | Clean |
+| `kctv` | 25062RN2DE | Android 16 | 1 | 0 | Clean |
+| `ogro` | M2101K7AG | Android 11 | 1 | 0 | Clean |
+| `5kd4` | SM-S901U1 | Android 16 | 1 | 0 | Clean |
+
+**Total: 8**
+
+---
+
+### PROBLEMATIC — GPS blackout, technically complete but missed content (5 sessions)
+
+| Id | Device | OS | Gap | Content heard |
+|---|---|---|---|---|
+| `ffqz` | 2201117TY | Android 13 | 34min | Last 1 step only |
+| `avm3` | 2201117TY | Android 13 | 32min | Last 3 steps only |
+| `hpk9` | SM-A515F | Android 13 | 36min | Last 2 steps only |
+| `7m25` | SM-A515F | Android 13 | 2×17min | Steps 9–10 + 15–16 only |
+| `ykr5` | 2312DRA50G | Android 15 | 10min | Most steps, moderate drift |
+
+**Total: 5** — root cause: Android 13 GPS background kill → see P1
+
+---
+
+### PROBLEMATIC — GPS incomplete, walk stopped short (6 sessions)
+
+| Id | Device | OS | GPS gaps | Reached | Key issue |
+|---|---|---|---|---|---|
+| `51nv` | iPhone17,5 | iOS 26.3.1 | 4 (worst 14min) | Step 15 | Missed steps 2–4, 9–12 |
+| `ibk6` | iPhone14,5 | iOS 26.3.1 | 4 (worst 9min) | Step 15 | Missed steps 2–6, 8–9, 12–14 |
+| `mq3z` | iPhone14,5 | iOS 26.3.1 | 3 (worst 8min) | Step 13 | Missed steps 3–7 + 2 audio errors |
+| `rumx` | iPhone14,5 | iOS 26.4.2 | 5×~2min | Step 15 | 27 audio errors + 3 resumes |
+| `19dh` | iPhone14,5 | iOS 26.4.2 | 3×~2min | Step 15 | Missed steps 9, 12, 16 |
+| `vigi` | iPhone14,7 | iOS 26.4.2 | GPS-lost events | Step 15 | 21 audio errors on BLOC_10/15/16 |
+
+**Total: 6** — iOS 26.3.1 → see P3 ; audio errors → see P2
+
+---
+
+### PROBLEMATIC — Abandoned or cut (3 sessions)
+
+| Id | Device | OS | Max step | Cause |
+|---|---|---|---|---|
+| `nayi` | moto g04s | Android 14 | Step 2 | User abandoned, app ran 2h idle |
+| `4rma` | iPhone14,5 | iOS 18.5 | Step 11 | Old iOS, 747 audiofocus fails, gave up |
+| `oupu` | SM-A515F | Android 13 | Step 11 | **Staff re-armed mid-walk** — operational error |
+
+**Total: 3**
+
+---
+
+### Grand total
+
+| Category | Count |
+|---|---|
+| Exclude (noise / test / post-walk) | ~45 |
+| Valid — clean | 32 |
+| Valid — recovered | 8 |
+| Problematic — GPS blackout (complete) | 5 |
+| Problematic — GPS incomplete | 6 |
+| Problematic — abandoned / cut | 3 |
+| **Meaningful sessions (valid + problematic)** | **54** |
+
+---
+
+## 9. Priority issues
 
 ### P1 — Android 13 GPS background kill (catastrophic)
 `hpk9`, `ffqz`, `avm3` are counted as "completed" but visitors heard less than 15% of narration. `ignoring_batt_opt=true` is set but GPS is still killed by the OS/manufacturer within 2 minutes. Needs a foreground service with a persistent location notification, or at minimum a user-visible GPS-lost alert so the visitor knows to reopen the app.
