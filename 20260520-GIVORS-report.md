@@ -253,7 +253,6 @@ Sessions that show the telemetry signature of a visitor walk (steps fired, GPS m
 | Exclude (noise / test / post-walk) | ~45 |
 | Valid — clean | **23** |
 | Valid — with issues | **19** |
-| Problematic — GPS blackout (complete) | 0 |
 | Problematic — GPS incomplete | 6 |
 | Problematic — abandoned | 1 |
 | Possible noise — needs investigation | 5 |
@@ -262,8 +261,8 @@ Sessions that show the telemetry signature of a visitor walk (steps fired, GPS m
 
 ## 9. Priority issues
 
-### P1 — Android 13 GPS background kill (non-issue for this day — pending noise confirmation)
-All four sessions showing the Android 13 GPS blackout pattern (`hpk9`, `ffqz`, `avm3`, `7m25`) have been moved to POSSIBLE NOISE — they are likely loan phones moved by staff rather than genuine visitor walks. C1 is not a confirmed visitor-impacting issue for 2026-05-20. The failure mode remains real (silent GPS kill on Android 13, `ignoring_batt_opt=true` ineffective) and the foreground service fix (R1) is still the correct long-term safeguard — but it has no confirmed victim this day.
+### P1 — Android 13 GPS background kill *(deferred — low priority)*
+All four sessions showing this pattern (`hpk9`, `ffqz`, `avm3`, `7m25`) are in POSSIBLE NOISE — likely loan phones moved by staff, not genuine visitor walks. No confirmed victim this day. The failure mode is real (`ignoring_batt_opt=true` does not prevent the OS kill) and R1 remains the correct fix, but it has no confirmed impact to address for 2026-05-20. Revisit if confirmed on a future day.
 
 ### P2 — BLOC_10 / BLOC_15 / BLOC_16 audio failures (pre-loaded media — root cause unclear)
 
@@ -331,7 +330,7 @@ Use this table to track implementation. Fill **Status** and **Done — what was 
 
 | Ref | Issue (§0 class) | Priority | Effort | Fix proposal | Status | Done — what was implemented | Addresses (visitor impact) |
 |---|---|---|---|---|---|---|---|
-| R1 | ~~C1~~ — Android 13 GPS background kill | ~~Critical~~ **Monitor** | High | Foreground location service with persistent notification. Keeps GPS provider alive under screen-lock. Covers Android 13 OEM throttle that `ignoring_batt_opt` does not prevent. | **Deferred** — no confirmed visitor casualty this day (all 4 blackout sessions moved to possible noise). Revisit if confirmed on future days. | | If confirmed: visitors on Android 13 would hear <20% of narration because GPS is silently killed by the OS within 2 min of walk start. |
+| R1 | Android 13 GPS background kill | **Low** | High | Foreground location service with persistent notification. Keeps GPS provider alive under screen-lock. Covers Android 13 OEM throttle that `ignoring_batt_opt` does not prevent. | **Deferred** — no confirmed visitor casualty this day. Revisit if confirmed on future days. | | If confirmed: visitors on Android 13 would hear <20% of narration because GPS is silently killed by the OS within 2 min of walk start. |
 | R2 | S2 — BLOC_10/15/16 pre-load failure | **High** | Medium | (a) Add SHA/CRC checksum to download manifest and verify post-write at onboarding. (b) Implement `walk_start_cache_verify` (re-check all step files present + readable before step 0 fires). (c) Log exact URI used when audio `src` is set (`audio_uri_resolved`). Diagnose from next occurrence before patching further. | Open | | Visitors on affected devices heard silence or experienced repeated retries on specific narration steps (BLOC_10, BLOC_15, BLOC_16). |
 | R3 | S1 — iOS 26.3.1 GPS regression | **High** | Low | Add iOS version check at onboarding. Warn or block if version is 26.3.1 (or any 26.x below a confirmed-good threshold). Display a message asking visitor to update iOS before walking. | Open | | Visitors on iOS 26.3.1 experienced GPS blackouts of 8–14 min, missing large portions of the route and stopping mid-walk. |
 | R4 | M1 — iOS 26.4.2 GPS incomplete (step 16 unreached) | **Medium** | Medium | Investigate GPS-lost UX path: when GPS-lost overlay fires near end of route, add explicit instruction ("keep the screen on / move to open sky"). Consider reducing `stateUpdateTimeout` on iOS or adding a "resume walk" nudge after recovery. | Open | | Visitors on iOS 26.4.2 reached the final area but the last narration step (step 16) never triggered due to a GPS gap, leaving the walk unfinished without explanation. |
