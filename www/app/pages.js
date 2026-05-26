@@ -2102,6 +2102,27 @@ PAGES['parcours'] = () => {
         });
     })();
 
+    // C2 — passive media integrity check. Runs once at parcours entry, async,
+    // non-blocking. Flags any missing or truncated media file so a recurring
+    // R7.1-class audio_playerror can be correlated with a known-bad pack
+    // without a separate diagnostic pass. Skipped silently in WEB mode and
+    // when the server's /update/media is unreachable.
+    if (typeof PARCOURS.verifyMediaIntegrity === 'function') {
+        PARCOURS.verifyMediaIntegrity().then(function(result) {
+            TELEMETRY.log('media_integrity_check', {
+                total:        result.total,
+                ok:           result.ok,
+                failed:       result.failed,
+                skipped:      !!result.skipped,
+                error:        result.error || null,
+                failed_files: result.failed_files,
+            });
+            if (result.failed > 0) {
+                console.warn('[C2] media integrity:', result.failed, 'of', result.total, 'files failed:', result.failed_files);
+            }
+        }).catch(function(e) { console.warn('[C2] verifyMediaIntegrity threw:', e); });
+    }
+
     // First RUN — paint step 0 as the single cyan target (matches updateStepsMarkers).
     if (PARCOURS.currentStep() < 0) {
         console.log('FIRST RUN')

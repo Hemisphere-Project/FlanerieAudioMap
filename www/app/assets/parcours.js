@@ -421,6 +421,45 @@ class Parcours extends EventEmitter {
         });
     }
 
+    // C2 — passive media integrity check. Iterates the cached mediaPack and
+    // verifies each file is present and validates against the server-side
+    // size/hash. Read-only: does NOT mutate state. Returns a Promise resolving
+    // to {total, ok, failed, failed_files} so the caller can log telemetry
+    // without blocking the walk. Skipped silently in WEB mode (no local FS).
+    verifyMediaIntegrity() {
+        return new Promise((resolve) => {
+            if (!this.pID || !document.WEBAPP_URL || typeof media_download !== 'function') {
+                resolve({ total: 0, ok: 0, failed: 0, failed_files: [], skipped: true });
+                return;
+            }
+            get('/update/media/' + this.pID)
+                .then(data => {
+                    let files = Object.keys(data);
+                    let ok = 0;
+                    let failedFiles = [];
+                    let chain = Promise.resolve();
+                    files.forEach(file => {
+                        let info = data[file];
+                        let path = this.pID + '/' + file;
+                        chain = chain.then(() => media_download(path, info, true))
+                            .then(() => { ok++; })
+                            .catch(err => {
+                                if (err === 'DRYRUN') failedFiles.push(file);
+                                else failedFiles.push(file + ' (' + err + ')');
+                            });
+                    });
+                    chain.then(() => resolve({
+                        total: files.length,
+                        ok: ok,
+                        failed: failedFiles.length,
+                        failed_files: failedFiles.slice(0, 20),
+                        skipped: false,
+                    }));
+                })
+                .catch(() => resolve({ total: 0, ok: 0, failed: 0, failed_files: [], skipped: true, error: 'media_list_unreachable' }));
+        });
+    }
+
     loadprogress() {
         if (this.state.mediaPackSize === 0) return 0;
         return Math.round(this.state.mediaPackLoaded / this.state.mediaPackSize * 100);
