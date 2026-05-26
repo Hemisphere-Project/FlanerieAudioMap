@@ -2299,13 +2299,18 @@ $('#logs-title').on('click', (e) => {
 var DEFAULT_AFTERPLAY_PLAYER = new PlayerSimple(true, 0);
 DEFAULT_AFTERPLAY_PLAYER.load(BASEURL+'/images/', {src: 'afterplay.mp3', master: 1}, false);
 
-// P1.29 — when the generic "you are late" afterplay loop kicks in, the step
-// had no afterplay of its own: a soft signal the walker may be lost or behind.
-// Surface the recovery map so they get a visual cue back onto the route. The
-// currentPage guard keeps this off the devmode tools page.
+// P1.29 / R7.2 — when the generic "you are late" afterplay loop kicks in for
+// a *broken* step afterplay (reason: loaderror), surface the recovery map so
+// the walker gets a visual cue back onto the route. Suppress for reason:
+// no_src — that is the normal path on parcours like FLANERIE_GIVORS where no
+// step ships a per-step afterplay (firing the map ~150 times per walk).
+// The currentPage guard keeps this off the devmode tools page.
 DEFAULT_AFTERPLAY_PLAYER.on('play', () => {
-    if (currentPage === 'parcours' && typeof openMapForRecovery === 'function') {
-        openMapForRecovery({source: 'default_afterplay'});
+    if (currentPage !== 'parcours') return;
+    var reason = (typeof window !== 'undefined') ? window.DEFAULT_AFTERPLAY_LAST_REASON : null;
+    if (reason !== 'loaderror') return;
+    if (typeof openMapForRecovery === 'function') {
+        openMapForRecovery({source: 'default_afterplay', reason: reason});
     }
 });
 

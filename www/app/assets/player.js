@@ -1198,6 +1198,13 @@ class PlayerStep extends EventEmitter
                     // Stop first — the singleton is shared, so another step may
                     // still be fading it out from its own teardown.
                     DEFAULT_AFTERPLAY_PLAYER.stop()
+                    // R7.2: surface the routing reason to the play handler so
+                    // it can suppress the recovery-map auto-open when the step
+                    // simply never had an afterplay (no_src is normal for
+                    // parcours like FLANERIE_GIVORS).
+                    if (typeof window !== 'undefined') {
+                        window.DEFAULT_AFTERPLAY_LAST_REASON = this.afterplay._loadError ? 'loaderror' : 'no_src'
+                    }
                     if (DEFAULT_AFTERPLAY_PLAYER.isLoaded()) DEFAULT_AFTERPLAY_PLAYER.play()
                     // If isLoaded() is false the bundled afterplay.mp3 is missing —
                     // stay silent rather than retry or surface an error.
