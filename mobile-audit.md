@@ -1,7 +1,8 @@
 # Mobile Audit Remediation Plan
 
 Original: 2026-04-27  
-Last updated: 2026-05-26 (Round 8 / Phase 1A — 5 behaviour fixes + 10 diagnostic additions, JS-only, no plugin rebuild: A4 cross-step voice-pos contamination, C1 audio error classification, D1 iOS 26.3.x onboarding warning, A7 end-of-walk session close, A5 persistent device UUID + server registry; B4-diag/F-G2/F-A1/F-Z1/F-Z2/F-Z3/F-N3/F-R1/F-R2/F-K3 diagnostic telemetry)
+Last updated: 2026-05-26 (Round 8.5 / Phase 1B partial — 4 field-data-independent items shipped early: R7.2 default-afterplay map gating, B1 past-step media unload, A6 parcours freshness check, C2 passive media integrity)
+Previous: 2026-05-26 (Round 8 / Phase 1A — 5 behaviour fixes + 10 diagnostic additions, JS-only, no plugin rebuild: A4 cross-step voice-pos contamination, C1 audio error classification, D1 iOS 26.3.x onboarding warning, A7 end-of-walk session close, A5 persistent device UUID + server registry; B4-diag/F-G2/F-A1/F-Z1/F-Z2/F-Z3/F-N3/F-R1/F-R2/F-K3 diagnostic telemetry)
 Previous: 2026-05-20 (Round 7 — field test 2026-05-20 telemetry batch, FLANERIE_GIVORS, ~39 visitor walks: iOS 26.3.x background-GPS blackout P1.34, iOS step-narration playerror R7.1, recovery-map auto-open regression R7.2, iOS audiofocus-request-fail flood R7.3. New reusable analysis tooling in `telemetry/scripts/` R7.0)  
 Previous: 2026-05-20 (P1.33 — Android GPS cold-start: `RawLocationProvider` also requests `NETWORK_PROVIDER` + delivers last-known-network fix immediately on start)  
 Previous: 2026-05-19 (Round 6 — `checkbatteryopt` silent-bypass root-cause fix R6.1: `device.version` is OS version string not API level, `apiLevel < 23` was always true, page has bypassed itself on every device since introduction; `IsPowerSaveMode` hard block R6.2: power save now Gate 0 in `check()`, walker cannot proceed while battery saver is on; diagnostic telemetry R6.3: `session_diag` + `power_state_at_parcours` logged at parcours entry)
@@ -1624,6 +1625,19 @@ Regression risk: **LOW** — C7.1 is a pure try/catch wrap.
 
 ## Recommended Execution Sequence
 
+### Round 8.5 / Phase 1B partial (2026-05-26) — field-data-independent items ✅ code complete
+
+The four Phase 1B items that do not depend on Phase 1A field-calibrated data shipped early so they ride the same build as Phase 1A.
+
+- **R7.2** Recovery map gated on `default_afterplay reason: 'loaderror'` only — suppresses ~150 spurious map-opens per FLANERIE_GIVORS walk where every step has `afterplay.src='-'`. Routing reason published via `window.DEFAULT_AFTERPLAY_LAST_REASON`.
+- **B1** Aggressive past-step media unload — on each step fire, `clear()` every step with `_index < this._index && isLoaded()`. New `step_past_unload` telemetry per cleared step. Targets the Samsung A15-class memory pressure pattern.
+- **A6** Parcours freshness check — `checkdata` compares server mtime (from `/list`) vs cached `parcoursMTime_<pID>`. If newer, surfaces new `parcoursupdate` page with "Mettre à jour" / "Continuer sans mise à jour". Offline failures fall through to cached. New telemetry: `parcours_freshness_check`, `parcours_update_chosen`.
+- **C2** Passive media integrity check — new `Parcours.verifyMediaIntegrity()` method iterates server's `/update/media/<pID>` file list in dryrun mode, flagging missing / truncated / hash-mismatched files. Async, non-blocking, logs `media_integrity_check {total, ok, failed, failed_files}` at parcours entry. Skipped in WEB mode.
+
+**Deferred to post-field-test:** B4 watchdog (needs `real_callback_freshness` threshold calibration), E1/E2/E3 zone-overshoot gates (needs `accuracy_near_border` distribution data). Both blocked on Phase 1A telemetry from the next field test.
+
+---
+
 ### Round 8 / Phase 1A implementation (2026-05-26) — ✅ code complete, awaiting next field test
 
 JS-only batch based on the GIVORS field-test analysis (§12.10 of `20260520-GIVORS-report.md`). No plugin rebuild required; safe to deploy before the next field test.
@@ -1709,6 +1723,12 @@ All four batches implemented in one session. JS syntax-checked; no behavioural f
 
 ### Awaiting field validation (shipped, build pending or untested)
 
+**Phase 1B partial (2026-05-26) — next field test validation targets:**
+- **R7.2** (2026-05-26) — `map_opened` events must no longer carry `source: 'default_afterplay'` with `reason: 'no_src'`. The `loaderror` case still opens the map (force-trigger via devmode tools "Afterplay générique sur étape courante" + a real broken file).
+- **B1** (2026-05-26) — `step_past_unload` events fire at each step transition for steps with index < current. No audio glitches when walking back into a previously-completed step (LOST → recover scenario should still work — re-entering rehydrates via `loadAudio()`).
+- **A6** (2026-05-26) — force a server-side parcours edit (touch `parcours/<file>.json` mtime) → app shows the update gate. "Mettre à jour" triggers fresh preload; "Continuer sans mise à jour" routes through to checkgeo. `parcours_freshness_check` events present in every `checkdata` pass.
+- **C2** (2026-05-26) — `media_integrity_check` fires once at parcours entry. Healthy device: `failed: 0`, `skipped: false`. Force the issue by renaming one media file on the device → expect `failed: 1` with the file in `failed_files`.
+
 **Phase 1A (2026-05-26) — next field test validation targets:**
 - **A4** (2026-05-26) — `step_audio_trigger` events on first fire of a new step must not carry non-zero `resume_seek_pos` from the prior step. No `voice_snapshot` with `pos < 3` should trigger a seek. Cross-check `rumx`-class sessions for double-resume stutter absence.
 - **C1** (2026-05-26) — iOS sessions with `audio_playerror` must show `error_code` and `error_type` (not `"[object Object]"`). `audio_uri_resolved` must appear once per step audio load.
@@ -1750,16 +1770,22 @@ All four batches implemented in one session. JS syntax-checked; no behavioural f
 - **P0.5** v2.4.0 GPS fork (deployed)
 - **P1.5c** GPS-lost timeout unified at 30s
 
-### Phase 1B (after next field test — calibrate on Phase 1A telemetry)
+### Phase 1B remainder (blocked on Phase 1A field data)
 
-Blocked on Phase 1A field data. Do not implement until `real_callback_freshness`, `accuracy_near_border`, and `step_resume_current` data from the next field test are analysed.
+Four of six items shipped early in Round 8.5 (R7.2, B1, A6, C2 — see the Round 8.5 section above). The two remaining items need Phase 1A telemetry from the next field test to calibrate before they can ship safely.
 
-- **B4 watchdog** — JS-side real-callback-gap detector: when `real_callback_age_ms > 90 s` AND motion is non-STILL, surface a "Téléphone en veille — déverrouillez pour continuer" band. Directly addresses P1.34 (iOS 26.3.x blackout) and P1.31 (Android Doze). Threshold calibrated from `real_callback_freshness` field data. SAFE-TODAY once calibrated.
-- **E1/E2/E3 zone-overshoot gates** — accuracy-gated step entry: suppress `step_fire` when `accuracy > threshold` and the walker is only marginally inside the zone boundary. Threshold calibrated from `accuracy_near_border` data. TEST-FIRST.
-- **C2 file integrity check** — verify media file sizes / checksums at parcours-page entry to catch truncated downloads before they cause R7.1-class `audio_playerror`. SAFE-TODAY.
-- **B1 aggressive past-step media unload** — explicitly unload completed-step audio objects (voice + afterplay) when the next step fires, to prevent memory pressure crashes on A15-class devices. TEST-FIRST.
-- **A6 parcours freshness check** — detect when the cached parcours is stale (hash mismatch vs server) at walk start and offer a refresh gate. SAFE-TODAY.
-- **R7.2 default-afterplay map fix** — gate `openMapForRecovery` in `DEFAULT_AFTERPLAY_PLAYER.on('play')` on `reason: loaderror` only; suppress for `reason: no_src` (normal for parcours with no per-step afterplay like FLANERIE_GIVORS). TEST-FIRST.
+- **B4 watchdog** — JS-side real-callback-gap detector: when `real_callback_age_ms > THRESHOLD` AND motion is non-STILL, surface a "Téléphone en veille — déverrouillez pour continuer" band. Directly addresses P1.34 (iOS 26.3.x blackout) and P1.31 (Android Doze). **Blocked on `real_callback_freshness` field data** — threshold must be set above the normal NSTimer/Handler keepalive cadence floor (expected ~20 s) to avoid false positives during healthy walks. SAFE-TODAY once calibrated.
+- **E1/E2/E3 zone-overshoot gates** — accuracy-gated step entry: suppress `step_fire` when `accuracy > THRESHOLD` and the walker is only marginally inside the zone boundary. **Blocked on `accuracy_near_border` distribution data** — too aggressive a gate blocks real triggers, too lax misses overshoot. TEST-FIRST.
+
+### What's needed from the next field test (reminder)
+
+Given limited time and device range, the next test has two distinct jobs:
+
+**Job 1 — read Phase 1A diagnostics (passive, any walk on any device).** Analyse: `real_callback_freshness` (unblocks B4), `accuracy_near_border` (unblocks E1/E2/E3), `audio_play_started.load_duration_ms` (R4.1 root cause), `step_resume_current.consecutive_inside_samples` (false re-arm rate), `media_integrity_check` (C2 baseline).
+
+**Job 2 — validate the 9 behaviour fixes shipped in Round 8 + 8.5.** See the "Awaiting field validation" section below for the per-fix telemetry signals.
+
+**Minimum device set:** 1 iOS device (ideally 26.3.x for D1) for ~20 min + 1 Android device for ~15 min. That's enough to calibrate B4 and E1/E2/E3 for the next drop. R7.2, B1, A6, C2 validate from telemetry on the same sessions — no additional cost.
 
 ### Phase 2 (plugin rebuild + Play Store — after Phase 1B)
 

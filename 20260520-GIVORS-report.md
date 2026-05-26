@@ -933,3 +933,64 @@ Files: [www/app/assets/geoloc.js](www/app/assets/geoloc.js).
 - C1: a deliberately broken file (e.g., rename `BLOC_01.mp3` to `BLOC_01.mp3.bak` on the device) produces `audio_loaderror` with `error_type: 'not_found'`, not `[object Object]`.
 - D1: an iOS device with `device.version === '26.3.1'` shows the soft-block on `confirmgeo`.
 
+### §12.11 Phase 1B partial (2026-05-26) — field-data-independent items
+
+After confirming Phase 1A devices and items, the four Phase 1B items that do **not** depend on field-calibrated data were shipped early so they ride the same build:
+
+| ID | Files | What it does | Status |
+|---|---|---|---|
+| R7.2 | [www/app/pages.js](www/app/pages.js) (`DEFAULT_AFTERPLAY_PLAYER.on('play')`), [www/app/assets/player.js](www/app/assets/player.js) (`PlayerStep.startAfterplay`) | Gates `openMapForRecovery({source:'default_afterplay'})` on `reason: 'loaderror'` only. Suppresses the ~150 spurious map-opens per FLANERIE_GIVORS walk where every step has `afterplay.src='-'`. Routing reason published via `window.DEFAULT_AFTERPLAY_LAST_REASON` so the singleton's play handler can read it. | ✅ DONE |
+| B1 | [www/app/assets/spot.js](www/app/assets/spot.js) (fire branch) | When a new step fires, explicitly `clear()` every step with index < this step that is still loaded. Frees voice + afterplay media objects on past steps the distance-based unload missed. New `step_past_unload` telemetry per cleared step. | ✅ DONE |
+| A6 | [www/app/pages.js](www/app/pages.js) (`PAGES['checkdata']`, new `PAGES['parcoursupdate']`), [www/app/app.html](www/app/app.html) (`#parcoursupdate` page), [server.js](server.js) `/list` already returns `time` (mtime) | On `checkdata` with `valid()`, fetches `/list` and compares server mtime against `parcoursMTime_<pID>` in localStorage. If newer, routes to a soft gate offering "Mettre à jour" or "Continuer sans mise à jour". Offline failures fall through to cached. mtime is stamped on `preload` entry. New telemetry: `parcours_freshness_check`, `parcours_update_chosen`. | ✅ DONE |
+| C2 | [www/app/assets/parcours.js](www/app/assets/parcours.js) (`verifyMediaIntegrity()`), [www/app/pages.js](www/app/pages.js) (`PAGES['parcours']` entry) | Passive read-only iteration through the server's `/update/media/<pID>` file list, calling `media_download(path, info, true)` in dryrun mode to flag missing / truncated / hash-mismatched files. Async, non-blocking, logs `media_integrity_check {total, ok, failed, failed_files, skipped, error}`. Skipped silently in WEB mode or when `/update/media` is unreachable. | ✅ DONE |
+
+**Why these four and not the rest of Phase 1B:**
+- **R7.2** — root cause and fix are unambiguous from R7 telemetry (no new data needed). Ships without risk.
+- **B1** — targeted at the Samsung A15 memory-pressure crashes; doesn't need field calibration (the unload is unconditional on past-step index). Reverse risk only if a step audio file is re-needed within seconds, which only happens via LOST → recover, where `loadAudio()` rehydrates normally.
+- **A6** — independent of GPS/audio data. The freshness check is a UI gate at startup. Risk is operational: an operator who taps "Continuer sans mise à jour" by reflex still gets the old parcours, but that matches today's behaviour.
+- **C2** — purely observational at this stage; if field data shows files routinely missing, Phase 1B+ adds a UI block, but the diagnostic comes first.
+
+**Deferred (still need Phase 1A field data):**
+- **B4 watchdog** — threshold calibration from `real_callback_freshness`.
+- **E1/E2/E3 zone-overshoot gates** — accuracy threshold from `accuracy_near_border`.
+
+### §12.12 What you actually need from the field test (next week)
+
+Given limited time and device range, the next field test has two distinct jobs:
+
+#### Job 1 — read Phase 1A diagnostics (passive, zero extra effort)
+
+Any walk on any device. Analyse afterwards:
+- `real_callback_freshness` → confirms keepalive cadence (should be ≤ 20 s); sets B4 threshold
+- `accuracy_near_border` → sets E1/E2/E3 gate value
+- `audio_play_started.load_duration_ms` → confirms whether R4.1 is load latency or stuck player
+- `step_resume_current.consecutive_inside_samples` → quantifies false re-arm rate
+- `media_integrity_check` (C2, new) → reveals any silent file corruption across the fleet
+
+#### Job 2 — validate the 9 behaviour fixes shipped in this build
+
+| Fix | Minimum validation | Source |
+|---|---|---|
+| A4 | `step_audio_trigger` on first fire of a new step must NOT carry non-zero `resume_seek_pos` | Telemetry |
+| C1 | Any `audio_playerror` carries `error_code`, `error_type`, not `"[object Object]"` | Telemetry |
+| D1 | Boot `confirmgeo` on an iOS 26.3.x device → red warning visible | 1 min, requires 1 iOS 26.3.x |
+| A7 | Complete walk to `end` → `walk_end_shutdown` + `session_end` present | Telemetry |
+| A5 | `session_start.deviceUuid` stable; `GET /devices` lists fleet; `--exclude-loan` filter works | Telemetry + server |
+| R7.2 | No `map_opened` events with `source: 'default_afterplay'` AND `reason: 'no_src'`. Map still opens for `reason: 'loaderror'` (use devmode "Voix HS" + force afterplay) | Telemetry |
+| B1 | `step_past_unload` events fire for each step transition; no audio glitches when walking back into a previously-completed step (LOST → recover scenario) | Telemetry + walk |
+| A6 | Force a server-side parcours edit (touch the JSON `mtime`) → app shows the update gate; "Mettre à jour" triggers a fresh preload | Manual op |
+| C2 | `media_integrity_check` event fires once at parcours entry; on a healthy device `failed: 0` | Telemetry |
+
+#### Recommended minimum test session
+
+- **1 iOS device** (ideally iOS 26.3.x): 20-min walk. Confirms D1 warning, baseline `real_callback_freshness` cadence, A4 / C1 cleanup
+- **1 Android device**: 15-min walk. Confirms B1 unload pattern, `accuracy_near_border` calibration data, F-K3 periodic re-check
+
+That's enough to unblock B4 and E1/E2/E3 calibration for the next Phase 1B drop. R7.2, B1, A6, C2 ride along — no additional validation cost.
+
+**Items that can stay deferred until after this test:**
+- B4 watchdog (needs `real_callback_freshness` data)
+- E1/E2/E3 gates (needs `accuracy_near_border` data)
+- Phase 2 plugin rebuild (needs Play Store cycle)
+- Phase 3 native work (needs dedicated outing)
+
