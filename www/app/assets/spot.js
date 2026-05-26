@@ -711,6 +711,18 @@ class Step extends Spot
             // Update index
             PARCOURS.currentStep(this._index)
 
+            // A4 — P8 fix: a fresh step advance must not inherit the previous
+            // step's saved voice position. wasCurrentStep=false means we just
+            // moved to a different step than the one resumeStepVoicePos was
+            // captured for, so the saved value belongs to a different audio
+            // file entirely (`rumx` 2026-05-20 was restoring step N's mid-audio
+            // position against step N+1 across three crashes). Resume of the
+            // SAME step (wasCurrentStep=true) keeps its consumed pos.
+            if (!wasCurrentStep) {
+                PARCOURS.state.resumeStepVoicePos = 0
+                if (typeof PARCOURS.store === 'function') PARCOURS.store('step_fire')
+            }
+
             console.log('== ETAPE:', this._index, this._spot.name)
 
             // fire event

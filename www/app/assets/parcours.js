@@ -155,7 +155,11 @@ class Parcours extends EventEmitter {
             audio_playing: actuallyPlaying,
             load_state: loadState,
         })
-        if (pos > 0) this.state.resumeStepVoicePos = pos
+        // A4: only persist once the new step's voice has accumulated ≥3 s of
+        // playback. Pairs with the step_fire clear in spot.js so a crash within
+        // the first few seconds of a fresh step resumes from 0 rather than
+        // inheriting the previous step's saved position (P8 / `rumx` 2026-05-20).
+        if (pos > 3) this.state.resumeStepVoicePos = pos
         // Reset the skip dedup once we've actually logged a real snapshot —
         // so the next genuine skip after a play run gets recorded once.
         this._lastSnapshotSkipKey = null
