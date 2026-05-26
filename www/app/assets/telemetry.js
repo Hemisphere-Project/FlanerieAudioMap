@@ -162,12 +162,49 @@ var TELEMETRY = (function() {
         }));
     }
 
+    // A5 — persistent device identity. UUID is generated once per app install and
+    // never rotated; lets analyze.mjs tell "Xiaomi 2201117TY used twice" apart
+    // from "two different visitors' phones that share a model number" (GIVORS
+    // 2026-05-20 ffqz/avm3 case). is_loan is an operator-toggled flag (devmode
+    // tools page) that distinguishes the rental fleet from BYOD visitors.
+    function _getDeviceUuid() {
+        try {
+            var existing = localStorage.getItem('device_uuid');
+            if (existing) return existing;
+        } catch (e) {}
+        var uuid = '';
+        try {
+            if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+                uuid = window.crypto.randomUUID();
+            }
+        } catch (e) {}
+        if (!uuid) {
+            // RFC4122-v4-shaped fallback for environments without crypto.randomUUID
+            uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                var r = Math.random() * 16 | 0;
+                return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+            });
+        }
+        try { localStorage.setItem('device_uuid', uuid); } catch (e) {}
+        return uuid;
+    }
+
+    function _isLoanDevice() {
+        try { return localStorage.getItem('is_loan_device') === 'true'; } catch (e) { return false; }
+    }
+
+    function _setLoanDevice(value) {
+        try { localStorage.setItem('is_loan_device', value ? 'true' : 'false'); } catch (e) {}
+    }
+
     function _buildSessionMeta() {
         var meta = {
             platform: (typeof PLATFORM !== 'undefined' && PLATFORM) ? PLATFORM : ((navigator && navigator.platform) || 'unknown'),
             language: (navigator && navigator.language) ? navigator.language : null,
             userAgent: (navigator && navigator.userAgent) ? navigator.userAgent : null,
-            isCordova: typeof cordova !== 'undefined'
+            isCordova: typeof cordova !== 'undefined',
+            deviceUuid: _getDeviceUuid(),
+            isLoanDevice: _isLoanDevice()
         };
 
         if (typeof cordova !== 'undefined' && cordova.version) meta.cordovaVersion = cordova.version;
@@ -436,7 +473,12 @@ var TELEMETRY = (function() {
         gps: gps,
         flush: flush,
         end: end,
-        hasSession: hasSession
+        hasSession: hasSession,
+        // A5 — device identity accessors. UUID is read-only (generated lazily on
+        // first access). isLoanDevice is settable by the devmode tools page.
+        deviceUuid: _getDeviceUuid,
+        isLoanDevice: _isLoanDevice,
+        setLoanDevice: _setLoanDevice
     };
 
 })();

@@ -13,6 +13,9 @@
 //                      sessions are bucketed separately, out of the completion tally.
 //   --parcours=NAME    Case-insensitive substring filter on parcours name/id
 //   --gap=SECONDS      GPS gap threshold for the blackout scan (default 120)
+//   --include-loan-only  Keep only sessions where is_loan=true (A5)
+//   --exclude-loan       Drop sessions where is_loan=true (A5)
+//   --device-uuid=UUID   Only sessions from a specific persistent device id (A5)
 //   --json             Emit the raw per-session summaries as JSON instead of a report
 //
 // Conventions (see telemetry/scripts/README.md):
@@ -43,7 +46,14 @@ if (!loaded.length) {
   process.exit(0);
 }
 
-const all = loaded.map(summarize);
+let all = loaded.map(summarize);
+
+// A5 — device identity filters. Apply after summarize() so deviceUuid /
+// isLoanDevice are populated. --device-uuid takes a single UUID; pre-A5
+// sessions have deviceUuid=null and are silently dropped by the filter.
+if (opts['include-loan-only']) all = all.filter(s => s.isLoanDevice === true);
+if (opts['exclude-loan'])      all = all.filter(s => s.isLoanDevice !== true);
+if (opts['device-uuid'])       all = all.filter(s => s.deviceUuid === opts['device-uuid']);
 const stepMax = inferParcoursStepMax(all);
 
 // Split out pre-opening tests and operator/spare-phone sessions from the visitor wave.

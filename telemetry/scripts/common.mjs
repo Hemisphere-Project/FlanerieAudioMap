@@ -164,6 +164,14 @@ export function summarize(session) {
     osVersion: c.osVersion || '?',
     deviceModel: c.deviceModel || '?',
     manufacturer: c.deviceManufacturer || '?',
+    // A5 — persistent identity. Prefer client.deviceUuid (every payload),
+    // fall back to session_diag.device_uuid for sessions where the client
+    // bundle predates A5 but session_diag was logged after a hot-reload.
+    deviceUuid: c.deviceUuid
+      || ((ev.find(e => e.type === 'session_diag') || {}).data || {}).device_uuid
+      || null,
+    isLoanDevice: typeof c.isLoanDevice === 'boolean' ? c.isLoanDevice
+      : !!((ev.find(e => e.type === 'session_diag') || {}).data || {}).is_loan,
     startTime: j.startTime,
     durationMs: t0 && tN ? Math.max(0, tN - t0) : 0,
     eventCount: ev.length,

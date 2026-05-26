@@ -941,6 +941,29 @@ PAGES['tools'] = () => {
         appendOutput(JSON.stringify(snap, null, 2));
     });
 
+    // A5 — toggle the device's loan flag. Sticky in localStorage; echoed in
+    // every subsequent session_diag and POST /devices. Also displays the
+    // device's persistent UUID so the operator can read it back during support.
+    function refreshLoanLabel() {
+        var v = (typeof TELEMETRY !== 'undefined' && typeof TELEMETRY.isLoanDevice === 'function') ? TELEMETRY.isLoanDevice() : false;
+        $('#tools-toggle-loan').text('Téléphone de prêt: ' + (v ? 'OUI' : 'non'));
+    }
+    refreshLoanLabel();
+    if (typeof TELEMETRY !== 'undefined' && typeof TELEMETRY.deviceUuid === 'function') {
+        appendOutput('device_uuid: ' + TELEMETRY.deviceUuid());
+        appendOutput('is_loan: ' + TELEMETRY.isLoanDevice());
+    }
+    $('#tools-toggle-loan').off().on('click', () => {
+        if (typeof TELEMETRY === 'undefined' || typeof TELEMETRY.setLoanDevice !== 'function') {
+            appendOutput('toggle-loan: TELEMETRY.setLoanDevice unavailable'); return;
+        }
+        var newVal = !TELEMETRY.isLoanDevice();
+        TELEMETRY.setLoanDevice(newVal);
+        refreshLoanLabel();
+        TELEMETRY.log('tools_set_loan_device', {is_loan: newVal});
+        appendOutput('loan-device: ' + (newVal ? 'OUI' : 'non'));
+    });
+
     $('#tools-back').off().on('click', () => PAGE('select'));
 }
 
@@ -1955,6 +1978,12 @@ PAGES['parcours'] = () => {
         var af = (typeof cordova !== 'undefined' && cordova.plugins && cordova.plugins.audiofocus)
             ? cordova.plugins.audiofocus : null;
 
+        // A5 — persistent identity (UUID generated once on first launch) +
+        // operator-toggled loan flag. Both echo to session_diag every walk so
+        // analyze.mjs can bucket and filter without manual cross-referencing.
+        var deviceUuid   = (typeof TELEMETRY.deviceUuid   === 'function') ? TELEMETRY.deviceUuid()   : null;
+        var isLoanDevice = (typeof TELEMETRY.isLoanDevice === 'function') ? TELEMETRY.isLoanDevice() : false;
+
         // Synchronous facts — logged immediately.
         TELEMETRY.log('session_diag', {
             // APK build number + downloaded webapp zip hash (changes on every deploy)
@@ -1965,6 +1994,9 @@ PAGES['parcours'] = () => {
             manufacturer: (typeof device !== 'undefined') ? device.manufacturer : null,
             model:        (typeof device !== 'undefined') ? device.model        : null,
             os_version:   (typeof device !== 'undefined') ? device.version      : null,
+            // A5 — persistent identity
+            device_uuid:  deviceUuid,
+            is_loan:      isLoanDevice,
             // Plugin presence
             plugin_power_opt:   !!po,
             plugin_power_IsPowerSaveMode:        !!(po && typeof po.IsPowerSaveMode          === 'function'),
@@ -1976,6 +2008,35 @@ PAGES['parcours'] = () => {
             // Runtime flags
             devmode: !!DEVMODE,
         });
+
+        // A5 — register/refresh the device on the server so operators have a
+        // dashboard of "which phones exist and when each was last seen". One
+        // POST per parcours entry; offline failures are non-fatal (the device
+        // identity still echoes in every session payload).
+        if (deviceUuid && PLATFORM !== 'browser') {
+            try {
+                var devicePayload = {
+                    uuid:         deviceUuid,
+                    is_loan:      isLoanDevice,
+                    platform:     PLATFORM,
+                    manufacturer: (typeof device !== 'undefined') ? device.manufacturer : null,
+                    model:        (typeof device !== 'undefined') ? device.model        : null,
+                    os_version:   (typeof device !== 'undefined') ? device.version      : null,
+                    apk_version:  document.APPVERSION || null,
+                    webapp_hash:  localStorage.getItem('APPHASH') || null,
+                };
+                var devUrl = (typeof prep === 'function') ? prep('/devices') : '/devices';
+                var transport = (typeof fetch === 'function') ? fetch : (typeof fetchRemote === 'function' ? fetchRemote : null);
+                if (transport) {
+                    transport(devUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(devicePayload),
+                        redirect: 'follow',
+                    }).catch(function(e) { console.warn('[A5] device register failed:', e && e.message); });
+                }
+            } catch (e) { console.warn('[A5] device register threw:', e); }
+        }
 
         // Async power state — separate event so the sync facts land first.
         if (!po || PLATFORM !== 'android') return;

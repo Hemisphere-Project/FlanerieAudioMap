@@ -668,6 +668,107 @@ app.post('/telemetry/prune-short', requireAdmin, express.json(), (req, res) => {
 });
 
 
+// A5 — Device registry. Each phone registers itself once per parcours entry
+// (POST /devices from PAGES['parcours']); admins can fetch the inventory to
+// see which phones are part of the fleet, when each was last seen, and which
+// are flagged as loan devices. Storage: a single JSON file with an object
+// keyed by uuid — the fleet is small enough that this is simpler than a
+// directory of per-device files.
+const DEVICES_FILE = path.join(__dirname, 'telemetry', 'devices.json');
+
+function _readDevicesFile() {
+  try {
+    if (!fs.existsSync(DEVICES_FILE)) return {};
+    const txt = fs.readFileSync(DEVICES_FILE, 'utf8');
+    const data = JSON.parse(txt);
+    return (data && typeof data === 'object' && !Array.isArray(data)) ? data : {};
+  } catch (e) {
+    console.warn('[devices] read failed, treating as empty:', e.message);
+    return {};
+  }
+}
+
+function _writeDevicesFile(map) {
+  try {
+    const dir = path.dirname(DEVICES_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(DEVICES_FILE, JSON.stringify(map, null, 2));
+  } catch (e) {
+    console.error('[devices] write failed:', e.message);
+  }
+}
+
+// CORS preflight for Cordova app (same pattern as /telemetry-push).
+app.options('/devices', (req, res) => {
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
+  res.set('Access-Control-Allow-Headers', 'Content-Type');
+  res.sendStatus(204);
+});
+
+// POST /devices — public (the app posts unauthenticated, like telemetry-push).
+// Idempotent upsert keyed by uuid. Preserves first_seen and any operator-set
+// friendly_name across upserts.
+app.post('/devices', express.json({ limit: '32kb' }), (req, res) => {
+  res.set('Access-Control-Allow-Origin', '*');
+  const body = req.body || {};
+  const uuid = typeof body.uuid === 'string' ? body.uuid.trim() : '';
+  if (!uuid || uuid.length > 128) {
+    return res.status(400).json({ error: 'missing or invalid uuid' });
+  }
+
+  const map = _readDevicesFile();
+  const existing = map[uuid] || {};
+  const now = new Date().toISOString();
+
+  const updated = Object.assign({}, existing, {
+    uuid:         uuid,
+    is_loan:      !!body.is_loan,
+    platform:     body.platform     || existing.platform     || null,
+    manufacturer: body.manufacturer || existing.manufacturer || null,
+    model:        body.model        || existing.model        || null,
+    os_version:   body.os_version   || existing.os_version   || null,
+    apk_version:  body.apk_version  || existing.apk_version  || null,
+    webapp_hash:  body.webapp_hash  || existing.webapp_hash  || null,
+    first_seen:   existing.first_seen || now,
+    last_seen:    now,
+  });
+
+  // Friendly name is operator-only (PATCH below), don't let the device overwrite it.
+  if (existing.friendly_name) updated.friendly_name = existing.friendly_name;
+
+  map[uuid] = updated;
+  _writeDevicesFile(map);
+
+  res.json({ ok: true, uuid: uuid, first_seen: updated.first_seen, last_seen: updated.last_seen });
+});
+
+// GET /devices — admin-only. Returns the full device inventory.
+app.get('/devices', requireAdmin, (req, res) => {
+  const map = _readDevicesFile();
+  const list = Object.values(map).sort((a, b) => {
+    const la = a.last_seen || '';
+    const lb = b.last_seen || '';
+    return lb.localeCompare(la);
+  });
+  res.json({ devices: list, count: list.length });
+});
+
+// PATCH /devices/:uuid — admin sets friendly_name (or overrides is_loan).
+app.patch('/devices/:uuid', requireAdmin, express.json(), (req, res) => {
+  const uuid = req.params.uuid;
+  const map = _readDevicesFile();
+  if (!map[uuid]) return res.status(404).json({ error: 'unknown uuid' });
+
+  const body = req.body || {};
+  if (typeof body.friendly_name === 'string') map[uuid].friendly_name = body.friendly_name.trim() || null;
+  if (typeof body.is_loan === 'boolean')      map[uuid].is_loan       = body.is_loan;
+
+  _writeDevicesFile(map);
+  res.json({ ok: true, device: map[uuid] });
+});
+
+
 // List parcours
 app.get('/list', (req, res) => {
   const role = getUserRole(req);
