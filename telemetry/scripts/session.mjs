@@ -73,11 +73,22 @@ if (s.resumeStepIndex != null) {
 const stepTypes = new Set(['step_fire', 'step_done', 'step_skip_done',
   'step_refire_current', 'step_resume_current', 'session_resume', 'session_restart']);
 console.log('\n## Step / resume timeline');
+const num = (v, p) => typeof v === 'number' ? v.toFixed(p) : '?';
 for (const e of ev) {
   if (!stepTypes.has(e.type)) continue;
-  const step = e.data && e.data.step;
-  console.log(`  ${min(e.t).padStart(8)}  ${e.type.padEnd(20)} ${step != null ? 'step ' + step : ''}`
-    + `${e.data && e.data.reason ? '  reason=' + e.data.reason : ''}`);
+  const d = e.data || {};
+  const step = d.step;
+  let extra = '';
+  if (e.type === 'step_resume_current') {
+    // distanceToBorder near 0 (negative = inside the next zone) is the GPS
+    // zone-overshoot signature — premature step advance (report P6a).
+    extra = `  border=${num(d.distanceToBorder, 2)}m  vis=${d.visibility || '?'}  load=${d.player_load_state || '?'}`;
+  } else if (e.type === 'session_resume') {
+    extra = `  resume_step=${d.resume_step_index ?? '?'}  seek=${num(d.resume_seek_pos, 1)}s  done=${d.resume_step_done}`;
+  } else if (d.reason) {
+    extra = `  reason=${d.reason}`;
+  }
+  console.log(`  ${min(e.t).padStart(8)}  ${e.type.padEnd(20)} ${(step != null ? 'step ' + step : '').padEnd(8)}${extra}`);
 }
 
 // --- GPS gaps + route progression ------------------------------------------
@@ -98,7 +109,9 @@ for (const e of ev) {
 
 // --- audio errors ----------------------------------------------------------
 const audioErr = ev.filter(e => e.type === 'audio_playerror' || e.type === 'audio_loaderror');
-console.log(`\n## Audio errors  (${audioErr.length})`);
+const playErrN = audioErr.filter(e => e.type === 'audio_playerror').length;
+const loadErrN = audioErr.filter(e => e.type === 'audio_loaderror').length;
+console.log(`\n## Audio errors  (${audioErr.length}: ${playErrN} playerror, ${loadErrN} loaderror)`);
 console.log(`  by kind: jingle=${s.audioErrByKind.jingle} (placeholder assets, harmless)  `
   + `step_voice=${s.audioErrByKind.step_voice} (REAL narration failures)  other=${s.audioErrByKind.other}`);
 const realErrSrcs = {};
@@ -118,8 +131,9 @@ if (voiceFail.length) {
 
 // --- summary flags ---------------------------------------------------------
 console.log('\n## Other signals');
-console.log(`  resumes=${s.resumes}  restarts=${s.restarts}  `
-  + `audioTimeout=${s.audioTimeout}  audioStuck=${s.audioStuck}`);
+console.log(`  resumes=${s.resumes}  restarts=${s.restarts}  stepResumeCurrent=${s.stepResumeCurrent}  `
+  + `audioTimeout=${s.audioTimeout}  audioStuck=${s.audioStuck}`
+  + (s.staleSeekPos ? '\n  <- STALE SEEK-POS: same resume seek-pos restored at >1 step (report P8)' : ''));
 console.log(`  afterplayFallback=${s.afterplayFallback} (no_src=${s.afterplayFallbackNoSrc})  `
   + `userLost=${s.userLost}/rec=${s.userRecovered}`);
 console.log(`  audiofocus: requestFail=${s.audiofocusRequestFail} requestOk=${s.audiofocusRequestOk} loss=${s.audiofocusLoss}`);

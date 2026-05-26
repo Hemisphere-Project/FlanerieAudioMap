@@ -80,8 +80,14 @@ These are operational facts, not derivable from the files alone:
   (A long gap on a parked operator phone is just an idle phone — ignore those.)
 - **Audio errors** are split `jingle` vs `step_voice`. `jingle` = `resume/afterplay/
   youlost/gpslost.mp3` placeholder assets not yet produced — harmless. `step_voice` =
-  real `BLOC_*` narration failing to play — a genuine defect.
+  real `BLOC_*` narration failing to play — a genuine defect. The `step_voice` count
+  is further split `(N play/N load)`: `loaderror` (file missing/unreadable) and
+  `playerror` (decode/playback failure) have different root causes.
 - **`steps-non-contiguous`** flag — the walker's fired steps skip indices, the
   signature of a GPS blackout (route jumped) rather than a clean walk.
+- **`resumes` / `stepResumeCurrent` / `stale-seek-pos` flags** — `resumes>=1` = the
+  app was relaunched mid-walk (a crash); `stepResumeCurrent>=2` = repeated audio
+  re-resume, often GPS zone overshoot; `stale-seek-pos` = a crash restored the same
+  seek position at two different steps. Drill these with `session.mjs`.
 - **Completion** is inferred: a session "completed" if it reached the last step index
   any session of that parcours fired (no parcours JSON needed).

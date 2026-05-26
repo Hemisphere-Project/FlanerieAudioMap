@@ -77,8 +77,21 @@ P(`Sessions: ${all.length} total`
   + (pre.length ? `  |  ${pre.length} pre-opening (before ${opts.cutoff})` : '')
   + (operator.length ? `  |  ${operator.length} operator phone (${opts.operator})` : '')
   + `  |  ${main.length} visitor sessions`);
-P(`Parcours step counts (inferred from data): `
-  + Object.entries(stepMax).map(([k, v]) => `${k}=${v + 1} steps`).join(', '));
+// Parcours config skew: a different parcoursName among the visitor wave usually
+// means a stale cached config — list the minority groups' session ids so they
+// don't hide. Step counts are inferred from the data (see inferParcoursStepMax).
+const parcoursGroups = {};
+for (const s of main) (parcoursGroups[s.parcoursKey] ||= []).push(s.shortId);
+const parcoursSorted = Object.entries(parcoursGroups).sort((a, b) => b[1].length - a[1].length);
+P(`Parcours (visitor sessions): `
+  + (parcoursSorted.length
+      ? parcoursSorted.map(([k, ids], i) => {
+          const steps = (stepMax[k] ?? -1) + 1;
+          return (i === 0 || ids.length > 4)
+            ? `${k}=${steps} steps (${ids.length})`
+            : `${k}=${steps} steps (${ids.length}: ${ids.join(',')})`;
+        }).join('  |  ')
+      : 'none'));
 
 if (pre.length) {
   P('\n## Pre-opening / test sessions (excluded)');
@@ -143,7 +156,12 @@ P('\n## Anomaly flags');
 let anyFlag = false;
 for (const s of main) {
   const f = [];
-  if (s.audioErrByKind.step_voice) f.push(`stepVoiceErr=${s.audioErrByKind.step_voice}`);
+  if (s.audioErrByKind.step_voice) {
+    const sp = [s.audioErrByType.playerror && `${s.audioErrByType.playerror} play`,
+                s.audioErrByType.loaderror && `${s.audioErrByType.loaderror} load`]
+               .filter(Boolean).join('/');
+    f.push(`stepVoiceErr=${s.audioErrByKind.step_voice}${sp ? ` (${sp})` : ''}`);
+  }
   if (s.voiceFail) f.push(`voiceFail=${s.voiceFail}`);
   if (s.audioTimeout) f.push(`audioTimeout=${s.audioTimeout}`);
   if (s.audioStuck) f.push(`audioStuck=${s.audioStuck}`);
@@ -153,7 +171,9 @@ for (const s of main) {
   if (s.batteryKill) f.push(`batteryKill=${s.batteryKill}`);
   if (s.iosNativeFallback) f.push(`iosNativeFallback=${s.iosNativeFallback}`);
   if (s.checkaudioFail) f.push(`checkaudioFail=${s.checkaudioFail}`);
-  if (s.resumes >= 3) f.push(`resumes=${s.resumes}`);
+  if (s.resumes >= 1) f.push(`resumes=${s.resumes}`);
+  if (s.stepResumeCurrent >= 2) f.push(`stepResumeCurrent=${s.stepResumeCurrent}`);
+  if (s.staleSeekPos) f.push('stale-seek-pos');
   if (s.audiofocusRequestFail >= 100) f.push(`audiofocusFail=${s.audiofocusRequestFail}`);
   if (s.maxStep != null && !s.stepsContiguous) f.push('steps-non-contiguous');
   if (f.length) { anyFlag = true; P(`  ${s.shortId} ${s.deviceModel.padEnd(13)} ${f.join('  ')}`); }

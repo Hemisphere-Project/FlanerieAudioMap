@@ -67,11 +67,29 @@ is **local (UTC+2)**. Files are large — use the scripts, don't cat raw JSON.
 - **Audio errors** are split `jingle` vs `step_voice`. `jingle` (`resume/afterplay/
   youlost/gpslost.mp3`) = placeholder assets not yet produced — harmless. Only
   `step_voice` (`BLOC_*` narration) errors and `step_voice_failed` are real defects.
+  `analyze` shows the `step_voice` split as `(N play/N load)`: `loaderror` = the file
+  failed to load (missing / unreadable / bad container); `playerror` = decode or
+  playback failure. They point at different root causes — keep them apart.
 - **Crashes** — `session_resume` count = mid-walk relaunches. The resume machinery
-  usually recovers the walk; a high count still flags an unstable device.
+  usually recovers the walk; a high count still flags an unstable device. `analyze`
+  flags *any* session with `resumes>=1` — a single relaunch is still a crash worth
+  a look (it is easy to miss one `1` in a 100-row table).
+- **`step_resume_current` zone overshoot** — GPS placing the phone fractionally
+  inside the *next* step's zone re-resumes the current step. In `session.mjs` check
+  `border=` on `step_resume_current` rows: a value roughly between −3 m and 0 means
+  the phone is just past the boundary (within GPS noise) — the premature step-advance
+  signature. `analyze` flags `stepResumeCurrent>=2`.
+- **Stale resume seek-pos** — identical `resume_seek_pos` across `session_resume`
+  events with *different* `resume_step_index` means the resume position is not
+  cleared on step change: after a crash, narration restarts mid-content of an
+  unrelated step. `analyze` flags this as `stale-seek-pos`; `session.mjs` prints
+  `seek=` per resume so you can see it directly.
 - **OEM battery kill** — `bg_stop_repeated`, `battery_kill_overlay`.
-- **Build skew** — `analyze` lists `session_diag` apk/webapp hashes; more than one
-  webapp hash means not all walks ran the same code.
+- **Build / config skew** — `analyze` lists `session_diag` apk/webapp hashes; more
+  than one webapp hash means not all walks ran the same code. The `Parcours` line
+  does the same for the parcours config: a minority `parcoursName` (its session ids
+  are listed) is usually a device on a stale cached config — check its step count
+  against the majority.
 - Always separate **iOS vs Android** — failure modes differ sharply.
 
 ## Interpreting completion

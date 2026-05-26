@@ -150,6 +150,35 @@ export function summarize(session) {
   const gpsAcc = ev.filter(e => e.type === 'gps' && e.data && typeof e.data.acc === 'number')
     .map(e => e.data.acc);
 
+  // Resume positions from session_resume events — the step and seek-pos a crash
+  // recovery restored to. Used to detect the stale seek-pos bug (report P8).
+  const resumePositions = ev.filter(e => e.type === 'session_resume' && e.data)
+    .map(e => ({
+      step: Number.isInteger(e.data.resume_step_index) ? e.data.resume_step_index : null,
+      seekPos: typeof e.data.resume_seek_pos === 'number' ? e.data.resume_seek_pos : null,
+      done: !!e.data.resume_step_done,
+    }));
+  // Stale seek-pos: the same resume_seek_pos restored at two *different* steps means
+  // the resume position is not cleared on step change — a crash mid-walk then jumps
+  // narration into an unrelated step's audio.
+  const seekByStep = new Map();
+  for (const p of resumePositions) {
+    if (p.seekPos == null || p.step == null) continue;
+    const key = Math.round(p.seekPos * 10) / 10;
+    if (!seekByStep.has(key)) seekByStep.set(key, new Set());
+    seekByStep.get(key).add(p.step);
+  }
+  const staleSeekPos = [...seekByStep.values()].some(steps => steps.size >= 2);
+
+  // step_voice audio errors split by event type: loaderror = the file failed to
+  // load (missing / unreadable / bad container); playerror = decode/playback failure.
+  const audioErrByType = { playerror: 0, loaderror: 0 };
+  for (const e of audioErrEvents) {
+    if (classifyAudioSrc(e.data && e.data.src) !== 'step_voice') continue;
+    if (e.type === 'audio_loaderror') audioErrByType.loaderror++;
+    else audioErrByType.playerror++;
+  }
+
   return {
     file: session.file,
     shortId: session.meta.shortId,
@@ -186,9 +215,13 @@ export function summarize(session) {
 
     resumes: types['session_resume'] || 0,
     restarts: (types['session_restart'] || 0) + (types['session_restart_click'] || 0),
+    stepResumeCurrent: types['step_resume_current'] || 0,
+    resumePositions,
+    staleSeekPos,
 
     audioErr: audioErrEvents.length,
     audioErrByKind,
+    audioErrByType,
     audioTimeout: types['audio_play_timeout'] || 0,
     audioStuck: types['audio_play_stuck'] || 0,
     voiceFail: types['step_voice_failed'] || 0,
