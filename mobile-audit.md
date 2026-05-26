@@ -1,7 +1,8 @@
 # Mobile Audit Remediation Plan
 
 Original: 2026-04-27  
-Last updated: 2026-05-20 (Round 7 — field test 2026-05-20 telemetry batch, FLANERIE_GIVORS, ~39 visitor walks: iOS 26.3.x background-GPS blackout P1.34, iOS step-narration playerror R7.1, recovery-map auto-open regression R7.2, iOS audiofocus-request-fail flood R7.3. New reusable analysis tooling in `telemetry/scripts/` R7.0)  
+Last updated: 2026-05-26 (Round 8 / Phase 1A — 5 behaviour fixes + 10 diagnostic additions, JS-only, no plugin rebuild: A4 cross-step voice-pos contamination, C1 audio error classification, D1 iOS 26.3.x onboarding warning, A7 end-of-walk session close, A5 persistent device UUID + server registry; B4-diag/F-G2/F-A1/F-Z1/F-Z2/F-Z3/F-N3/F-R1/F-R2/F-K3 diagnostic telemetry)
+Previous: 2026-05-20 (Round 7 — field test 2026-05-20 telemetry batch, FLANERIE_GIVORS, ~39 visitor walks: iOS 26.3.x background-GPS blackout P1.34, iOS step-narration playerror R7.1, recovery-map auto-open regression R7.2, iOS audiofocus-request-fail flood R7.3. New reusable analysis tooling in `telemetry/scripts/` R7.0)  
 Previous: 2026-05-20 (P1.33 — Android GPS cold-start: `RawLocationProvider` also requests `NETWORK_PROVIDER` + delivers last-known-network fix immediately on start)  
 Previous: 2026-05-19 (Round 6 — `checkbatteryopt` silent-bypass root-cause fix R6.1: `device.version` is OS version string not API level, `apiLevel < 23` was always true, page has bypassed itself on every device since introduction; `IsPowerSaveMode` hard block R6.2: power save now Gate 0 in `check()`, walker cannot proceed while battery saver is on; diagnostic telemetry R6.3: `session_diag` + `power_state_at_parcours` logged at parcours entry)
 Previous: 2026-05-19 (Round 5 — native plugin work targeting Samsung A41 BLOC_14→BLOC_15 OEM-kill repro from 2026-05-18 colleague report: audiofocus mediaPlayback foreground service keepalive R5.1, power-optimization `IsBackgroundRestricted()` detection R5.2 closing the urgent subset of C5, audiofocus iOS interruption-without-ShouldResume R5.3 closing the full C6 backlog. Requires plugin reinstall + APK rebuild + Play Store upgrade)  
@@ -1308,6 +1309,108 @@ Files (when picked up): `www/app/assets/player.js`, `cordova-plugin-audiofocus/`
 
 ---
 
+### Round 8 (GIVORS follow-up — Phase 1A JS-only batch, 2026-05-26)
+
+Triggered by `20260520-GIVORS-report.md` §12 remediation plan. Five behaviour fixes and ten diagnostic additions, all JS-only (no plugin rebuild). Scoped to be safe before the next field test (~1 week); show in ~4 weeks. See report §12.10 for the full acceptance criteria table. Committed in 6 logical commits (`5ac13f8` GIVORS report update, `52131be` A4, `ba07d96` C1, `3a5fafc` D1+A7, `3f73b27` A5, `2d7f645` diagnostic telemetry).
+
+#### A4 Cross-step voice-position contamination ✅ DONE (2026-05-26) [SAFE-TODAY]
+
+**Problem (P8 / rumx session).** `resumeStepVoicePos` snapshotted during step N's voice was consumed unchanged by step N+1 on its first fire (`!wasCurrentStep`). On an iOS kill/relaunch mid-walk the snapshot from BLOC_15 was applied as a seek offset to BLOC_16, producing a stutter-skip at the wrong timestamp. The `rumx` session (R7.1) also showed a double-resume stutter (M2/P6 class): when GPSSIGNAL_OK stayed `true` via the keepalive, re-entering a step zone re-applied the saved pos even when `wasCurrentStep` was already `true` and audio was already playing.
+
+**Resolution — two coupled changes:**
+1. `spot.js` `Step.updatePosition`: on `!wasCurrentStep`, clear `PARCOURS.state.resumeStepVoicePos = 0` after `PARCOURS.currentStep(this._index)` and call `PARCOURS.store('step_fire')` to persist the clear. The snapshot set by the prior step cannot survive into the new step.
+2. `parcours.js` `snapshotVoicePosition`: gate tightened from `pos > 0` to `pos > 3`. The first 2–3 s after a seek are unreliable; applying a near-zero snapshot as a resume offset immediately re-seeks to near-zero (P6 stutter). The 3 s threshold is well below the first periodic store tick (10 s) so no legitimate mid-voice position is missed.
+
+Files: `www/app/assets/spot.js`, `www/app/assets/parcours.js`
+
+Regression risk: **LOW** — the `!wasCurrentStep` clear fires only when a new step becomes current; the pos gate change only affects the first 3 s window after a resume.
+
+Acceptance: on next field test, `step_audio_trigger` events must not carry non-zero `resume_seek_pos` on a step's first fire when the prior step was a different audio file. No `voice_snapshot` with `pos < 3` should trigger a seek.
+
+#### C1 Audio error classification + resolved URI telemetry ✅ DONE (2026-05-26) [SAFE-TODAY]
+
+**Problem (R7.1 root-cause blind spot).** `audio_playerror` / `audio_loaderror` was serialising the Cordova Media `MediaError` object as `"[object Object]"` (flagged Round 3 #2 and R7.1). Without the actual error code, the root cause of iOS step-narration failures (decode failure? audio-session deactivation? truncated file?) was undiagnosable.
+
+**Resolution:**
+- New `classifyAudioErrorType(kind, code, message)` module-level helper in `player.js` maps Cordova Media error codes 1–4 and Howler error codes to human-readable `error_type` strings: `decode_error`, `network_error`, `permission_denied`, `not_supported`, `unknown`.
+- `_logAudioTelemetry` rewritten to explicitly extract `.code` / `.message` from `MediaError` instances (with string/number fallbacks), call the classifier, and add `error_type`, `error_code`, `backend` (native/howler) fields to every error event.
+- New `audio_uri_resolved` event on every `load()` after player construction — logs `src`, `resolved_uri`, `backend` — so path-resolution failures can be diagnosed before a play attempt.
+- New `load_duration_ms` field on `audio_play_started` (F-A1, see R8.0 below) — time from `play()` call to first `play` event.
+
+Files: `www/app/assets/player.js`
+
+Regression risk: **LOW** — pure telemetry enrichment; no audio path behaviour changed.
+
+Acceptance: iOS sessions with `audio_playerror` must show `error_code` (integer) and `error_type` (string) instead of `"[object Object]"`. `audio_uri_resolved` appears once per step load. R7.1 root cause (decode vs session vs file) becomes deterministic from telemetry alone.
+
+#### D1 iOS 26.3.x version warning at onboarding ✅ DONE (2026-05-26) [SAFE-TODAY]
+
+**Operational mitigation only — does not replace the B4 real-callback watchdog (Phase 1B) or D3/D4/D5 native GPS reacquire (Phase 3).**
+
+**Problem (P1.34).** iOS 26.3.x has a confirmed background-GPS blackout bug that silently drops 4–8 contiguous steps per affected walk. Visitors on that OS version need to be warned to keep their screen awake.
+
+**Resolution.** `PAGES['confirmgeo']`: reads `device.version` on iOS, extracts major/minor, and when `major === 26 && minor <= 3` injects a red-styled warning block into `#confirmgeo-desc2`: "Maintenez l'écran allumé pendant toute la balade." Logs `ios_version_warning` telemetry with `ios_version`, `major`, `minor`, `patch` so the next session shows which OS versions remain in the field.
+
+Files: `www/app/pages.js`
+
+Regression risk: **NONE** — additive UI text on iOS only; Android path untouched.
+
+Acceptance: iOS 26.3.x device sees the red warning block at `confirmgeo`. iOS 26.4.x, 18.x, and Android see no change. `ios_version_warning` appears in session telemetry.
+
+#### A7 Generic end-of-walk message + session close ✅ DONE (2026-05-26) [SAFE-TODAY]
+
+**Problem.** `PAGES['end']` had no explicit `TELEMETRY.end()` call — the session was left open, risking loss of final events. The show continues after the walk with a non-phone chapter; the end-screen text must work for both loan and personal phones without implying any return obligation.
+
+**Resolution.**
+- On `PAGES['end']` entry: log `walk_end_shutdown` (`step_count`, `is_loan`, `device_uuid`), then `TELEMETRY.flush().finally(() => TELEMETRY.end())`.
+- Typewriter cycle: 4 generic phrases — "La balade est terminée.", "Merci de votre présence.", "Le spectacle continue…", "Vous pouvez rangez le téléphone." — suitable for both loan and personal phones; acknowledges the show continues without the device.
+
+Files: `www/app/pages.js`
+
+Regression risk: **LOW** — additive; the missing `TELEMETRY.end()` was harmless (server eventually times out the session) but now corrected.
+
+#### A5 Persistent device identity + loan flag + server registry ✅ DONE (2026-05-26) [TEST-FIRST]
+
+**Problem.** Phones are reused across visitors and re-inited between handoffs. Without a stable per-device identifier, fleet telemetry could not distinguish "same phone, different visitor" from "different device", and there was no way to flag loan phones vs personal phones.
+
+**Resolution:**
+- `telemetry.js`: `_getDeviceUuid()` creates/reads a UUID from localStorage (`crypto.randomUUID()` with fallback). `_isLoanDevice()` / `_setLoanDevice(bool)` persist a sticky `LOAN_DEVICE` boolean. Both added to `_buildSessionMeta()` — every session carries `deviceUuid` and `isLoanDevice`. Exposed on public `TELEMETRY` API.
+- `pages.js`: `session_diag` enriched with `device_uuid` and `is_loan`. A `POST /devices` call registers the device after logging `session_diag`.
+- `pages.js` (tools page): "Téléphone de prêt: ?" toggle button lets the operator mark/unmark a device as a loan phone.
+- `server.js`: `POST /devices` (upsert by UUID), `GET /devices` (admin list), `PATCH /devices/:uuid` (friendly_name / is_loan) endpoints backed by `devices.json`.
+- `telemetry/scripts/common.mjs`: `deviceUuid` and `isLoanDevice` added to session summary.
+- `telemetry/scripts/analyze.mjs`: `--include-loan-only`, `--exclude-loan`, `--device-uuid` filter flags.
+- `www/app/app.html`: loan-phone toggle button added to tools page DOM.
+
+Files: `www/app/assets/telemetry.js`, `www/app/pages.js`, `www/app/app.html`, `server.js`, `telemetry/scripts/common.mjs`, `telemetry/scripts/analyze.mjs`
+
+Regression risk: **LOW** — telemetry and server additions are read-only from the walk perspective. Tools page button only reachable in DEVMODE.
+
+Acceptance: every `session_start` / `session_resume` carries `deviceUuid` (stable across relaunches on the same device) and `isLoanDevice`. `GET /devices` lists all registered devices with their last-seen session. `--exclude-loan` in `analyze.mjs` correctly filters SM-A515F spare-phone sessions.
+
+#### R8.0 Phase 1A diagnostic telemetry additions ✅ DONE (2026-05-26) [SAFE-TODAY]
+
+Ten observability additions targeting the open questions from the GIVORS field day. All are logging-only — no behaviour changes to GPS, audio, or step-progression paths.
+
+| ID | Event(s) | What it answers |
+|---|---|---|
+| B4-diag | `real_callback_freshness` (30 s periodic) | Distinguishes real GPS callbacks from 15 s NSTimer/Handler keepalive ticks; exposes `real_callback_age_ms` to narrow the P1.34 iOS and P1.31 Android blackout windows |
+| F-G2 | `app_visibility` (deduped) | Background/foreground transitions on iOS (`document.pause/resume/visibilitychange`) and Android (`bgGeo on('background'/'foreground')`); closes the iOS blind spot noted in P3.5b |
+| F-A1 | `audio_play_started.load_duration_ms` | Time from `play()` call to first `play` event — confirms whether cold-load delay (R4.1) is load latency or a stuck player |
+| F-Z1 | `accuracy_near_border` (throttled) | GPS accuracy when the walker is within 20 m of a step boundary — drives Phase 1B E1/E2/E3 accuracy gate calibration |
+| F-Z2 | `step_resume_current` enriched | Adds `accuracy`, `consecutive_inside_samples`, `time_since_first_inside_ms`, `real_callback_age_ms` — quantifies false re-arm triggers |
+| F-Z3 | `step_implicit_done` | Fires when an undone step is silently stopped by the "stop all other steps" loop — surfaces missed `step_done` emissions |
+| F-N3 | `_jsReceivedAt` stamp + `step_audio_trigger.real_callback_age_ms` | JS-side timestamp on every position callback; `step_audio_trigger` gets `real_callback_age_ms` to track keepalive-vs-real at trigger time |
+| F-R1 | `session_start.inter_session_idle_ms` | Time since prior session ended (from localStorage) — distinguishes cold-start from rapid-relaunch patterns |
+| F-R2 | `rearm_pre_state` snapshot | Parcours state dump on rearm button tap — captures whether the prior session ended cleanly or was abandoned mid-walk |
+| F-K3 | `bg_restrictions_recheck` (5 min periodic, Android) | Re-checks `IsBackgroundRestricted()` / `IsPowerSaveMode()` mid-walk — detects settings changes that happen after onboarding (e.g. OEM auto-sleep activating) |
+
+Files: `www/app/assets/geoloc.js` (B4-diag, F-G2, F-N3), `www/app/assets/player.js` (F-A1, via C1 above), `www/app/assets/parcours.js` (F-Z1), `www/app/assets/spot.js` (F-Z2, F-Z3, F-N3 stamp), `www/app/assets/telemetry.js` (F-R1), `www/app/pages.js` (F-R2, F-K3)
+
+Regression risk: **NONE** — all additions are `TELEMETRY.log` calls or `setInterval` probes. The `real_callback_freshness` and `bg_restrictions_recheck` intervals are cleared in `PAGES_CLEANUP['parcours']`.
+
+---
+
 ### C: Cordova container findings
 
 #### C1 Audiofocus plugin ✅ DONE (2026-05-05, follow-up 2026-05-06)
@@ -1521,6 +1624,21 @@ Regression risk: **LOW** — C7.1 is a pure try/catch wrap.
 
 ## Recommended Execution Sequence
 
+### Round 8 / Phase 1A implementation (2026-05-26) — ✅ code complete, awaiting next field test
+
+JS-only batch based on the GIVORS field-test analysis (§12.10 of `20260520-GIVORS-report.md`). No plugin rebuild required; safe to deploy before the next field test.
+
+- **A4** `resumeStepVoicePos` cleared on step advance + `pos > 3` snapshot gate — closes P8 cross-step contamination and M2/P6 double-resume stutter.
+- **C1** Audio error classification (`classifyAudioErrorType`) + `audio_uri_resolved` per-load — surfaces the R7.1 iOS narration failure root cause from telemetry.
+- **D1** iOS 26.3.x onboarding warning at `confirmgeo` — operational mitigation for P1.34; does not replace the B4 watchdog or D3/D4/D5 native fix.
+- **A7** Generic end-of-walk typewriter message + `TELEMETRY.flush()→end()` — works for both loan and personal phones; closes the missing session-end gap.
+- **A5** Persistent device UUID (localStorage) + loan flag + `POST /devices` server registry + tools-page toggle + analyze filter flags — enables per-device fleet tracking.
+- **R8.0** 10 diagnostic additions (B4-diag, F-G2, F-A1, F-Z1, F-Z2, F-Z3, F-N3, F-R1, F-R2, F-K3) — all logging-only; closes the major observability gaps from P1.34 and R7.
+
+**No validation required before deployment** (all SAFE-TODAY except A5 which is TEST-FIRST for the server endpoints). Deploy before the next field test. Validation matrix in the "Awaiting field validation" section below.
+
+---
+
 ### Round 5 implementation (2026-05-19) — ✅ code complete, awaiting Samsung A41 build test
 
 Native plugin work targeting the 2026-05-18 Samsung SM-A415F (A41) BLOC_14→BLOC_15 OEM-kill repro. Requires a Cordova rebuild (Android + iOS) and plugin reinstall before deployment; a Play Store upgrade is the intended distribution path.
@@ -1591,6 +1709,22 @@ All four batches implemented in one session. JS syntax-checked; no behavioural f
 
 ### Awaiting field validation (shipped, build pending or untested)
 
+**Phase 1A (2026-05-26) — next field test validation targets:**
+- **A4** (2026-05-26) — `step_audio_trigger` events on first fire of a new step must not carry non-zero `resume_seek_pos` from the prior step. No `voice_snapshot` with `pos < 3` should trigger a seek. Cross-check `rumx`-class sessions for double-resume stutter absence.
+- **C1** (2026-05-26) — iOS sessions with `audio_playerror` must show `error_code` and `error_type` (not `"[object Object]"`). `audio_uri_resolved` must appear once per step audio load.
+- **D1** (2026-05-26) — Any iOS 26.3.x device must see the red warning block at `confirmgeo`; iOS 26.4.x / 18.x / Android must see no change. `ios_version_warning` telemetry present.
+- **A7** (2026-05-26) — `walk_end_shutdown` event present at the end of every completed session. `session_end` (from `TELEMETRY.end()`) present. Typewriter cycle legible on a locked screen.
+- **A5** (2026-05-26) — `session_start.deviceUuid` stable across relaunches on the same device. `isLoanDevice` matches the operator's toggle. `GET /devices` lists the fleet. `--exclude-loan` in `analyze.mjs` filters SM-A515F spare-phone sessions correctly.
+- **B4-diag** (2026-05-26) — `real_callback_freshness` events appear every 30 s on parcours page. During a P1.34-class GPS gap the `real_callback_age_ms` field grows past 60 s while `last_keepalive_age_ms` stays ≤ 20 s. This is the key signal for Phase 1B B4 watchdog calibration.
+- **F-G2** (2026-05-26) — iOS sessions must now show `app_visibility` events (from `document.pause/resume`); Android sessions via `bgGeo on('background'/'foreground')`.
+- **F-A1** (2026-05-26) — `audio_play_started` events carry `load_duration_ms`; expect > 5 s on the R4.1 cold-load Android devices.
+- **F-Z1** (2026-05-26) — `accuracy_near_border` events appear when walker is within 20 m of a step boundary; `accuracy` field provides calibration data for Phase 1B E1/E2/E3 gates.
+- **F-Z2** (2026-05-26) — `step_resume_current` events carry `accuracy`, `consecutive_inside_samples`, `time_since_first_inside_ms`; look for false re-arm triggers (high `consecutive_inside_samples` with high `real_callback_age_ms`).
+- **F-Z3** (2026-05-26) — `step_implicit_done` appears for steps stopped by the "stop all other steps" loop that hadn't emitted their own `step_done`.
+- **F-R1** (2026-05-26) — `session_start.inter_session_idle_ms` present; short values (< 5 s) identify rapid-relaunch patterns (operator re-arm) vs long values (cold-start visitor walks).
+- **F-R2** (2026-05-26) — `rearm_pre_state` appears on every rearm button tap; fields describe prior session completion state.
+- **F-K3** (2026-05-26) — `bg_restrictions_recheck` appears every 5 min on Android; must not appear on iOS.
+
 - **R4.2** parcours_restore lifecycle + session_resume payload (2026-05-18) — every relaunched session should now surface `parcours_restore`; `session_resume.resume_seek_pos` should carry the saved voice position directly
 - **R4.4** audio_play_timeout truth check + retry (2026-05-18) — on the Android fleet (Xiaomi M2101K7AG, Samsung A41/A51, Moto G7) that reproduced the F1 / R4.1 cold-load hang, look for `audio_play_timeout_self_healed` (false positives now), `audio_play_stuck_retry` then either recovery or `audio_play_stuck` (genuine stucks). If R4.4 closes the issue, no `audio_play_stuck` appears and BLOC_01 voice starts within seconds on all devices
 - **R4.5** voice_snapshot truth-check fields (2026-05-18) — every `voice_snapshot` should now carry `audio_playing` and `load_state`; cross-reference confirms whether long pos=0 runs are genuine stucks (R4.1) or normal afterplay phases
@@ -1616,15 +1750,39 @@ All four batches implemented in one session. JS syntax-checked; no behavioural f
 - **P0.5** v2.4.0 GPS fork (deployed)
 - **P1.5c** GPS-lost timeout unified at 30s
 
+### Phase 1B (after next field test — calibrate on Phase 1A telemetry)
+
+Blocked on Phase 1A field data. Do not implement until `real_callback_freshness`, `accuracy_near_border`, and `step_resume_current` data from the next field test are analysed.
+
+- **B4 watchdog** — JS-side real-callback-gap detector: when `real_callback_age_ms > 90 s` AND motion is non-STILL, surface a "Téléphone en veille — déverrouillez pour continuer" band. Directly addresses P1.34 (iOS 26.3.x blackout) and P1.31 (Android Doze). Threshold calibrated from `real_callback_freshness` field data. SAFE-TODAY once calibrated.
+- **E1/E2/E3 zone-overshoot gates** — accuracy-gated step entry: suppress `step_fire` when `accuracy > threshold` and the walker is only marginally inside the zone boundary. Threshold calibrated from `accuracy_near_border` data. TEST-FIRST.
+- **C2 file integrity check** — verify media file sizes / checksums at parcours-page entry to catch truncated downloads before they cause R7.1-class `audio_playerror`. SAFE-TODAY.
+- **B1 aggressive past-step media unload** — explicitly unload completed-step audio objects (voice + afterplay) when the next step fires, to prevent memory pressure crashes on A15-class devices. TEST-FIRST.
+- **A6 parcours freshness check** — detect when the cached parcours is stale (hash mismatch vs server) at walk start and offer a refresh gate. SAFE-TODAY.
+- **R7.2 default-afterplay map fix** — gate `openMapForRecovery` in `DEFAULT_AFTERPLAY_PLAYER.on('play')` on `reason: loaderror` only; suppress for `reason: no_src` (normal for parcours with no per-step afterplay like FLANERIE_GIVORS). TEST-FIRST.
+
+### Phase 2 (plugin rebuild + Play Store — after Phase 1B)
+
+Requires Cordova rebuild and Play Store upgrade. Coordinate with show schedule (show in ~4 weeks as of 2026-05-26).
+
+- **A1/A2/A3** Walk-session lifecycle: `BGGeo.start()` / `stop()` scoped to the parcours session; proper audiofocus `startKeepalive()` → parcours → `stopKeepalive()` bookkeeping. Depends on G1.
+- **G1** Audiofocus plugin: `resetAudioSession()` / `releaseSession()` actions for clean walk-start and walk-end teardown.
+- **G2** Power-optimization plugin: promote `~/Bakery/cordova-plugin-power-optimization/` fork (currently only in-tree); add `GetStandbyBucket()` / `IsAutoRevokeWhitelisted()` / `RequestAutoRevokeWhitelist()` Java methods; extend OEM intent table (full C5 backlog).
+- **G3** BG-geo plugin: F-G1 (native `locationManager:didChangeAuthorizationStatus:` callback), F-G3 (background-task ID in keepalive tick), F-G4 (NSTimer vs CLLocationManager callback source tag).
+- **P1.33** `RawLocationProvider`: add `NETWORK_PROVIDER` request + last-known-network fix delivery on `onStart()` for Android GPS cold-start warmup.
+
+### Phase 3 (deep native + dedicated field session)
+
+- **D3/D4/D5** iOS CLLocationManager reacquire: force `requestLocation()` / `allowsBackgroundLocationUpdates` reassert when `real_callback_age_ms > 120 s`. Requires BG-geo plugin fork work.
+- **B2** Android AlarmManager JS wakeup (`setExactAndAllowWhileIdle` + `evaluateJavascript`) — covers the edge case where the WebView is suspended despite the foreground service running (P0.5 Fix 1e).
+- **B3** Android FusedLocationProvider conditional — for Doze-affected OEM classes (Motorola, TCL). Full P0.5 Fix 4 scope. Only if B4 watchdog + B2 AlarmManager don't close P1.31.
+- **C6b** Android NativeMediaPlayer (conditional) — route Android step voices through `cordova-plugin-media` to close R4.1 cold-load hang, matching the iOS P3.4 fix.
+- **P3.5 Plan B** native `getCurrentPosition()` during GPS tasks — only if `voice_snapshot` data shows `_positionSec` staleness on iOS after Phase 1B.
+
 ### Next implementation session (cannot republish this session)
 
-- **P1.33** Android GPS cold-start warmup — add `NETWORK_PROVIDER` request + last-known-network fix delivery in `RawLocationProvider.onStart()`. Requires plugin rebuild + APK. Est. ~1 hour.
-- **P1.31** Android Doze GPS blackout response — pick a fix path after the dedicated Motorola/TCL test session (operational doc, OEM-class detector + tighter location config, BG plugin reconfig, or JS-side stale-callback watchdog with UI escalation)
-- **Launcher-level telemetry beacon** (extracted from P1.32, option C) — send a `navigator.sendBeacon` from `launcher.js` right before `app_run()` with `cordova.platformId`, `device.version`, `device.model`, last fetchRemote/update error, and the `app_check_version` outcome. Pair with P1.32 option A (re-enable launcher's commented `.catch` so the error appears in the visible launcher state). Without this, any launcher-side failure is silent because the webapp's TELEMETRY hasn't started yet. SAFE-TODAY, half a day. Standalone value — picks up future launcher regressions on any device, not just iPhone 8.
-- **C5 Power optimization plugin fork** — `isBackgroundRestricted` hard-block, `isPowerSaveMode` soft warn, standby bucket telemetry, modern OEM intent table, fix `RequestOptimizationsMenu` inverted conditional. Unlocks the hard-block path for manufacturer-tailored copy already shipped in P1.12. Est. half a day.
-- **C6 Audiofocus plugin fork extension** — iOS interruption-end without `ShouldResume`: emit `AUDIOFOCUS_GAIN_AVAILABLE`, add `document.resume` retry in JS. Closes the silent-pause-forever failure after Siri / alarm. Est. ~45 min.
+- **Launcher-level telemetry beacon** (extracted from P1.32, option C) — `navigator.sendBeacon` from `launcher.js` before `app_run()` with `cordova.platformId`, `device.version`, `device.model`, last error. Pair with P1.32 option A (re-enable the commented `.catch`). SAFE-TODAY, half a day. Standalone value regardless of P1.32 status.
 - **P0.5 Fix 1e** Android AlarmManager JS wakeup (only if WebView-suspended-despite-FG-service shows up in telemetry)
-- **P3.5 Plan B** native `getCurrentPosition()` during GPS tasks (only if P3.5b telemetry shows `_positionSec` staleness on iOS)
 - **P3.5 Plan C** native plugin save on `applicationDidEnterBackground` / `onPause` (only if Plan B insufficient or iOS shows full localStorage write-loss on kill)
 
 ### Conditional / not yet decided
