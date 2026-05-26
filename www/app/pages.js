@@ -228,10 +228,34 @@ PAGES['intro'] = () => {
 //
 // CHECK DATA 
 //
-PAGES['checkdata'] = () => 
+PAGES['checkdata'] = () =>
 {
-    // PARCOURS resume
-    if (PARCOURS.valid()) return PAGE('checkgeo');
+    // PARCOURS resume — A6: opportunistic freshness check against the server
+    // before reusing the cached parcours. If offline, fall through to the
+    // cached version (the walk must work without data once preloaded).
+    if (PARCOURS.valid()) {
+        get('/list')
+            .then(parcours => {
+                try {
+                    var match = parcours.find(p => p.file === PARCOURS.pID);
+                    var serverTime = match ? new Date(match.time).getTime() : null;
+                    var cachedTime = parseInt(localStorage.getItem('parcoursMTime_' + PARCOURS.pID) || '0', 10);
+                    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('parcours_freshness_check', {
+                        pID: PARCOURS.pID,
+                        server_time: serverTime,
+                        cached_time: cachedTime || null,
+                        match_found: !!match,
+                        stale: !!(serverTime && cachedTime && serverTime > cachedTime),
+                    });
+                    if (serverTime && cachedTime && serverTime > cachedTime) {
+                        return PAGE('parcoursupdate', { match: match, serverTime: serverTime, cachedTime: cachedTime });
+                    }
+                } catch (e) { console.warn('Freshness check failed:', e); }
+                PAGE('checkgeo');
+            })
+            .catch(() => PAGE('checkgeo'));  // offline → use cached
+        return;
+    }
 
     // if not, check if parcours are available online
     get('/list')
@@ -249,6 +273,27 @@ PAGES['checkdata'] = () =>
             else PAGE('noparcours');
         })
         .catch(error => PAGE('nodata'));
+}
+
+PAGES['parcoursupdate'] = (ctx) => {
+    var match = ctx && ctx.match ? ctx.match : null;
+    var serverTime = ctx && ctx.serverTime ? ctx.serverTime : null;
+    var cachedTime = ctx && ctx.cachedTime ? ctx.cachedTime : null;
+    var detail = '';
+    if (match && match.name) detail = 'Parcours: ' + match.name;
+    if (serverTime) detail += (detail ? ' · ' : '') + 'Serveur: ' + new Date(serverTime).toLocaleString('fr-FR');
+    if (cachedTime) detail += (detail ? ' · ' : '') + 'Local: ' + new Date(cachedTime).toLocaleString('fr-FR');
+    $('#parcoursupdate-detail').text(detail);
+    $('#parcoursupdate-refresh').off().on('click', () => {
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('parcours_update_chosen', { action: 'refresh', pID: PARCOURS.pID });
+        // Clear cached state and route through preload → load with the same pID.
+        try { PARCOURS.clearStore(); } catch (e) {}
+        PAGE('preload', match || { file: PARCOURS.pID });
+    });
+    $('#parcoursupdate-skip').off().on('click', () => {
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('parcours_update_chosen', { action: 'skip', pID: PARCOURS.pID });
+        PAGE('checkgeo');
+    });
 }
     
 PAGES['nodata'] = () => {
@@ -971,8 +1016,13 @@ PAGES['tools'] = () => {
 // CHECK MEDIA
 //
 PAGES['preload'] = (p) => {
+    // A6: stash the server-reported mtime alongside the parcours so the next
+    // checkdata can compare and detect remote updates.
+    if (p && p.time && p.file) {
+        try { localStorage.setItem('parcoursMTime_' + p.file, String(new Date(p.time).getTime())); } catch (e) {}
+    }
     // Check loaded media
-    PARCOURS.load(p.file).then(() => 
+    PARCOURS.load(p.file).then(() =>
     {
         let dlNeeded = PARCOURS.state.mediaPackSize - PARCOURS.state.mediaPackLoaded
         if (dlNeeded == 0) PAGE('load', false);
