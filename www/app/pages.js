@@ -1053,9 +1053,31 @@ var retryAuth = 0;
 PAGES['confirmgeo'] = () => {
     $('#confirmgeo-settings').hide().off().on('click', () => GEO.showAppSettings())
 
-    // if (PLATFORM == 'ios') 
+    // D1 — iOS 26.0–26.3.x background-GPS regression (GIVORS 2026-05-20 §S1 / P1.34):
+    // three iPhones on iOS 26.3.1 had 8–14-min background-GPS blackouts mid-walk.
+    // iOS 26.4.2 sessions had shorter gaps but completed; iOS 18.x was clean.
+    // Surface a soft warning so the operator can offer a loan phone (or push the
+    // visitor to update). Visitor can still proceed — the underlying fix lives
+    // in workstream D (B4 watchdog, D3/D4/D5 CLLocationManager reacquire); this
+    // is operational mitigation only, not a substitute.
+    if (PLATFORM === 'ios' && typeof device !== 'undefined' && typeof device.version === 'string') {
+        let parts = device.version.split('.')
+        let major = parseInt(parts[0], 10)
+        let minor = parseInt(parts[1] || '0', 10)
+        if (major === 26 && minor < 4) {
+            $('#confirmgeo-desc2').html(`<strong>Attention :</strong> votre version d'iOS (${device.version}) a un défaut connu de localisation en arrière-plan qui peut interrompre la balade. Mettez à jour iOS (Réglages > Général > Mise à jour logicielle) ou demandez à l'équipe un téléphone de prêt.`)
+                .css('color', '#c00')
+            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('ios_version_warning', {
+                version: device.version,
+                major: major,
+                minor: minor,
+            })
+        }
+    }
+
+    // if (PLATFORM == 'ios')
     //     $('#confirmgeo-desc').append('<br><br>Réglages > Confidentialité > Services de localisation > Activez !');
-    // if (PLATFORM == 'android') 
+    // if (PLATFORM == 'android')
         // $('#confirmgeo-desc').text('Vous devrez autoriser l\'application et');
 
     if (retryAuth > 0) {
@@ -2032,20 +2054,50 @@ PAGES['end'] = () => {
     clearLostUI();
     if (testplayer) { testplayer.stop(); testplayer.clear(); testplayer = null; }
 
+    // A7 — explicit end-of-walk telemetry shutdown so the session closes cleanly
+    // server-side instead of bleeding events for hours (m3 / 7p2j, xuyx, 9hjo,
+    // mwbo on 2026-05-20). The periodic intervals are already gated on
+    // currentPage === 'parcours' so they stop firing here; the explicit
+    // walk_end_shutdown + flush + end seals the session.
+    if (typeof TELEMETRY !== 'undefined') {
+        TELEMETRY.log('walk_end_shutdown', {
+            visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
+            // Record what was actually torn down so the report can confirm the
+            // sequence ran end-to-end on each device.
+            stopped: ['tracking', 'geoloc', 'audio', 'silent', 'gpslost', 'lost', 'resume'],
+        });
+        try {
+            Promise.resolve(TELEMETRY.flush()).finally(() => TELEMETRY.end());
+        } catch (e) {
+            console.warn('[A7] telemetry flush/end failed:', e);
+            TELEMETRY.end();
+        }
+    }
+
+    // A7 lock-screen typewriter: generic copy that works for both loan and
+    // personal phones, and signals the show continues with a non-phone chapter
+    // rather than implying the visitor is being dismissed or asked to return
+    // the device. 5-tap-anywhere still reloads via the generic body handler.
     var ending = true
     function end() {
         if (!ending) return;
         TYPEWRITE('parcours-end')
             .typeString('La balade est terminée.')
-            .pauseFor(2000)
+            .pauseFor(2500)
             .deleteAll()
-            .typeString('Enlève tes écouteurs ...')
-            .pauseFor(5000)
-            .deleteAll()  
+            .typeString('Tu peux enlever tes écouteurs.')
+            .pauseFor(2500)
+            .deleteAll()
+            .typeString('Tu peux ranger le téléphone.')
+            .pauseFor(2500)
+            .deleteAll()
+            .typeString('La suite t\'attend.')
+            .pauseFor(4000)
+            .deleteAll()
             .callFunction(() => end())
     }
     end();
-    
+
 }
 
 
