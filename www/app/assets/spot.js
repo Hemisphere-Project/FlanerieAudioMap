@@ -673,6 +673,26 @@ class Step extends Spot
             }
                 
 
+            // B1 — aggressive past-step media unload. The distance-based
+            // unload at updatePosition() leaves N-2 and earlier loaded when
+            // their polygons happen to extend close to the active path
+            // (FLANERIE_GIVORS has several adjacent blocs). Each loaded
+            // PlayerStep keeps two Media/Howl instances alive (voice +
+            // afterplay) plus their decoded buffers — observed memory pressure
+            // and EOM kills on Samsung A15-class fleet. Explicitly free past
+            // steps when a new one fires; the upcoming step is left untouched
+            // so prewarmForLockedStart() still does its job.
+            allSteps.filter(s => s._index < this._index && s.player && s.player.isLoaded()).forEach(s => {
+                try {
+                    telemetryLog('step_past_unload', {
+                        step: s._index,
+                        name: s._spot ? s._spot.name : null,
+                        from_step: this._index,
+                    })
+                    s.player.clear()
+                } catch (e) {}
+            })
+
             // Stop all other steps. Emit 'done' only for a step that had NOT
             // already completed naturally — a step whose voice ended already
             // emitted 'done' (afterplay phase), so re-emitting here would
