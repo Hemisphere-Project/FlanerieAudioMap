@@ -301,6 +301,13 @@ var TELEMETRY = (function() {
             lastGpsTime = 0;
             _writeStored();
             var startPayload = {parcoursId: parcoursId, parcoursName: parcoursName};
+            // F-R1 — derive idle window from the last persisted session_end ts.
+            try {
+                var lastEnd = parseInt(localStorage.getItem('last_session_end_ts') || '0', 10);
+                if (Number.isFinite(lastEnd) && lastEnd > 0) {
+                    startPayload.inter_session_idle_ms = Math.max(0, now - lastEnd);
+                }
+            } catch (e) {}
             if (extra) Object.keys(extra).forEach(function(k) { startPayload[k] = extra[k]; });
             _log('session_start', startPayload);
             _startFlushTimer();
@@ -426,6 +433,12 @@ var TELEMETRY = (function() {
             _log('session_end', {});
             if (flushTimer) { clearInterval(flushTimer); flushTimer = null; }
             localStorage.removeItem(STORAGE_KEY);
+            // F-R1 — stamp when this session ended so the next session_start can
+            // log inter_session_idle_ms. Lets analyze.mjs correlate P7 (silent
+            // audio on loan-phone re-arm) with time-since-last-walk: if the
+            // failure rate scales with idle minutes, the engine staleness is
+            // time-decay rather than state-decay.
+            try { localStorage.setItem('last_session_end_ts', String(Date.now())); } catch (e) {}
             // Flush synchronously via sendBeacon if available, else async
             _flushFinal();
             console.log('[TELEMETRY] Ended session', sessionId);

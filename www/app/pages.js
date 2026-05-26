@@ -2224,6 +2224,32 @@ devmode(DEVMODE);
 // DEV TOOLS
 $('#parcours-rearm').click(() => {
     console.log('REARM');
+    // F-R2 — snapshot the audio + GPS engine state at re-arm. Today the rearm
+    // logic just resets parcours state without rebuilding the audio engine,
+    // which is the P7 root cause Justine flagged (4-5 silent-audio recoveries
+    // per day on the SM-A515F loan phone). Once A2 (engine reset at session
+    // start) ships in phase 2 we'll be able to confirm the snapshot improves;
+    // without the snapshot we can't tell whether the staleness is in
+    // AUDIOFOCUS, SILENT_PLAYER, PAUSED_PLAYERS, or somewhere else.
+    if (typeof TELEMETRY !== 'undefined') {
+        try {
+            TELEMETRY.log('rearm_pre_state', {
+                audiofocus:           typeof AUDIOFOCUS !== 'undefined' ? AUDIOFOCUS : null,
+                silent_player_state:  (typeof SILENT_PLAYER !== 'undefined' && SILENT_PLAYER && typeof SILENT_PLAYER.loadState === 'function') ? SILENT_PLAYER.loadState() : null,
+                silent_player_playing: (typeof SILENT_PLAYER !== 'undefined' && SILENT_PLAYER && typeof SILENT_PLAYER.isPlaying === 'function') ? SILENT_PLAYER.isPlaying() : null,
+                paused_players_count: (typeof PAUSED_PLAYERS !== 'undefined') ? PAUSED_PLAYERS.length : null,
+                ducked_players_count: (typeof DUCKED_PLAYERS !== 'undefined' && DUCKED_PLAYERS && typeof DUCKED_PLAYERS.size === 'number') ? DUCKED_PLAYERS.size : null,
+                all_players_count:    (typeof ALL_PLAYERS !== 'undefined') ? ALL_PLAYERS.length : null,
+                ios_native_fallback:  typeof IOS_NATIVE_FALLBACK_DETECTED !== 'undefined' ? !!IOS_NATIVE_FALLBACK_DETECTED : null,
+                gpssignal_ok:         typeof GPSSIGNAL_OK !== 'undefined' ? GPSSIGNAL_OK : null,
+                gps_revoked:          typeof GPSREVOKED !== 'undefined' ? GPSREVOKED : null,
+                last_real_callback_age_ms: (typeof GEO !== 'undefined' && GEO.lastRealCallbackTime) ? (Date.now() - GEO.lastRealCallbackTime) : null,
+                parcours_step:        (typeof PARCOURS !== 'undefined' && PARCOURS.state) ? PARCOURS.state.stepIndex : null,
+                parcours_lost:        (typeof PARCOURS !== 'undefined' && PARCOURS.state) ? !!PARCOURS.state.lost : null,
+                visibility:           typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
+            });
+        } catch (e) { console.warn('[F-R2] rearm_pre_state log failed:', e); }
+    }
     TELEMETRY.restart(
         'rearm_button',
         PARCOURS.pID || PARCOURS.info.name || '',
@@ -2744,6 +2770,53 @@ setInterval(() => {
             $('#gpslost-settings').hide();
             // stateUpdate('ok') will hide the overlay when a fix arrives
         }
+    });
+}, 30000);
+
+// F-K3 — periodic re-check of the Android power-restriction state during the
+// walk. checkbatteryopt only runs once at onboarding; Samsung One UI's auto
+// policies can flip "Background usage limits → Restricted" mid-walk on
+// infrequently-used apps. Cheap probe (5 min cadence) catches the flip and
+// surfaces it post-hoc — phase 1B may turn this into a live mid-walk hard
+// block once we know how often it fires.
+setInterval(() => {
+    if (currentPage !== 'parcours') return;
+    if (PLATFORM !== 'android') return;
+    if (typeof cordova === 'undefined' || !cordova.plugins || !cordova.plugins.PowerOptimization) return;
+    var po = cordova.plugins.PowerOptimization;
+    var psPromise = (typeof po.IsPowerSaveMode          === 'function') ? po.IsPowerSaveMode().catch(function(e)          { return 'error:'+e; }) : Promise.resolve('n/a');
+    var brPromise = (typeof po.IsBackgroundRestricted   === 'function') ? po.IsBackgroundRestricted().catch(function(e)   { return 'error:'+e; }) : Promise.resolve('n/a');
+    var igPromise = (typeof po.IsIgnoringBatteryOptimizations === 'function') ? po.IsIgnoringBatteryOptimizations().catch(function(e) { return 'error:'+e; }) : Promise.resolve('n/a');
+    Promise.all([psPromise, brPromise, igPromise]).then(function(r) {
+        TELEMETRY.log('bg_restrictions_recheck', {
+            power_save:        r[0],
+            bg_restricted:     r[1],
+            ignoring_batt_opt: r[2],
+            step:              (typeof PARCOURS !== 'undefined' && PARCOURS.state) ? PARCOURS.state.stepIndex : null,
+        });
+    });
+}, 5 * 60 * 1000);
+
+// B4 diagnostic — periodic real-callback freshness sample. Fires every 30s
+// while on parcours and logs how stale the last *real* GPS callback is, plus
+// motion + visibility context. With keepalive ticks confusing the existing
+// stateUpdateTimeout, this is the cleanest baseline to confirm S1/P1.34
+// (iOS 26.3.x background-GPS blackouts) and P1.31 (Android Doze) on the next
+// field test. UI band / gps_frozen escalation lands in phase 1B once we've
+// seen the distribution.
+setInterval(() => {
+    if (currentPage !== 'parcours') return;
+    if (typeof GEO === 'undefined') return;
+    if (GEO.mode && GEO.mode() === 'simulate') return;
+    var lastReal = GEO.lastRealCallbackTime;
+    var lastAny  = GEO.lastTimeUpdate;
+    var now = Date.now();
+    TELEMETRY.log('real_callback_freshness', {
+        real_age_ms:    lastReal != null ? now - lastReal : null,
+        any_age_ms:     lastAny  != null ? now - lastAny  : null,
+        motion_stationary: !!GEO.motionIsStationary,
+        visibility:     typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
+        state:          GEO.stateUpdate,
     });
 }, 30000);
 

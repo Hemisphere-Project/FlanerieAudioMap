@@ -697,12 +697,17 @@ class PlayerSimple extends EventEmitter
             this._isActive = true
             this.emit('play', this._player._src)
             console.log('PlayerSimple play:', this._player._src)
+            // F-A1 — duration from play() request to actual play event.
+            let loadDurationMs = (typeof this._playRequestedAt === 'number')
+                ? (Date.now() - this._playRequestedAt) : null
+            this._playRequestedAt = null
             if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_play_started', {
                 src: this._src(),
                 visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
                 loaded_before_play: this.isReady(),
                 prepared_before_play: this.isLoaded(),
                 load_state: this.loadState(),
+                load_duration_ms: loadDurationMs,
             })
             this._resolveGeoTask('play-started', {
                 loaded_before_play: this.isReady(),
@@ -805,6 +810,11 @@ class PlayerSimple extends EventEmitter
 
         if (seek >= 0) this._player.seek(seek)
         this._playRequested = true
+        // F-A1 — measure how long it takes between requesting play() and the
+        // actual 'play' event firing. Surfaces cold-load outliers on weak
+        // devices (Samsung/Xiaomi A-series); a 4–8s value vs a normal 200ms
+        // is a strong leading indicator for the audio stack issues in S2.
+        this._playRequestedAt = Date.now()
         clearTimeout(this._playRequestedTimeout)
         this._playRequestedTimeout = setTimeout(() => {
             if (!this._playRequested) return

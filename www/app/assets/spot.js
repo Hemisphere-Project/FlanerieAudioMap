@@ -552,7 +552,7 @@ class Step extends Spot
         return true
     }
 
-    updatePosition(position) 
+    updatePosition(position)
     {
         // Keep audio loaded while this step is active — covers offlimit state, pause from
         // interruption zone, and GPS drift — so resume/fire can trigger on return.
@@ -562,6 +562,17 @@ class Step extends Spot
 
         let inside = super.updatePosition(position)
         let borderDistance = this.distanceToBorder(position)
+
+        // F-Z2 — track inside transitions so step_fire can report how long the
+        // walker has actually been inside the zone (and how many consecutive
+        // samples confirmed it). Calibrates E2's sustain gate in phase 1B.
+        if (inside) {
+            if (this._firstInsideSampleAt == null) this._firstInsideSampleAt = Date.now()
+            this._consecutiveInsideCount = (this._consecutiveInsideCount || 0) + 1
+        } else {
+            this._firstInsideSampleAt = null
+            this._consecutiveInsideCount = 0
+        }
 
         if (PARCOURS.currentStep() < this._index) {
             this._done = false
@@ -616,6 +627,12 @@ class Step extends Spot
                 visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
                 player_ready: typeof this.player.isReady === 'function' ? this.player.isReady() : this.player.isLoaded(),
                 player_load_state: typeof this.player.loadState === 'function' ? this.player.loadState() : undefined,
+                // F-Z2 — same fields the fire branch logs, so step_resume_current
+                // candidates can be evaluated against E1's freshness+accuracy gate.
+                accuracy: position.coords && position.coords.accuracy != null ? Math.round(position.coords.accuracy) : null,
+                consecutive_inside_samples: this._consecutiveInsideCount || 0,
+                time_since_first_inside_ms: this._firstInsideSampleAt ? (Date.now() - this._firstInsideSampleAt) : null,
+                real_callback_age_ms: (typeof GEO !== 'undefined' && GEO.lastRealCallbackTime) ? (Date.now() - GEO.lastRealCallbackTime) : null,
             })
             this._keepLoadedForUpcomingTrigger = false
             this.player.resume()
@@ -665,6 +682,31 @@ class Step extends Spot
                 let wasPlaying = s.player.isPlaying() || s.player.isPaused()
                 s.player.stop()
                 if (wasPlaying) {
+                    // F-Z3 — log when a step's done is forced by the next step
+                    // firing while the previous step's voice was still running.
+                    // This is the M2/P6a "premature done" mechanism in the
+                    // GIVORS yapj case — captures context to calibrate E3 in 1B.
+                    if (!s._done) {
+                        let voicePos = null
+                        let voiceLoad = null
+                        try {
+                            if (s.player && s.player.voice) {
+                                if (typeof s.player.voice.seek === 'function') voicePos = s.player.voice.seek()
+                                if (typeof s.player.voice.loadState === 'function') voiceLoad = s.player.voice.loadState()
+                            }
+                        } catch (e) {}
+                        telemetryLog('step_implicit_done', {
+                            step: s._index,
+                            name: s._spot.name,
+                            trigger: 'next_step_fire',
+                            next_step: this._index,
+                            accuracy: position.coords && position.coords.accuracy != null ? Math.round(position.coords.accuracy) : null,
+                            voice_pos: voicePos,
+                            voice_state: voiceLoad,
+                            consecutive_inside_next: this._consecutiveInsideCount || 0,
+                            time_since_first_inside_next_ms: this._firstInsideSampleAt ? (Date.now() - this._firstInsideSampleAt) : null,
+                        })
+                    }
                     s.player.clear()
                     if (!s._done) s.emit('done', s)
                 }
@@ -678,6 +720,19 @@ class Step extends Spot
                 seekPos = Math.max(0, PARCOURS.state.resumeStepVoicePos - 3)
                 PARCOURS.state.resumeStepVoicePos = seekPos
             }
+            // F-Z2 / F-N3 — context enrichment so post-hoc analysis can answer
+            // "would E2's sustain gate have blocked this fire?" without rerunning
+            // the field. Includes accuracy, how long the walker has been inside,
+            // distances to neighbour zones, and the JS-loop latency from the
+            // position callback that triggered this fire.
+            let neighborDistances = {}
+            try {
+                for (let s of allSteps) {
+                    if (s._index === this._index) continue
+                    if (Math.abs(s._index - this._index) > 1) continue
+                    neighborDistances['step_' + s._index] = Math.round(s.distanceToBorder(position) * 100) / 100
+                }
+            } catch (e) {}
             telemetryLog('step_audio_trigger', {
                 step: this._index,
                 name: this._spot.name,
@@ -690,6 +745,13 @@ class Step extends Spot
                 player_prepared_before_play: this.player.isLoaded(),
                 player_ready_before_play: typeof this.player.isReady === 'function' ? this.player.isReady() : this.player.isLoaded(),
                 player_load_state_before_play: typeof this.player.loadState === 'function' ? this.player.loadState() : undefined,
+                // F-Z2: how confidently was the walker inside before fire
+                accuracy: position.coords && position.coords.accuracy != null ? Math.round(position.coords.accuracy) : null,
+                consecutive_inside_samples: this._consecutiveInsideCount || 0,
+                time_since_first_inside_ms: this._firstInsideSampleAt ? (Date.now() - this._firstInsideSampleAt) : null,
+                neighbor_distances: neighborDistances,
+                // F-N3: JS event-loop latency from the underlying position callback
+                step_fire_latency_ms: position._jsReceivedAt ? (Date.now() - position._jsReceivedAt) : null,
             })
             this._keepLoadedForUpcomingTrigger = false
             if (action === 'resume') this.player.resume()

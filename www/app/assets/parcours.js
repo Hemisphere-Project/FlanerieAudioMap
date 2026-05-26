@@ -756,6 +756,40 @@ class Parcours extends EventEmitter {
         // still reads geomode() for the DEVMODE simulate-resume convenience.
         if (typeof currentPage !== 'undefined' && currentPage !== 'parcours') return;
 
+        // F-Z1 — diagnostic: log when the walker is within 20 m of any
+        // reachable step's border. Builds the accuracy distribution near zone
+        // transitions that's needed to calibrate E2/E3's sustain gates (M2/P6a
+        // zone overshoot) in phase 1B. Throttled to ≥2 m change or 5 s elapsed
+        // since the last sample to keep volume around the ~50 events/walk
+        // target in §12.6b. No behaviour change.
+        try {
+            let reachable = this.lostReachableSteps();
+            if (reachable && reachable.length) {
+                let nearest = null;
+                let nearestD = Infinity;
+                for (let i = 0; i < reachable.length; i++) {
+                    let d = reachable[i].distanceToBorder(position);
+                    if (d < nearestD) { nearestD = d; nearest = reachable[i]; }
+                }
+                if (nearest && nearestD < 20) {
+                    let now = Date.now();
+                    let last = this._lastNearBorderSample || {t: 0, d: 999};
+                    if ((now - last.t) > 5000 || Math.abs(last.d - nearestD) > 2) {
+                        this._lastNearBorderSample = {t: now, d: nearestD};
+                        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('accuracy_near_border', {
+                            step: nearest._index,
+                            name: nearest._spot.name,
+                            distance: Math.round(nearestD * 100) / 100,
+                            accuracy: position && position.coords ? Math.round(position.coords.accuracy) : null,
+                            motion_stationary: typeof GEO !== 'undefined' ? !!GEO.motionIsStationary : null,
+                            visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
+                            inside: nearestD < 0,
+                        });
+                    }
+                }
+            }
+        } catch (e) { /* never break update() on telemetry */ }
+
         // LOST gate runs first — when active, it suppresses all spot processing
         // (offlimits masked, zones can't re-trigger on re-crossing, steps can't
         // re-fire). Distance tracking for recovery continues via evaluateLostState.

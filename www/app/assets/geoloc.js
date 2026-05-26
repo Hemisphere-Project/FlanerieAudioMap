@@ -302,6 +302,14 @@ class GeoLoc extends EventEmitter {
         this.lastPosition = null;
         this.initializing = true;
         this.lastTimeUpdate = null;
+        // B4 — real-callback freshness. lastTimeUpdate is refreshed by both real
+        // OS callbacks AND the NSTimer/Handler keepalive (P0.5 Fix 1b), so a
+        // multi-minute background-GPS blackout doesn't trip the 30 s lost
+        // timeout — the keepalive ticks every 15 s and resets the clock with a
+        // stale cached position. Tracking real callbacks separately is the
+        // single missing signal needed to surface S1/P1.34 (iOS) and P1.31
+        // (Android Doze) blackouts. Phase 1A: diagnostic only.
+        this.lastRealCallbackTime = null;
 
         this.follow = false;
         this.map = null;
@@ -396,11 +404,16 @@ class GeoLoc extends EventEmitter {
         );
     }
 
-    _callbackPosition(position, telemetryMeta = {}) 
+    _callbackPosition(position, telemetryMeta = {})
     {
         resumeAudioContext('position')
 
         let now = Date.now()
+        // F-N3 — stamp the JS-side receive time so downstream telemetry
+        // (step_fire latency in spot.js) can measure how long the JS event
+        // loop took to react to the OS position callback. Surfaces decode-
+        // induced JS stalls on weak Android (matches the B1 unload premise).
+        position._jsReceivedAt = now
         let callbackGapMs = this.lastTimeUpdate == null ? null : now - this.lastTimeUpdate
         let positionAgeMs = typeof position.timestamp === 'number' ? Math.max(0, now - position.timestamp) : null
         let accuracy = position && position.coords ? Math.round(position.coords.accuracy) : null
@@ -515,6 +528,12 @@ class GeoLoc extends EventEmitter {
         // next measure
         this.lastPosition = position;
         this.lastTimeUpdate = Date.now();
+        // B4 diagnostic half — only count this as a "real" callback if the
+        // source isn't heartbeat / simulate / keepalive. The 'unknown' default
+        // (bg-geo native callbacks that don't tag a source) IS real.
+        if (source !== 'heartbeat' && source !== 'simulate' && source !== 'keepalive') {
+            this.lastRealCallbackTime = Date.now();
+        }
         // Immediately reflect 'ok' without waiting for the next timer tick
         if (this.stateUpdate !== 'ok') {
             this.stateUpdate = 'ok';
@@ -1019,7 +1038,11 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
     bgGeo.on('background', function() {
         console.log('[INFO] App is in background');
         APP_VISIBILITY = 'background';
-        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('app_visibility', {state: 'background'});
+        // F-G2 — dedup with the document.pause/visibilitychange bridge below.
+        if (GEO._lastLoggedVisibility !== 'background' && typeof TELEMETRY !== 'undefined') {
+            GEO._lastLoggedVisibility = 'background';
+            TELEMETRY.log('app_visibility', {state: 'background', source: 'bg-geo'});
+        }
 
         // triggers document pause event
         document.dispatchEvent(new Event('pause'));
@@ -1029,7 +1052,10 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
         console.log('[INFO] App is in foreground');
         APP_VISIBILITY = 'foreground';
         resumeAudioContext('foreground');
-        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('app_visibility', {state: 'foreground'});
+        if (GEO._lastLoggedVisibility !== 'foreground' && typeof TELEMETRY !== 'undefined') {
+            GEO._lastLoggedVisibility = 'foreground';
+            TELEMETRY.log('app_visibility', {state: 'foreground', source: 'bg-geo'});
+        }
 
         // triggers document resume event
         document.dispatchEvent(new Event('resume'));
@@ -1046,20 +1072,46 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
     });
 
     if (!backgroundGeolocSetup) {
+        // F-G2 — bridge document.pause/resume + visibilitychange into
+        // app_visibility telemetry. Today the only emitter is bgGeo's
+        // background/foreground callbacks, which iOS bg-geo never surfaces
+        // (mobile-audit R3 finding: zero app_visibility events on iOS in the
+        // 2026-05-15 test). This bridge closes that blind spot. Dedup against
+        // _lastLoggedVisibility so Android (which gets both bg-geo and document
+        // events) only logs once per transition.
+        function _logVisibility(state, source) {
+            if (typeof TELEMETRY === 'undefined') return;
+            if (GEO._lastLoggedVisibility === state) return;
+            GEO._lastLoggedVisibility = state;
+            TELEMETRY.log('app_visibility', { state: state, source: source });
+        }
+
         document.addEventListener('pause', function() {
             console.log('[INFO] App is paused');
             APP_VISIBILITY = 'background';
+            _logVisibility('background', 'cordova-pause');
         }, false);
 
         document.addEventListener('resume', function() {
             console.log('[INFO] App is resumed');
             APP_VISIBILITY = 'foreground';
+            _logVisibility('foreground', 'cordova-resume');
             resumeAudioContext('resume');
             // iOS backgrounding is not an audio interruption. Let the native
             // AVAudioSession interruption callback drive pause/resume there.
             if (PLATFORM !== 'ios' && typeof requestAudioFocus === 'function') {
                 requestAudioFocus().catch(function(e) { console.warn('[AudioFocus] re-request on resume failed:', e); });
             }
+        }, false);
+
+        // Secondary signal: the web standard visibilitychange. Fires on tab
+        // switches, lock-screen on some Android WebViews, etc. Mostly redundant
+        // with pause/resume on Cordova but catches the edge cases iOS WebKit
+        // doesn't translate into pause.
+        document.addEventListener('visibilitychange', function() {
+            var state = document.visibilityState === 'hidden' ? 'background' : 'foreground';
+            APP_VISIBILITY = state;
+            _logVisibility(state, 'visibilitychange');
         }, false);
     }
 
