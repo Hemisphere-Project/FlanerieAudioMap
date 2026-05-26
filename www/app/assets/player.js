@@ -31,6 +31,32 @@ function httpToNativePath(httpPath) {
     return null
 }
 
+// C1 — classify audio errors so telemetry can distinguish corrupt-file from
+// network from decode-stall from missing-file. Cordova Media (iOS) MediaError.code
+// and Howler.js loaderror codes both follow the same 1–4 convention.
+//   1 = ABORTED (user-initiated)
+//   2 = NETWORK
+//   3 = DECODE
+//   4 = SRC_NOT_SUPPORTED  (also commonly emitted on file-not-found by Howler)
+// Falls back to string heuristics if no code is present. Pre-classify the
+// 'timeout' and 'stuck' kinds emitted by the R4.4 watchdog so analyze.mjs gets
+// a single error_type field across all audio failures.
+function classifyAudioErrorType(kind, code, message) {
+    if (kind === 'audio_play_timeout') return 'timeout'
+    if (kind === 'audio_play_stuck') return 'stuck'
+    if (code === 1) return 'aborted'
+    if (code === 2) return 'network'
+    if (code === 3) return 'decode_failed'
+    if (code === 4) return 'src_unsupported'
+    let m = (message || '').toLowerCase()
+    if (m.indexOf('not found') >= 0 || m.indexOf('404') >= 0 || m.indexOf('does not exist') >= 0
+        || m.indexOf('no such file') >= 0) return 'not_found'
+    if (m.indexOf('network') >= 0 || m.indexOf('connection') >= 0) return 'network'
+    if (m.indexOf('decode') >= 0 || m.indexOf('decod') >= 0) return 'decode_failed'
+    if (m.indexOf('unsupport') >= 0 || m.indexOf('format') >= 0) return 'src_unsupported'
+    return 'unknown'
+}
+
 // Watch for audio focus changes
 document.addEventListener('deviceready', function() {
     if (typeof cordova.plugins.audiofocus === 'undefined') {
@@ -503,11 +529,29 @@ class PlayerSimple extends EventEmitter
 
     _logAudioTelemetry(type, error, extra = {}) {
         let src = this._src()
-        let message = typeof error === 'string' ? error
-            : typeof error === 'number' ? String(error)
-            : (error && error.message) ? error.message
-            : (error && error.code != null) ? ('MediaError:' + error.code)
-            : JSON.stringify(error)
+        // C1 — extract a numeric code first (MediaError on iOS, Howler errors on
+        // Android both follow the 1=aborted / 2=network / 3=decode / 4=src_unsupported
+        // convention). Then derive a useful message — JSON.stringify on class
+        // instances commonly produces "{}" which is what GIVORS field reports
+        // showed as "[object Object]" — defend against that.
+        let code = null
+        let message = ''
+        if (typeof error === 'string') message = error
+        else if (typeof error === 'number') { code = error; message = 'code:' + error }
+        else if (error && typeof error === 'object') {
+            if (typeof error.code === 'number') code = error.code
+            if (typeof error.message === 'string' && error.message) message = error.message
+            else if (code !== null) message = 'MediaError:' + code
+            else {
+                try { message = JSON.stringify(error) } catch (e) { message = '<unserializable>' }
+                if (!message || message === '{}') message = '<empty error object>'
+            }
+        }
+        else if (error == null) message = '<null>'
+        else message = String(error)
+
+        let errorType = classifyAudioErrorType(type, code, message)
+
         let signature = type + '|' + (src || '-') + '|' + message
         let now = Date.now()
 
@@ -520,6 +564,10 @@ class PlayerSimple extends EventEmitter
             TELEMETRY.log(type, Object.assign({
                 src: src,
                 error: message,
+                error_type: errorType,
+                error_code: code,
+                backend: this._isNativeFallback ? 'howler-fallback'
+                    : (PLATFORM === 'ios' ? 'native' : 'howler'),
                 cleared: !this._player
             }, extra))
         }
@@ -596,6 +644,23 @@ class PlayerSimple extends EventEmitter
 
         // Register the player in the global ALL_PLAYERS array
         ALL_PLAYERS.push(this)
+
+        // C1 — log the resolved URI per-load so post-hoc analysis can confirm
+        // the player got the URL it expected (and which backend it ended up on).
+        // Pairs naturally with audio_loaderror/audio_playerror, which the GIVORS
+        // §P2 drill-down couldn't disambiguate because the path/URI used at
+        // play time was never recorded.
+        if (typeof TELEMETRY !== 'undefined') {
+            let resolvedSrc = (this._player && this._player._src) || fullSrc
+            TELEMETRY.log('audio_uri_resolved', {
+                src: this._src(),
+                resolved: resolvedSrc,
+                base: basepath,
+                media_src: media.src,
+                backend: this._isNativeFallback ? 'howler-fallback'
+                    : (PLATFORM === 'ios' ? 'native' : 'howler'),
+            })
+        }
 
         this._player.on('end', () => {
             if (!this._player) return
