@@ -1,7 +1,8 @@
 # Mobile Audit Remediation Plan
 
 Original: 2026-04-27  
-Last updated: 2026-05-27 (Round 12 — `cordova-background-geolocation-plugin` v2.5.0: BG-1 non-issue (no NETWORK_PROVIDER registration), BG-3 iOS `getCLState` diagnostic action + JS wrapper, BG-4 iOS `getPowerState` action + `batteryMonitoringEnabled` in init + JS wrapper, BG-7 keepalive flag re-assertion in `_keepaliveTick:`; plugin v2.5.0 released + FlanerieCordova lockfile updated)  
+Last updated: 2026-05-27 (Round 13 — `cordova-background-geolocation-plugin` v2.6.0: BG-2 iOS `forceReacquire` action (CLLocationManager stop/restart with flag re-assertion) + JS wrapper; BG-5 Android AlarmManager Doze keepalive (`LocationWakeReceiver` inner class, `setExactAndAllowWhileIdle`, 30 s non-Doze / ~9 min Doze cadence, pure native path); BG-10 iOS SLC auto-reacquire (`_slcManager` separate CLLocationManager, auto-triggers `_doForceReacquire` when real callbacks stalled >90 s + SLC fresh <30 s, max 3/session); plugin v2.6.0 released + FlanerieCordova lockfile updated)  
+Previous: 2026-05-27 (Round 12 — `cordova-background-geolocation-plugin` v2.5.0: BG-1 non-issue (no NETWORK_PROVIDER registration), BG-3 iOS `getCLState` diagnostic action + JS wrapper, BG-4 iOS `getPowerState` action + `batteryMonitoringEnabled` in init + JS wrapper, BG-7 keepalive flag re-assertion in `_keepaliveTick:`; plugin v2.5.0 released + FlanerieCordova lockfile updated)  
 Previous: 2026-05-27 (Round 11 — JS wiring for AF v1.6.0 + PO v0.2.0: F-A2 `audio_session_state` 60 s interval, F-A3 `audio_route_changed` dispatch, AF-4 `POWER_SAVE_CHANGED` dispatch, AF-3 `AUDIOFOCUS_SERVICE_RESTARTED` dispatch in `onFocusChange`; `session_diag` extended with PO v0.2.0 method-presence flags; `power_state_at_parcours` extended with `GetStandbyBucket` + `GetLastExitReasons`; `bg_restrictions_recheck` extended with `GetMemoryInfo` + `GetStandbyBucket`; JS-only, no plugin rebuild)  
 Previous: 2026-05-27 (Round 10 — `cordova-plugin-audiofocus` v1.6.0: AF-1 notification channel description, AF-2 iOS deactivation observer-ordering fix, AF-3 `START_STICKY` service restart recovery (`AudioFocus.instance.onServiceRestarted()`), AF-4 `ACTION_POWER_SAVE_MODE_CHANGED` broadcast receiver, AF-5 iOS `AVAudioSessionRouteChangeNotification` route-change events, AF-6 `getAudioSessionState` action (Android + iOS), AF-7 notification app icon; plugin v1.6.0 released + FlanerieCordova lockfile updated)  
 Previous: 2026-05-27 (Round 9 — `cordova-plugin-power-optimization` v0.2.0: PO-1 LeTV intent copy-paste fix, PO-2 `GetLastExitReasons()` (API 30+), PO-3 `GetMemoryInfo()`, PO-4 `GetStandbyBucket()` (API 28+), PO-5 proper JSON booleans + JS wrapper update, PO-6 iOS no-op stub (`IsPowerSaveMode` → `isLowPowerModeEnabled`), PO-7 Xiaomi MIUI autostart intent, PO-8 `skipProtectedAppCheck` flag logic; plugin v0.2.0 released + FlanerieCordova lockfile updated, all container checks pass)  
@@ -16,7 +17,7 @@ Previous: 2026-05-18 (Round 3 — field test 2026-05-15 on FRAPPAZ_V10-modif_mon
 Previous: 2026-05-14 (Round 2 codebase review: resume `update()` gate P1.23, `init()` no-op listener removal P1.24, LOST↔afterplay/step-progression unification P1.25, GPS stop on walk end P1.26, duplicate `step_done` guard P1.27, page-exit cleanup gaps P1.28, recovery map on default-afterplay P1.29, defensive hardening cluster P2.12, telemetry session key P2.13, resume gate fast-path P2.14, structural refactors P3.6, server resilience C7)  
 Previous: 2026-05-13 (LOST state machine P1.18, voice/afterplay fallback P1.19, RESUME cue P1.20, AUDIOFOCUS auto-retry P1.21, devmode tools page P1.22, paused() crash fix; Architecture Summary + telemetry list aligned with current code)  
 Scope: Cordova launcher + downloaded local webapp, GPS-triggered audio walk, locked-screen pocket usage, published parcours FLANERIE_ELYSEE  
-Plugin: [`cordova-background-geolocation-plugin`](https://github.com/Maigre/cordova-background-geolocation-plugin) v2.5.0 (Flanerie fork of HaylLtd v2.3.3)
+Plugin: [`cordova-background-geolocation-plugin`](https://github.com/Maigre/cordova-background-geolocation-plugin) v2.6.0 (Flanerie fork of HaylLtd v2.3.3)
 
 ## Field Safety Legend
 
@@ -1664,6 +1665,18 @@ Native plugin diagnostic + robustness batch. FlanerieCordova lockfile updated by
 Files: `cordova-plugin-audiofocus/src/android/AudioFocus.java`, `.../AudioFocusService.java`, `.../ios/AudioFocus.m`, `.../www/AudioFocus.js`, `plugin.xml`, `package.json` (v1.5.1 → v1.6.0), `FlanerieCordova/package-lock.json`
 
 **JS side:** `onFocusChange` now carries both plain strings (`"AUDIOFOCUS_GAIN"`) and JSON strings (`{"event":"AUDIO_ROUTE_CHANGED",...}`). Detect structured events with `event[0] === '{'`. Existing string-comparison dispatch code is unaffected.
+
+---
+
+### Round 13 — `cordova-background-geolocation-plugin` v2.6.0 (2026-05-27) — ✅ code complete
+
+Native plugin behaviour-change batch. FlanerieCordova lockfile updated via `sync-workspace-plugins.mjs --apply`.
+
+- **BG-2** `forceReacquire` action (iOS — `CDVBackgroundGeolocation.m` + `BackgroundGeolocation.js`): new action that stops `CLLocationManager`, waits 500 ms, re-asserts `allowsBackgroundLocationUpdates=YES`, `pausesLocationUpdatesAutomatically=NO`, `showsBackgroundLocationIndicator=YES`, then calls `startUpdatingLocation`. The 500 ms gap clears any iOS internal throttle state. Closes D3 — the JS watchdog can now pull a native lever when `real_callback_freshness` shows >60 s stall. Rate-limiting (max 3/session) is the JS caller's responsibility for the direct action; BG-10 auto-trigger enforces it natively.
+- **BG-5** `LocationWakeReceiver` (Android — `RawLocationProvider.java`): inner `BroadcastReceiver` class + `scheduleNextAlarm()` helper. On `onStart()`, registers the receiver and schedules `AlarmManager.setExactAndAllowWhileIdle` at 30 s. Each alarm receipt reschedules the next alarm and calls `handleLocation(getLastKnownLocation(provider))` if real callbacks have been silent ≥ 15 s. Cancelled and unregistered in `onStop()`. Effective Doze cadence is ~9 min on Android 9+ (Android OS coalesces `setExactAndAllowWhileIdle` during Doze maintenance windows); non-Doze cadence is 30 s. No JS bridge — pure native path through existing `handleLocation`. Closes B2 for Motorola/TCL Doze blackouts (P1.31).
+- **BG-10** SLC auto-reacquire (iOS — `MAURRawLocationProvider.m`): adds a separate `_slcManager` (`CLLocationManager` instance with `MAURRawLocationProvider` as its `CLLocationManagerDelegate`) that runs `startMonitoringSignificantLocationChanges` in parallel with standard tracking. `_lastSLCLocationTime` is updated whenever SLC delivers. In `_keepaliveTick:`, if real callbacks are stalled >90 s but SLC is fresh (<30 s) and `_forceReacquireCount < 3`, auto-calls `_doForceReacquire` (stop/restart loop, same logic as BG-2). Closes D5 — P1.34 auto-recovery without JS watchdog involvement.
+
+Files: `ios/CDVBackgroundGeolocation/CDVBackgroundGeolocation.m` (BG-2), `ios/common/BackgroundGeolocation/MAURRawLocationProvider.m` (BG-10, `_doForceReacquire`), `android/common/src/main/java/com/marianhello/bgloc/provider/RawLocationProvider.java` (BG-5), `www/BackgroundGeolocation.js` (BG-2 JS wrapper), `plugin.xml` + `package.json` (v2.5.0 → v2.6.0)
 
 ---
 
