@@ -348,10 +348,40 @@ class GeoLoc extends EventEmitter {
             if (this.stateUpdate === 'lost' && this.runMode === 'gps' && getBackgroundGeolocationPlugin()) {
                 this._heartbeat();
             }
+
+            // B4 watchdog — if real GPS callbacks have stalled for >60 s on iOS,
+            // trigger a CLLocationManager stop/restart via forceReacquire (bg-geo v2.6.0 BG-2).
+            // iOS-only: Android is covered natively by the AlarmManager keepalive (BG-5).
+            // Rate-limited: max 3 per session, no more than once per 90 s.
+            if (PLATFORM === 'ios' &&
+                this.runMode === 'gps' &&
+                this.lastRealCallbackTime !== null &&
+                (Date.now() - this.lastRealCallbackTime) > 60000 &&
+                this._forceReacquireCount < 3 &&
+                (Date.now() - this._lastForceReacquireTime) >= 90000) {
+                let bgGeo = getBackgroundGeolocationPlugin();
+                if (bgGeo && typeof bgGeo.forceReacquire === 'function') {
+                    this._forceReacquireCount++;
+                    this._lastForceReacquireTime = Date.now();
+                    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('force_reacquire_triggered', {
+                        real_age_ms: Date.now() - this.lastRealCallbackTime,
+                        count: this._forceReacquireCount,
+                        visibility: APP_VISIBILITY,
+                    });
+                    bgGeo.forceReacquire().catch(function(e) {
+                        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('force_reacquire_failed', {error: String(e)});
+                    });
+                }
+            }
         }, 1000);
 
         this._heartbeatInProgress = false;
         this._lastHeartbeatTime = 0;
+
+        // B4 watchdog (BG-2 / Round 13) — iOS forceReacquire counter + throttle.
+        // Resets on each new GPS session (init()). Max 3 triggers per session.
+        this._forceReacquireCount = 0;
+        this._lastForceReacquireTime = 0;
     }
 
     // Active GPS recovery: when updates have stopped, try getCurrentLocation
@@ -651,6 +681,8 @@ class GeoLoc extends EventEmitter {
         this.lastAccuracyBucket = null;
 
         this.runMode = mode;
+        this._forceReacquireCount = 0;
+        this._lastForceReacquireTime = 0;
         this.setMap(this.map);
     }
 

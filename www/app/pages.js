@@ -2093,6 +2093,9 @@ PAGES['parcours'] = async () => {
             plugin_power_GetStandbyBucket:       !!(po && typeof po.GetStandbyBucket         === 'function'),
             plugin_audiofocus:  !!af,
             plugin_audiofocus_getSessionState:   !!(af && typeof af.getAudioSessionState     === 'function'),
+            plugin_bgloc_getCLState:             !!(typeof BackgroundGeolocation !== 'undefined' && typeof BackgroundGeolocation.getCLState    === 'function'),
+            plugin_bgloc_getPowerState:          !!(typeof BackgroundGeolocation !== 'undefined' && typeof BackgroundGeolocation.getPowerState  === 'function'),
+            plugin_bgloc_forceReacquire:         !!(typeof BackgroundGeolocation !== 'undefined' && typeof BackgroundGeolocation.forceReacquire === 'function'),
             plugin_bgloc:       !!(typeof BackgroundGeolocation !== 'undefined'),
             plugin_permissions: !!(typeof cordova !== 'undefined' && cordova.plugins && cordova.plugins.permissions),
             // Runtime flags
@@ -2954,6 +2957,22 @@ setInterval(() => {
     });
 }, 60000);
 
+// F-G1b (BG-4) — iOS native power state snapshot once per minute (bg-geo v2.5.0).
+// Returns lowPowerMode + batteryLevel + batteryState via the plugin CDV action.
+// Complements the Android bg_restrictions_recheck interval for post-hoc
+// low-power-mode correlation with P1.34 GPS blackouts.
+setInterval(() => {
+    if (currentPage !== 'parcours') return;
+    if (PLATFORM !== 'ios') return;
+    var bgGeoPS = (typeof BackgroundGeolocation !== 'undefined') ? BackgroundGeolocation : null;
+    if (!bgGeoPS || typeof bgGeoPS.getPowerState !== 'function') return;
+    bgGeoPS.getPowerState().then(function(state) {
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('ios_power_state', Object.assign({}, state, {
+            step: (typeof PARCOURS !== 'undefined' && PARCOURS.state) ? PARCOURS.state.stepIndex : null,
+        }));
+    }).catch(function(e) { /* non-fatal */ });
+}, 60000);
+
 // B4 diagnostic — periodic real-callback freshness sample. Fires every 30s
 // while on parcours and logs how stale the last *real* GPS callback is, plus
 // motion + visibility context. With keepalive ticks confusing the existing
@@ -2975,6 +2994,21 @@ setInterval(() => {
         visibility:     typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
         state:          GEO.stateUpdate,
     });
+    // F-G1 (BG-3) — CLLocationManager state snapshot alongside each freshness sample (iOS only, bg-geo v2.5.0).
+    // Captures allowsBackgroundLocationUpdates, pausesLocationUpdatesAutomatically,
+    // authorizationStatus, and timestamp age so post-hoc analysis can correlate
+    // CLLocationManager degradation with real-callback blackouts (P1.34).
+    if (PLATFORM === 'ios') {
+        var bgGeoFG1 = (typeof BackgroundGeolocation !== 'undefined') ? BackgroundGeolocation : null;
+        if (bgGeoFG1 && typeof bgGeoFG1.getCLState === 'function') {
+            bgGeoFG1.getCLState().then(function(clState) {
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('cl_state', Object.assign({}, clState, {
+                    real_age_ms: lastReal != null ? Date.now() - lastReal : null,
+                    step: (typeof PARCOURS !== 'undefined' && PARCOURS.state) ? PARCOURS.state.stepIndex : null,
+                }));
+            }).catch(function(e) { /* non-fatal */ });
+        }
+    }
 }, 30000);
 
 // Periodic re-request of AUDIOFOCUS while the resume overlay is still up.

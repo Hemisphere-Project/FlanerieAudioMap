@@ -5,7 +5,7 @@
 **Field reports cross-referenced:** Mélanie (FP3 08:57), John (~16h loan phone), Justine (operator tent), unnamed teacher (iPhone 09h–09h30)  
 **Expected visitors:** ~45–50 (15–20 on loaned phones)  
 **Builds:** apk 12 (iOS) / apk 13 (Android) — apk just tracks platform, not a within-platform skew. webapp `fdf504c8` + `2f77776e` are split **roughly evenly per device** (~29 / ~35 visitor sessions), not 30/70; the version is per-device PWA cache, not a timed rollout. Which build is newer is **not confirmed** — see §11.  
-**Generated:** 2026-05-22 · **Revised:** 2026-05-27 (telemetry + code cross-check)
+**Generated:** 2026-05-22 · **Revised:** 2026-05-27 (telemetry + code cross-check) · **Updated:** 2026-05-27 (Rounds 9–14 shipped — see §12.13)
 
 ---
 
@@ -677,12 +677,14 @@ R5.1 keepalive was live and the kills happened anyway. Today we know *that* the 
 
 **F-K1. `last_exit_reason` at `session_start` [SAFE-TODAY]** — power-optimization plugin (G2) + webapp.  
 Android 11+ exposes `ActivityManager.getHistoricalProcessExitReasons(packageName, 0, 5)` — the OS's own record of why your process exited (`REASON_LOW_MEMORY`, `REASON_EXCESSIVE_RESOURCE_USAGE`, `REASON_USER_REQUESTED`, `REASON_PERMISSION_CHANGE`, `REASON_OTHER`, etc., plus a free-form `getDescription()` string). This is the single most useful data point we don't have today — it would tell us in one event whether `f743`'s 7 kills were OOM (→ B1 memory unload is the right fix) or OEM background-restriction (→ B3 Fused fallback is the right fix) or something else.  
-Implementation: new `GetLastExitReasons()` action in power-opt plugin returning the last 5 reasons + timestamps + descriptions; called at `TELEMETRY.start` for the `session_resume` branch; payload merged into `session_resume.extra`.
+**Plugin side ✅ DONE (v0.2.0, 2026-05-27):** `GetLastExitReasons()` returns last 5 entries with `{reason, description, timestamp, importance, processName}`.  
+**Pending (webapp):** call at `TELEMETRY.start` for the `session_resume` branch; merge payload into `session_resume.extra`.
 
 **F-K2. `memory_state` periodic [SAFE-TODAY]** — power-optimization plugin (G2) + webapp.  
 `ActivityManager.MemoryInfo` (`availMem`, `totalMem`, `lowMemory`, `threshold`) snapshotted every 60 s while parcours active. Cross-referenced with `step_media_unloaded` once B1 ships, tells us whether B1's unload pattern actually moved the needle.  
 Also include `Debug.MemoryInfo` (heap + native) — Howler decodes hold native PCM in Java heap, this surfaces it.  
-Files: power-opt plugin `GetMemoryInfo()` action, [www/app/pages.js](www/app/pages.js) periodic timer on parcours entry.
+**Plugin side ✅ DONE (v0.2.0, 2026-05-27):** `GetMemoryInfo()` returns `{availMem, totalMem, threshold, lowMemory, nativeHeapAllocated, nativeHeapSize, javaHeapUsed, javaHeapMax, totalPss}`.  
+**Pending (webapp):** [www/app/pages.js](www/app/pages.js) periodic timer (every 60 s) on parcours entry.
 
 **F-K3. `bg_restrictions_recheck` periodic [SAFE-TODAY]** — webapp only, reuses existing power-opt API.  
 Re-call `IsBackgroundRestricted()` + `IsPowerSaveMode()` + `IsIgnoringBatteryOptimizations()` every 5 min during the walk. Catches mid-walk policy flips (Samsung's "auto-policy on infrequently-used apps" can flip restrictions in the background). Today these only run once at `checkbatteryopt`.
@@ -821,15 +823,23 @@ Bumped plugin version to 1.5.1 in the shipped fork. App wiring is live in [www/a
 
 Files: [cordova-plugin-audiofocus/src/ios/AudioFocus.m](../cordova-plugin-audiofocus/src/ios/AudioFocus.m), [cordova-plugin-audiofocus/src/android/AudioFocus.java](../cordova-plugin-audiofocus/src/android/AudioFocus.java), [cordova-plugin-audiofocus/www/AudioFocus.js](../cordova-plugin-audiofocus/www/AudioFocus.js), [cordova-plugin-audiofocus/plugin.xml](../cordova-plugin-audiofocus/plugin.xml), [cordova-plugin-audiofocus/package.json](../cordova-plugin-audiofocus/package.json).
 
-**G2. cordova-plugin-power-optimization — promote to fork + add remaining C5 methods [SAFE-TODAY]**.  
-The in-place plugin at `FlanerieCordova/plugins/cordova-plugin-power-optimization/` (R5.2 was applied here without forking — see mobile-audit C5 note) is promoted to `~/Bakery/cordova-plugin-power-optimization/`, matching the audiofocus + bg-geo pattern. Same content; just relocate + update `FlanerieCordova/package.json` to point to the fork.
+**G2. cordova-plugin-power-optimization — promote to fork + add remaining C5 methods ✅ DONE (2026-05-27, v0.2.0)**.  
+The fork exists at `~/Bakery/cordova-plugin-power-optimization/` and is released at GitHub. Shipped in v0.2.0:
 
-While the fork is being touched, add the remaining methods from the C5 backlog:
+- **PO-1** LeTV `setComponent` copy-paste bug fixed in `Constants.java`
+- **PO-2** `GetLastExitReasons()` (API 30+) — last 5 process exit reasons with reason code, description, timestamp, importance, processName
+- **PO-3** `GetMemoryInfo()` — `ActivityManager.MemoryInfo` + `Debug.MemoryInfo` (heap + native)
+- **PO-4** `GetStandbyBucket()` (API 28+) — returns ACTIVE / WORKING_SET / FREQUENT / RARE / RESTRICTED / EXEMPTED / UNKNOWN
+- **PO-5** `IsIgnoringBatteryOptimizations`, `IsBackgroundRestricted`, `IsPowerSaveMode`, `IsIgnoringDataSaver` now return proper JSON booleans (not strings); JS `execute_boolean` updated to accept both
+- **PO-6** iOS no-op stub (`IsPowerSaveMode` maps to real `isLowPowerModeEnabled`; all others safe no-ops)
+- **PO-7** Xiaomi MIUI autostart intent (`com.miui.securitycenter/AutoStartManagementActivity`)
+- **PO-8** `skipProtectedAppCheck` SharedPreferences flag only set when an OEM intent was actually found and launched
 
-- `GetStandbyBucket()` (API 28+, `UsageStatsManager.getAppStandbyBucket()`) — telemetry-only at session_diag time. RESTRICTED / RARE buckets flag known-bad device states.
-- `IsAutoRevokeWhitelisted()` (API 30+) — relevant long-term (auto-revoke disables apps that aren't opened for months); not blocking, telemetry-only.
+`FlanerieCordova/package-lock.json` pinned to v0.2.0 @ commit `41cd95fe066f`. Container validation passed (4/4 checks).
 
-Files: relocate `FlanerieCordova/plugins/cordova-plugin-power-optimization/` → `~/Bakery/cordova-plugin-power-optimization/`, [FlanerieCordova/package.json](../FlanerieCordova/package.json), `src/android/PowerOptimization.java`, `www/PowerOptimization.js`, `plugin.xml`, [www/app/pages.js](www/app/pages.js) (session_diag wiring).
+Still open from the original C5 list: `IsAutoRevokeWhitelisted()` / `RequestAutoRevokeWhitelist()` (hibernation watch, long-tail, not show-blocking).
+
+Files: [cordova-plugin-power-optimization/src/android/PowerOptimization.java](../cordova-plugin-power-optimization/src/android/PowerOptimization.java), [cordova-plugin-power-optimization/src/android/Constants.java](../cordova-plugin-power-optimization/src/android/Constants.java), [cordova-plugin-power-optimization/src/android/ProtectedApps.java](../cordova-plugin-power-optimization/src/android/ProtectedApps.java), [cordova-plugin-power-optimization/src/ios/PowerOptimization.m](../cordova-plugin-power-optimization/src/ios/PowerOptimization.m), [cordova-plugin-power-optimization/www/PowerOptimization.js](../cordova-plugin-power-optimization/www/PowerOptimization.js), [cordova-plugin-power-optimization/plugin.xml](../cordova-plugin-power-optimization/plugin.xml), [cordova-plugin-power-optimization/package.json](../cordova-plugin-power-optimization/package.json), [FlanerieCordova/package-lock.json](../FlanerieCordova/package-lock.json).
 
 **G3. cordova-background-geolocation-plugin extensions [RESEARCH-FIRST]**.  
 Three independent additions, all to the same fork:
@@ -988,4 +998,48 @@ That's enough to unblock B4 and E1/E2/E3 calibration for the next Phase 1B drop.
 - E1/E2/E3 gates (needs `accuracy_near_border` data)
 - Phase 2 plugin rebuild (needs Play Store cycle)
 - Phase 3 native work (needs dedicated outing)
+
+---
+
+### §12.13 Rounds 9–14 shipped (2026-05-27) — current code state
+
+All work from the GIVORS follow-up remediation through 2026-05-27. Detailed notes in `mobile-audit.md` Rounds 9–14.
+
+#### Plugin releases (require APK rebuild + Play Store / TestFlight)
+
+| Round | Plugin | Version | Workstream coverage |
+|---|---|---|---|
+| Round 9 | `cordova-plugin-power-optimization` | v0.2.0 | PO-1 LeTV intent fix; PO-2 `GetLastExitReasons` (API 30+); PO-3 `GetMemoryInfo`; PO-4 `GetStandbyBucket` (API 28+); PO-5 JSON booleans; PO-6 iOS `IsPowerSaveMode` stub; PO-7 Xiaomi MIUI autostart intent; PO-8 `skipProtectedAppCheck` flag |
+| Round 10 | `cordova-plugin-audiofocus` | v1.6.0 | AF-1 notification channel description; AF-2 iOS deactivation observer-ordering fix; AF-3 `START_STICKY` recovery; AF-4 `ACTION_POWER_SAVE_MODE_CHANGED` broadcast; AF-5 iOS `AVAudioSessionRouteChangeNotification`; AF-6 `getAudioSessionState`; AF-7 notification app icon |
+| Round 12 | `cordova-background-geolocation-plugin` | v2.5.0 | BG-1 non-issue (NETWORK_PROVIDER); **BG-3** iOS `getCLState` diagnostic CDV action (→ closes D2/F-G1 diagnostic half); **BG-4** iOS `getPowerState` CDV action; **BG-7** keepalive flag re-assertion in `_keepaliveTick:` (→ closes D4) |
+| Round 13 | `cordova-background-geolocation-plugin` | v2.6.0 | **BG-2** iOS `forceReacquire` CDV action (→ closes D3); **BG-5** Android `LocationWakeReceiver` AlarmManager Doze keepalive 30 s / ~9 min Doze (→ closes B2); **BG-10** iOS SLC-triggered auto-reacquire via `_slcManager` parallel CLLocationManager (→ closes D5) |
+
+#### JS-only rounds (webapp deploy, no APK rebuild)
+
+| Round | Workstream coverage |
+|---|---|
+| Round 11 | F-A2 `audio_session_state` 60 s interval; F-A3 `audio_route_changed` dispatch; AF-4 `POWER_SAVE_CHANGED` dispatch; AF-3 `AUDIOFOCUS_SERVICE_RESTARTED` dispatch; `session_diag` PO v0.2.0 flags; `power_state_at_parcours` with `GetStandbyBucket` + `GetLastExitReasons`; `bg_restrictions_recheck` with `GetMemoryInfo` + `GetStandbyBucket` |
+| Round 14 | **F-G1** `getCLState` wired into 30 s `real_callback_freshness` interval (iOS → `cl_state` event); **F-G1b** `getPowerState` 60 s interval (iOS → `ios_power_state` event); **B4 watchdog** `forceReacquire` in `geoloc.js` `stateUpdateTimer` (iOS, fires after 60 s real-callback stall, max 3/session, throttled 90 s); `session_diag` plugin-presence flags for v2.5.0/v2.6.0 methods |
+
+#### Workstream status update as of Round 14
+
+| Workstream item | Original status | Current status |
+|---|---|---|
+| B2 AlarmManager keepalive (Android Doze) | RESEARCH-FIRST, phase 3 | ✅ **Closed** — BG-5 native `LocationWakeReceiver` (Round 13) |
+| B4 real-callback freshness watchdog | TEST-FIRST, phase 1B pending threshold | ✅ **Shipped** — diagnostic (Phase 1A), forceReacquire action (Round 14). UI freeze-band deferred pending field data |
+| D3 iOS `forceReacquire` | RESEARCH-FIRST, phase 3 | ✅ **Closed** — BG-2 CDV action (Round 13) + JS watchdog wired (Round 14) |
+| D4 Periodic flag re-assertion | RESEARCH-FIRST, phase 3 | ✅ **Closed** — BG-7 re-asserts flags on every 15 s keepalive tick (Round 12) |
+| D5 SLC as wake source for auto-reacquire | RESEARCH-FIRST, phase 3 | ✅ **Closed** — BG-10 `_slcManager` parallel CLLocationManager with auto-reacquire on SLC fresh + real stalled (Round 13) |
+| F-G1 `getCLState` telemetry | deferred, needs plugin action | ✅ **Shipped** — wired into 30 s interval (Round 14) |
+| F-G1b `getPowerState` telemetry | not yet defined | ✅ **Shipped** — 60 s iOS interval (Round 14) |
+| F-A2 `audio_session_state` | deferred, needs AF v1.6.0 | ✅ **Shipped** (Round 11) |
+| F-A3 `audio_route_changed` | deferred, needs AF v1.6.0 | ✅ **Shipped** (Round 11) |
+
+#### Still open (next session or field-calibration dependent)
+
+- **B4 UI freeze-band** — `#frozen-band` overlay with "Téléphone en veille" copy. Requires `real_callback_freshness` field data to calibrate the 60 s threshold before turning it into a visible UX block.
+- **E1/E2/E3** zone-overshoot sustain gates — still need `accuracy_near_border` distribution.
+- **B3** FusedLocationProvider Android — RESEARCH-FIRST; escalate if BG-5 + Doze data shows it's insufficient.
+- **C2/C4** audio integrity and playerror retry — still in phase 1B queue.
+- **Phase 2** plugin rebuild (Play Store / TestFlight cycle for v2.5.0 + v2.6.0).
 
