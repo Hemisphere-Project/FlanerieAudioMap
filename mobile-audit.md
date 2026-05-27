@@ -1294,7 +1294,13 @@ Regression risk: **LOW** — narrows an existing trigger; the `loaderror` case (
 
 #### R7.3 iOS audiofocus_request_fail flood [RESEARCH-FIRST]
 
-`audiofocus_request_fail` fired **~4,900 times on iOS** vs 52 on Android. Concentrated on `4zq0` (1,545) and `c7qo` (1,446) — ~97 % of audio-focus requests failing on those two sessions. Both still completed the walk, so it is not a confirmed walk-breaker, but it shows the iOS keepalive / zone / offlimit players repeatedly failing to acquire audio focus in the background. Android requests succeed normally (`892p`: 275 ok / 14 fail). Per-session counts vary wildly on identical hardware (`iPhone14,2`: `6epi` 80 fails, `4zq0` 1,545), so it is session-state-dependent, not a clean device or OS split. Worth a `player.js` review of whether iOS should request audio focus per-play at all for the silent keepalive player — the request is plausibly redundant there. Diagnostic only this round.
+`audiofocus_request_fail` fired **~4,900 times on iOS** vs 52 on Android. Concentrated on `4zq0` (1,545) and `c7qo` (1,446) — ~97 % of audio-focus requests failing on those two sessions. Both still completed the walk, so it is not a confirmed walk-breaker.
+
+**Code cross-check 2026-05-27:** the current app does **not** request focus on every healthy iOS loop iteration. [`requestAudioFocus()`](www/app/assets/player.js#L172) is called on app boot, on explicit resume-overlay tap, and before a play only when JS state already says `AUDIOFOCUS === 0`. The more likely flood mechanism is: one iOS request fails, JS stays at `AUDIOFOCUS === 0`, then later autoplay attempts keep retrying and logging failures.
+
+**Shipped mitigation 2026-05-27:** fresh non-resume walk start now awaits `cordova.plugins.audiofocus.resetAudioSession()` before `SILENT_PLAYER.play()`, and successful reset sets JS `AUDIOFOCUS = 1` so the session does not begin in that poisoned retry state.
+
+If the flood still reproduces after this build, the next safe app-side move is a cooldown on repeated failed auto-requests, or removal of the unconditional boot-time `requestAudioFocus()` once field data shows the G1 startup reset is sufficient. Diagnostic-first remains the right stance; do not strip all iOS focus requests blindly.
 
 Files (when picked up): `www/app/assets/player.js`, `cordova-plugin-audiofocus/`.
 
@@ -1728,6 +1734,7 @@ All four batches implemented in one session. JS syntax-checked; no behavioural f
 - **C2** (2026-05-26) — `media_integrity_check` fires once at parcours entry. Healthy device: `failed: 0`, `skipped: false`. Force the issue by renaming one media file on the device → expect `failed: 1` with the file in `failed_files`.
 
 **Phase 1A (2026-05-26) — next field test validation targets:**
+- **G1 slice** (2026-05-27) — on a fresh non-resume start, `audiofocus_session_reset` should precede the first `audiofocus_keepalive_started` / `audio_play_requested` burst on the parcours page, and `walk_end_shutdown` sessions should also show `audiofocus_session_released` without lingering post-end audio. On iOS, the first parcours audio should no longer immediately generate an `audiofocus_request_fail` if the only cause was stale startup state.
 - **A4** (2026-05-26) — `step_audio_trigger` events on first fire of a new step must not carry non-zero `resume_seek_pos` from the prior step. No `voice_snapshot` with `pos < 3` should trigger a seek. Cross-check `rumx`-class sessions for double-resume stutter absence.
 - **C1** (2026-05-26) — iOS sessions with `audio_playerror` must show `error_code` and `error_type` (not `"[object Object]"`). `audio_uri_resolved` must appear once per step audio load.
 - **D1** (2026-05-26) — Any iOS 26.3.x device must see the red warning block at `confirmgeo`; iOS 26.4.x / 18.x / Android must see no change. `ios_version_warning` telemetry present.
@@ -1789,8 +1796,8 @@ Given limited time and device range, the next test has two distinct jobs:
 
 Requires Cordova rebuild and Play Store upgrade. Coordinate with show schedule (show in ~4 weeks as of 2026-05-26).
 
-- **A1/A2/A3** Walk-session lifecycle: `BGGeo.start()` / `stop()` scoped to the parcours session; proper audiofocus `startKeepalive()` → parcours → `stopKeepalive()` bookkeeping. Depends on G1.
-- **G1** Audiofocus plugin: `resetAudioSession()` / `releaseSession()` actions for clean walk-start and walk-end teardown.
+- **A3 + remaining A1/A2 cleanup** Walk-session lifecycle: broader end-state teardown, re-arm confirmation flow, and any remaining JS hard-reset work after the now-shipped G1 slice.
+- **G1 follow-up only if needed**: iOS `audiofocus_request_fail` suppression/backoff if the awaited startup reset does not materially reduce R7.3 in field telemetry.
 - **G2** Power-optimization plugin: promote `~/Bakery/cordova-plugin-power-optimization/` fork (currently only in-tree); add `GetStandbyBucket()` / `IsAutoRevokeWhitelisted()` / `RequestAutoRevokeWhitelist()` Java methods; extend OEM intent table (full C5 backlog).
 - **G3** BG-geo plugin: F-G1 (native `locationManager:didChangeAuthorizationStatus:` callback), F-G3 (background-task ID in keepalive tick), F-G4 (NSTimer vs CLLocationManager callback source tag).
 - **P1.33** `RawLocationProvider`: add `NETWORK_PROVIDER` request + last-known-network fix delivery on `onStart()` for Android GPS cold-start warmup.

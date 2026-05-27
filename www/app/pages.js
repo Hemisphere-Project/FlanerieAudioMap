@@ -46,6 +46,7 @@ var BGLOC_TIMER = null;
 const BGLOC_POLL_MS = 1500;
 var MOTION_TIMER = null;
 const MOTION_WAIT_MS = 8000;
+var PARCOURS_BOOT_TOKEN = 0;
 // On a resume (kill+relaunch mid-walk) motion was already validated before the
 // walk started; GEO.motionAuthorized just resets to undefined on every reload.
 // Don't hard-block a pocketed walker — give a short grace, then proceed.
@@ -101,6 +102,31 @@ function clearMotionCheck()
         clearTimeout(MOTION_TIMER);
         MOTION_TIMER = null;
     }
+}
+
+function resetAudioSessionForFreshParcoursStart()
+{
+    if (typeof cordova === 'undefined' || !cordova.plugins || !cordova.plugins.audiofocus ||
+        typeof cordova.plugins.audiofocus.resetAudioSession !== 'function') {
+        return Promise.resolve(false);
+    }
+
+    return new Promise((resolve) => {
+        cordova.plugins.audiofocus.resetAudioSession(
+            () => {
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audiofocus_session_reset', {});
+                // The native reset reactivates the session before the walk starts.
+                // Mirror that in the JS gate so the first silent / zone-triggered
+                // plays do not immediately fall back into requestFocus() again.
+                if (typeof AUDIOFOCUS !== 'undefined') AUDIOFOCUS = 1;
+                resolve(true);
+            },
+            (err) => {
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audiofocus_session_reset_error', {error: String(err)});
+                resolve(false);
+            }
+        );
+    });
 }
 
 PAGES_CLEANUP['parcours']           = () => {
@@ -1801,7 +1827,19 @@ PAGES['sas'] = () => {
 var SILENT_PLAYER = new PlayerSimple(true, 0);
 SILENT_PLAYER.load(BASEURL+'/images/', {src: 'flanerie.mp3', master: 1}, false);
 
-PAGES['parcours'] = () => {
+PAGES['parcours'] = async () => {
+
+    var parcoursBootToken = ++PARCOURS_BOOT_TOKEN;
+
+    var isResume = PARCOURS.valid() && PARCOURS.currentStep() >= 0;
+
+    // Fresh visitor starts need a hard audio-session reset before the walk's
+    // first sustained playback. Resume flows deliberately skip this so a crash
+    // recovery keeps its current audio state rather than tearing it down again.
+    if (!isResume) {
+        await resetAudioSessionForFreshParcoursStart();
+        if (currentPage !== 'parcours' || parcoursBootToken !== PARCOURS_BOOT_TOKEN) return;
+    }
 
     SILENT_PLAYER.play(); // Play silent track to keep audio session alive
     scheduleWakeupNotification();
@@ -1837,8 +1875,6 @@ PAGES['parcours'] = () => {
     // if (!PARCOURS.valid()) return PAGE('select')
 
     resumeAudioContext('parcours');
-
-    var isResume = PARCOURS.valid() && PARCOURS.currentStep() >= 0;
 
     // MAP
     var MAP = initMap('parcours-map', {
@@ -2185,6 +2221,18 @@ PAGES['end'] = () => {
     RESUME_PLAYER.stop();
     clearLostUI();
     if (testplayer) { testplayer.stop(); testplayer.clear(); testplayer = null; }
+
+    // G1/A1: fully release the session-scoped audiofocus state. stopKeepalive
+    // alone tears down the foreground service, but it intentionally leaves some
+    // audio-session state alive; that's useful across page switches, but wrong
+    // at the real end of a walk where the next visitor needs a fresh engine.
+    if (typeof cordova !== 'undefined' && cordova.plugins && cordova.plugins.audiofocus &&
+        typeof cordova.plugins.audiofocus.releaseSession === 'function') {
+        cordova.plugins.audiofocus.releaseSession(
+            () => { if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audiofocus_session_released', {}); },
+            (err) => { if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audiofocus_session_release_error', {error: String(err)}); }
+        );
+    }
 
     // A7 — explicit end-of-walk telemetry shutdown so the session closes cleanly
     // server-side instead of bleeding events for hours (m3 / 7p2j, xuyx, 9hjo,

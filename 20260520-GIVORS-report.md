@@ -423,7 +423,7 @@ Files: [www/app/pages.js](www/app/pages.js), [cordova-plugin-audiofocus](../cord
 **A2. Session-start audio engine reset [TEST-FIRST]** — webapp + audiofocus plugin (G1).  
 Closes the underlying mechanism of P7 (and Justine's "navigate away and back" workaround). On `TELEMETRY.start(... 'session_start')` (not on `'session_resume'` — resume must preserve audio state):
 
-- Call new `cordova.plugins.audiofocus.resetAudioSession()` action (G1). iOS: `setActive:NO` → 100 ms delay → `setCategory:AVAudioSessionCategoryPlayback` + `setActive:YES`. Android: `cancelFocus()` → fresh `requestFocus()` → restart FG service via `startKeepalive()`.
+- Call new `cordova.plugins.audiofocus.resetAudioSession()` action (G1). iOS: `setActive:NO` → 100 ms delay → `setCategory:AVAudioSessionCategoryPlayback` + `setActive:YES`. Android: `cancelFocus()` → fresh `requestFocus()` → restart FG service via `startKeepalive()`. **Status (2026-05-27): shipped for fresh non-resume parcours entry, and now awaited before `SILENT_PLAYER.play()` so the first sustained audio cannot race the reset. Successful reset also synchronises JS `AUDIOFOCUS = 1` to avoid immediately re-entering the iOS retry path.**
 - Rebuild SILENT_PLAYER fresh on the JS side regardless of platform (cheap insurance).
 - Emit `audio_engine_reset` telemetry (F4).
 
@@ -552,10 +552,12 @@ Targets the `rumx` / `vigi` iOS playerror clusters where post-crash audio refs a
 
 Files: [www/app/assets/player.js](www/app/assets/player.js) (`PlayerStep` voice playerror handler).
 
-**C5. iOS audiofocus request parsimony [SAFE-TODAY]** — webapp. Closes m2.  
-4929 `audiofocus_request_fail` on iOS fleet-wide vs. 52 on Android isn't a known *audio failure* but it's pollution and on `4zq0`/`c7qo` it suggests SILENT_PLAYER + zone/offlimit looped players each requesting focus on every loop iteration. iOS with UIBackgroundModes:audio + R5.1 keepalive does NOT need per-player focus requests for persistent silent / ambient players.
+**C5. iOS audiofocus request parsimony [CODE-REVIEWED 2026-05-27]** — webapp.  
+Code cross-check: the current iOS path is already narrower than the original hypothesis. [`requestAudioFocus()`](www/app/assets/player.js#L172) is called on app boot, on explicit resume-overlay tap, and before a play only when JS state already says `AUDIOFOCUS === 0`; healthy looped players are **not** requesting focus on every loop iteration. The more plausible R7.3 mechanism is: one failed iOS request leaves JS in `AUDIOFOCUS === 0`, then later autoplay attempts keep retrying and logging failures.
 
-In [`shouldRequestAudioFocusForPlay()`](www/app/assets/player.js#L183): on iOS, return `false` for persistent looped players (mark them with `_skipFocusRequest = true` at construction).
+Immediate mitigation shipped under A2/G1: fresh non-resume walk start now awaits `resetAudioSession()` and, on success, sets JS `AUDIOFOCUS = 1` before the first silent play. That removes the most obvious "fail once, stay poisoned for the rest of the session" path.
+
+If R7.3 still reproduces after this build, the next safe change is not blanket removal of iOS focus requests; it is either a cooldown on repeated failed auto-requests or dropping the unconditional boot-time `requestAudioFocus()` once field telemetry confirms G1 startup reset is sufficient.
 
 Files: [www/app/assets/player.js](www/app/assets/player.js).
 
@@ -807,7 +809,7 @@ Files: [www/app/assets/spot.js](www/app/assets/spot.js).
 
 ### 12.7. Workstream G — Plugin extensions (incremental fork work)
 
-**G1. cordova-plugin-audiofocus extensions [TEST-FIRST]**.  
+**G1. cordova-plugin-audiofocus extensions [TEST-FIRST, shipped 2026-05-27]**.  
 Two new actions, symmetric on both platforms:
 
 - `resetAudioSession()` — iOS: `setActive:NO` → 100 ms delay → `setCategory:AVAudioSessionCategoryPlayback withOptions:0 error:&err` → `setActive:YES`. Android: `cancelFocus()` → `requestFocus()` → `startKeepalive()`.
@@ -815,7 +817,7 @@ Two new actions, symmetric on both platforms:
 
 Also: in `handleInterruption` on iOS, log `[[AVAudioSession sharedInstance] currentRoute]` description and `outputVolume` — helps diagnose the m2 audiofocus fail flood by surfacing whether route changes are correlated.
 
-Bump plugin version 1.4.1 → 1.5.0.
+Bumped plugin version to 1.5.1 in the shipped fork. App wiring is live in [www/app/pages.js](www/app/pages.js): `resetAudioSession()` on fresh non-resume walk entry, `releaseSession()` on the end page, and the walk-start reset is awaited before silent playback begins.
 
 Files: [cordova-plugin-audiofocus/src/ios/AudioFocus.m](../cordova-plugin-audiofocus/src/ios/AudioFocus.m), [cordova-plugin-audiofocus/src/android/AudioFocus.java](../cordova-plugin-audiofocus/src/android/AudioFocus.java), [cordova-plugin-audiofocus/www/AudioFocus.js](../cordova-plugin-audiofocus/www/AudioFocus.js), [cordova-plugin-audiofocus/plugin.xml](../cordova-plugin-audiofocus/plugin.xml), [cordova-plugin-audiofocus/package.json](../cordova-plugin-audiofocus/package.json).
 
@@ -847,7 +849,7 @@ Files: [cordova-background-geolocation-plugin/android/...](../cordova-background
 - **Phase 1A is shipped, not pending.** The A4 / A5 / A7 / C1 / D1 items from §12.10 are implemented in the current codebase, along with the Phase 1A diagnostic telemetry batch.
 - **Phase 1B partial is also shipped.** R7.2 / B1 / A6 / C2 from §12.11 are implemented in the current codebase.
 - **The remaining pre-field-test behaviour work is the calibrated subset only:** B4 watchdog and E1 / E2 / E3 zone-overshoot gates. Both stay blocked on new field telemetry.
-- **Phase 2 / Phase 3 remain unchanged in principle:** plugin rebuild work (G1 / G2 / G3, A1 / A2 plugin half) and deep native investigation (D3–D5, B2 / B3, conditional Android media path) still belong after the next field pass.
+- **Phase 2 / Phase 3 remain mostly unchanged in principle:** G1 base plugin work and the first A1/A2 wiring slice are now shipped; the remaining plugin rebuild work is G2 / G3 plus any follow-up R7.3 suppression if the iOS fail flood persists after field validation. Deep native investigation (D3–D5, B2 / B3, conditional Android media path) still belongs after the next field pass.
 
 **Immediate non-field-test work still worth doing**
 
@@ -912,9 +914,9 @@ Files: [www/app/assets/geoloc.js](www/app/assets/geoloc.js).
 - **B4 UI band** — diagnostic half ships in 1A, behaviour-change half in 1B.
 - **C2** preload/walk-start file integrity — moderate scope, ship in phase 1B with the operational batch.
 - **C4** audio playerror retry — depends on C1 outcome; might pivot to per-file fallback if `decode_failed` dominates (open decision #3).
-- **A1/A2/A3** lifecycle hygiene — needs G1 audiofocus plugin actions. Phase 2.
+- **A3 + remaining A1/A2 hard-reset cleanup** — phase 2. The G1 audiofocus actions and the first walk-start / walk-end wiring slice are already shipped; what remains is the broader end-state teardown and re-arm flow cleanup if field validation says it is still needed.
 - **A6** parcours freshness check — needs `server.js` `X-Parcours-Steps` header; pairs naturally with A5's `/devices` work in phase 2 rebuild, but can slip into phase 1B if there's time.
-- **All §12.7 G plugin work** — phase 2.
+- **All remaining §12.7 G plugin work (G2 / G3, plus any R7.3 follow-up after validation)** — phase 2.
 - **All §12.4 D3–D5 native iOS work** — phase 3.
 
 #### Phase 1A acceptance criteria
