@@ -114,7 +114,7 @@ function resetAudioSessionForFreshParcoursStart()
     return new Promise((resolve) => {
         cordova.plugins.audiofocus.resetAudioSession(
             () => {
-                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audiofocus_session_reset', {});
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_engine_reset', {});
                 // The native reset reactivates the session before the walk starts.
                 // Mirror that in the JS gate so the first silent / zone-triggered
                 // plays do not immediately fall back into requestFocus() again.
@@ -122,7 +122,31 @@ function resetAudioSessionForFreshParcoursStart()
                 resolve(true);
             },
             (err) => {
-                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audiofocus_session_reset_error', {error: String(err)});
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_engine_reset_error', {error: String(err)});
+                resolve(false);
+            }
+        );
+    });
+}
+
+// Wrap audiofocus.releaseSession in a promise. Used at A3 rearm to ensure the
+// release (setActive:NO on iOS) completes before resetAudioSession's
+// setCategory + setActive:YES — otherwise the late deactivate callback can
+// land after the new activate and immediately tear it down.
+function releaseAudiofocusSession(source)
+{
+    if (typeof cordova === 'undefined' || !cordova.plugins || !cordova.plugins.audiofocus ||
+        typeof cordova.plugins.audiofocus.releaseSession !== 'function') {
+        return Promise.resolve(false);
+    }
+    return new Promise((resolve) => {
+        cordova.plugins.audiofocus.releaseSession(
+            () => {
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audiofocus_session_released', source ? {source: source} : {});
+                resolve(true);
+            },
+            (err) => {
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audiofocus_session_release_error', source ? {source: source, error: String(err)} : {error: String(err)});
                 resolve(false);
             }
         );
@@ -2100,11 +2124,13 @@ PAGES['parcours'] = async () => {
             plugin_power_GetLastExitReasons:     !!(po && typeof po.GetLastExitReasons       === 'function'),
             plugin_power_GetMemoryInfo:          !!(po && typeof po.GetMemoryInfo            === 'function'),
             plugin_power_GetStandbyBucket:       !!(po && typeof po.GetStandbyBucket         === 'function'),
+            plugin_power_IsAutoRevokeWhitelisted: !!(po && typeof po.IsAutoRevokeWhitelisted === 'function'),
             plugin_audiofocus:  !!af,
             plugin_audiofocus_getSessionState:   !!(af && typeof af.getAudioSessionState     === 'function'),
             plugin_bgloc_getCLState:             !!(typeof BackgroundGeolocation !== 'undefined' && typeof BackgroundGeolocation.getCLState    === 'function'),
             plugin_bgloc_getPowerState:          !!(typeof BackgroundGeolocation !== 'undefined' && typeof BackgroundGeolocation.getPowerState  === 'function'),
             plugin_bgloc_forceReacquire:         !!(typeof BackgroundGeolocation !== 'undefined' && typeof BackgroundGeolocation.forceReacquire === 'function'),
+            plugin_bgloc_getAlarmWakeStats:      !!(typeof BackgroundGeolocation !== 'undefined' && typeof BackgroundGeolocation.getAlarmWakeStats === 'function'),
             plugin_bgloc:       !!(typeof BackgroundGeolocation !== 'undefined'),
             plugin_permissions: !!(typeof cordova !== 'undefined' && cordova.plugins && cordova.plugins.permissions),
             // Runtime flags
@@ -2147,13 +2173,19 @@ PAGES['parcours'] = async () => {
         var ig  = (typeof po.IsIgnoringBatteryOptimizations === 'function') ? po.IsIgnoringBatteryOptimizations().catch(function(e) { return 'error:'+e; }) : Promise.resolve('n/a');
         var sb  = (typeof po.GetStandbyBucket         === 'function') ? po.GetStandbyBucket().catch(function(e)         { return 'error:'+e; }) : Promise.resolve('n/a');
         var ler = (typeof po.GetLastExitReasons       === 'function') ? po.GetLastExitReasons().catch(function(e)       { return 'error:'+e; }) : Promise.resolve('n/a');
-        Promise.all([ps, br, ig, sb, ler]).then(function(r) {
+        // PO-9 (power-opt v0.3.x) — auto-revoke / hibernation whitelist state.
+        // Returns true when the app is exempt from Android 11+ permission
+        // auto-revoke; a false here means a long-idle device may have already
+        // stripped permissions before the visitor's walk.
+        var arw = (typeof po.IsAutoRevokeWhitelisted  === 'function') ? po.IsAutoRevokeWhitelisted().catch(function(e)  { return 'error:'+e; }) : Promise.resolve('n/a');
+        Promise.all([ps, br, ig, sb, ler, arw]).then(function(r) {
             TELEMETRY.log('power_state_at_parcours', {
-                power_save:         r[0],
-                bg_restricted:      r[1],
-                ignoring_batt_opt:  r[2],
-                standby_bucket:     r[3],
-                last_exit_reasons:  r[4],
+                power_save:           r[0],
+                bg_restricted:        r[1],
+                ignoring_batt_opt:    r[2],
+                standby_bucket:       r[3],
+                last_exit_reasons:    r[4],
+                auto_revoke_whitelisted: r[5],
             });
         });
     })();
@@ -2257,13 +2289,9 @@ PAGES['end'] = () => {
     // alone tears down the foreground service, but it intentionally leaves some
     // audio-session state alive; that's useful across page switches, but wrong
     // at the real end of a walk where the next visitor needs a fresh engine.
-    if (typeof cordova !== 'undefined' && cordova.plugins && cordova.plugins.audiofocus &&
-        typeof cordova.plugins.audiofocus.releaseSession === 'function') {
-        cordova.plugins.audiofocus.releaseSession(
-            () => { if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audiofocus_session_released', {}); },
-            (err) => { if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audiofocus_session_release_error', {error: String(err)}); }
-        );
-    }
+    // Fire-and-forget here is fine — at walk end there is no follow-up reset
+    // racing the release (unlike the A3 rearm path, which must await).
+    releaseAudiofocusSession();
 
     // A7 — explicit end-of-walk telemetry shutdown so the session closes cleanly
     // server-side instead of bleeding events for hours (m3 / 7p2j, xuyx, 9hjo,
@@ -2418,13 +2446,10 @@ $('#parcours-rearm').click(async () => {
 
     // A3/G1: release the full session-scoped audiofocus state (stopKeepalive
     // alone leaves iOS AVAudioSession active; releaseSession does the teardown).
-    if (typeof cordova !== 'undefined' && cordova.plugins && cordova.plugins.audiofocus &&
-        typeof cordova.plugins.audiofocus.releaseSession === 'function') {
-        cordova.plugins.audiofocus.releaseSession(
-            () => { if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audiofocus_session_released', {source: 'rearm'}); },
-            (err) => { if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audiofocus_session_release_error', {source: 'rearm', error: String(err)}); }
-        );
-    }
+    // Awaited so the release (setActive:NO) completes before the reset
+    // (setCategory + setActive:YES) below — otherwise the late deactivate
+    // callback can tear down the freshly activated session on iOS.
+    await releaseAudiofocusSession('rearm');
 
     // Restart the telemetry session for the new visitor, then reset parcours state.
     TELEMETRY.restart(
@@ -3049,6 +3074,22 @@ setInterval(() => {
         if (bgGeoFG1 && typeof bgGeoFG1.getCLState === 'function') {
             bgGeoFG1.getCLState().then(function(clState) {
                 if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('cl_state', Object.assign({}, clState, {
+                    real_age_ms: lastReal != null ? Date.now() - lastReal : null,
+                    step: (typeof PARCOURS !== 'undefined' && PARCOURS.state) ? PARCOURS.state.stepIndex : null,
+                }));
+            }).catch(function(e) { /* non-fatal */ });
+        }
+    }
+
+    // P0.5 Fix 1e (bg-geo v2.8.0) — BG-5 AlarmManager wake stats (Android only).
+    // Reading them alongside real_age_ms surfaces the WebView-suspended-despite-
+    // alarm pattern: counter grows while real_age_ms also grows means the
+    // native alarm is firing but JS is not getting fresh callbacks.
+    if (PLATFORM === 'android') {
+        var bgGeoAW = (typeof BackgroundGeolocation !== 'undefined') ? BackgroundGeolocation : null;
+        if (bgGeoAW && typeof bgGeoAW.getAlarmWakeStats === 'function') {
+            bgGeoAW.getAlarmWakeStats().then(function(stats) {
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('alarm_wake_stats', Object.assign({}, stats, {
                     real_age_ms: lastReal != null ? Date.now() - lastReal : null,
                     step: (typeof PARCOURS !== 'undefined' && PARCOURS.state) ? PARCOURS.state.stepIndex : null,
                 }));
