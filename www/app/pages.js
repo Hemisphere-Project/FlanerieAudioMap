@@ -2088,7 +2088,11 @@ PAGES['parcours'] = async () => {
             plugin_power_IsPowerSaveMode:        !!(po && typeof po.IsPowerSaveMode          === 'function'),
             plugin_power_IsBackgroundRestricted: !!(po && typeof po.IsBackgroundRestricted   === 'function'),
             plugin_power_IsIgnoringBattOpt:      !!(po && typeof po.IsIgnoringBatteryOptimizations === 'function'),
+            plugin_power_GetLastExitReasons:     !!(po && typeof po.GetLastExitReasons       === 'function'),
+            plugin_power_GetMemoryInfo:          !!(po && typeof po.GetMemoryInfo            === 'function'),
+            plugin_power_GetStandbyBucket:       !!(po && typeof po.GetStandbyBucket         === 'function'),
             plugin_audiofocus:  !!af,
+            plugin_audiofocus_getSessionState:   !!(af && typeof af.getAudioSessionState     === 'function'),
             plugin_bgloc:       !!(typeof BackgroundGeolocation !== 'undefined'),
             plugin_permissions: !!(typeof cordova !== 'undefined' && cordova.plugins && cordova.plugins.permissions),
             // Runtime flags
@@ -2126,14 +2130,18 @@ PAGES['parcours'] = async () => {
 
         // Async power state — separate event so the sync facts land first.
         if (!po || PLATFORM !== 'android') return;
-        var ps = (typeof po.IsPowerSaveMode          === 'function') ? po.IsPowerSaveMode().catch(function(e)          { return 'error:'+e; }) : Promise.resolve('n/a');
-        var br = (typeof po.IsBackgroundRestricted   === 'function') ? po.IsBackgroundRestricted().catch(function(e)   { return 'error:'+e; }) : Promise.resolve('n/a');
-        var ig = (typeof po.IsIgnoringBatteryOptimizations === 'function') ? po.IsIgnoringBatteryOptimizations().catch(function(e) { return 'error:'+e; }) : Promise.resolve('n/a');
-        Promise.all([ps, br, ig]).then(function(r) {
+        var ps  = (typeof po.IsPowerSaveMode          === 'function') ? po.IsPowerSaveMode().catch(function(e)          { return 'error:'+e; }) : Promise.resolve('n/a');
+        var br  = (typeof po.IsBackgroundRestricted   === 'function') ? po.IsBackgroundRestricted().catch(function(e)   { return 'error:'+e; }) : Promise.resolve('n/a');
+        var ig  = (typeof po.IsIgnoringBatteryOptimizations === 'function') ? po.IsIgnoringBatteryOptimizations().catch(function(e) { return 'error:'+e; }) : Promise.resolve('n/a');
+        var sb  = (typeof po.GetStandbyBucket         === 'function') ? po.GetStandbyBucket().catch(function(e)         { return 'error:'+e; }) : Promise.resolve('n/a');
+        var ler = (typeof po.GetLastExitReasons       === 'function') ? po.GetLastExitReasons().catch(function(e)       { return 'error:'+e; }) : Promise.resolve('n/a');
+        Promise.all([ps, br, ig, sb, ler]).then(function(r) {
             TELEMETRY.log('power_state_at_parcours', {
                 power_save:         r[0],
                 bg_restricted:      r[1],
                 ignoring_batt_opt:  r[2],
+                standby_bucket:     r[3],
+                last_exit_reasons:  r[4],
             });
         });
     })();
@@ -2908,18 +2916,43 @@ setInterval(() => {
     if (PLATFORM !== 'android') return;
     if (typeof cordova === 'undefined' || !cordova.plugins || !cordova.plugins.PowerOptimization) return;
     var po = cordova.plugins.PowerOptimization;
-    var psPromise = (typeof po.IsPowerSaveMode          === 'function') ? po.IsPowerSaveMode().catch(function(e)          { return 'error:'+e; }) : Promise.resolve('n/a');
-    var brPromise = (typeof po.IsBackgroundRestricted   === 'function') ? po.IsBackgroundRestricted().catch(function(e)   { return 'error:'+e; }) : Promise.resolve('n/a');
-    var igPromise = (typeof po.IsIgnoringBatteryOptimizations === 'function') ? po.IsIgnoringBatteryOptimizations().catch(function(e) { return 'error:'+e; }) : Promise.resolve('n/a');
-    Promise.all([psPromise, brPromise, igPromise]).then(function(r) {
+    var psPromise  = (typeof po.IsPowerSaveMode          === 'function') ? po.IsPowerSaveMode().catch(function(e)          { return 'error:'+e; }) : Promise.resolve('n/a');
+    var brPromise  = (typeof po.IsBackgroundRestricted   === 'function') ? po.IsBackgroundRestricted().catch(function(e)   { return 'error:'+e; }) : Promise.resolve('n/a');
+    var igPromise  = (typeof po.IsIgnoringBatteryOptimizations === 'function') ? po.IsIgnoringBatteryOptimizations().catch(function(e) { return 'error:'+e; }) : Promise.resolve('n/a');
+    var sbPromise  = (typeof po.GetStandbyBucket         === 'function') ? po.GetStandbyBucket().catch(function(e)         { return 'error:'+e; }) : Promise.resolve('n/a');
+    var memPromise = (typeof po.GetMemoryInfo            === 'function') ? po.GetMemoryInfo().catch(function(e)            { return 'error:'+e; }) : Promise.resolve('n/a');
+    Promise.all([psPromise, brPromise, igPromise, sbPromise, memPromise]).then(function(r) {
         TELEMETRY.log('bg_restrictions_recheck', {
             power_save:        r[0],
             bg_restricted:     r[1],
             ignoring_batt_opt: r[2],
+            standby_bucket:    r[3],
+            memory_info:       r[4],
             step:              (typeof PARCOURS !== 'undefined' && PARCOURS.state) ? PARCOURS.state.stepIndex : null,
         });
     });
 }, 5 * 60 * 1000);
+
+// F-A2 — periodic native audio session state snapshot (audiofocus plugin v1.6.0 AF-6).
+// Calls getAudioSessionState() once per minute while on the parcours page to confirm
+// the iOS AVAudioSession / Android AudioManager is not silently degraded mid-walk
+// (e.g. session inactive after a background restart or an unhandled route change).
+setInterval(() => {
+    if (currentPage !== 'parcours') return;
+    if (typeof cordova === 'undefined' || !cordova.plugins || !cordova.plugins.audiofocus) return;
+    var af = cordova.plugins.audiofocus;
+    if (typeof af.getAudioSessionState !== 'function') return;
+    af.getAudioSessionState().then(function(state) {
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_session_state', Object.assign({}, state, {
+            step: (typeof PARCOURS !== 'undefined' && PARCOURS.state) ? PARCOURS.state.stepIndex : null,
+        }));
+    }).catch(function(e) {
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_session_state', {
+            error: String(e),
+            step: (typeof PARCOURS !== 'undefined' && PARCOURS.state) ? PARCOURS.state.stepIndex : null,
+        });
+    });
+}, 60000);
 
 // B4 diagnostic — periodic real-callback freshness sample. Fires every 30s
 // while on parcours and logs how stale the last *real* GPS callback is, plus

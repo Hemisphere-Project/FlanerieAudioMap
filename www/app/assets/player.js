@@ -66,6 +66,34 @@ document.addEventListener('deviceready', function() {
     cordova.plugins.audiofocus.onFocusChange(function(focusState) {
         console.log('[AudioFocus] change:', focusState);
         if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audiofocus_change', {state: focusState});
+        // AF-4/AF-5/AF-3: plugin v1.6.0 delivers structured JSON events alongside
+        // plain-string focus states. Detect and dispatch before the string comparisons
+        // so existing AUDIOFOCUS_LOSS/GAIN paths remain unaffected.
+        if (typeof focusState === 'string' && focusState.length > 0 && focusState[0] === '{') {
+            try {
+                var evt = JSON.parse(focusState);
+                if (evt.event === 'AUDIO_ROUTE_CHANGED') {
+                    // AF-5: BT disconnect / headphone unplug / output route override
+                    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_route_changed', {
+                        reason:        evt.reason        || null,
+                        previous_port: evt.previous_port || null,
+                        current_port:  evt.current_port  || null,
+                    });
+                } else if (evt.event === 'POWER_SAVE_CHANGED') {
+                    // AF-4: instant native broadcast on power-save toggle
+                    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('power_save_changed', {
+                        is_power_save_mode: !!evt.isPowerSaveMode,
+                    });
+                } else if (evt.event === 'AUDIOFOCUS_SERVICE_RESTARTED') {
+                    // AF-3: AudioFocusService was restarted by Android while our process
+                    // survived (START_STICKY). The native side has already re-requested
+                    // audio focus. Log for diagnostics; AUDIOFOCUS_GAIN will arrive
+                    // separately if focus was granted.
+                    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audiofocus_service_restarted', {});
+                }
+            } catch (e) { /* malformed JSON — ignore */ }
+            return;
+        }
         if (focusState === "AUDIOFOCUS_LOSS" || focusState === "AUDIOFOCUS_LOSS_TRANSIENT") {
             // Distinctive triple-pulse so a pocketed user can feel that audio paused
             // — a single 300ms pulse is easy to miss against walking motion.
