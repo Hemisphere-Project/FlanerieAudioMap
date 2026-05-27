@@ -308,7 +308,7 @@ The full remediation plan (workstreams A–G, phase plan, file paths, telemetry 
 | M2 step_resume_current | E1/E2/E3 | **Pending VILLEURBANNE data** (`accuracy_near_border` distribution) |
 | M3 silent audio loan-rearm | A1 + A2 + A3 | Shipped |
 | M4 Howler cold-load | A8 + A8b | Shipped |
-| m1 Android OEM kill | B1 + BG-5 + B3 (conditional) | B1/BG-5 shipped; B3 escalate only if ≥ 2 Doze blackouts ≥ 5 min recur |
+| m1 Android OEM kill | B1 + BG-5 + Architecture D (B3) | All shipped. Architecture D in bg-geo v2.9.0 = Raw-primary parallel + Fused fallback with native-side dedupe, no OEM allowlist |
 | m2 iOS audiofocus flood | G1 audiofocus_session_reset path | Shipped |
 | m3 no walk-end shutdown | A1 + A7 | Shipped |
 | P4 operator rearm | A3 | Shipped |
@@ -327,12 +327,13 @@ The full remediation plan (workstreams A–G, phase plan, file paths, telemetry 
 - F-A4 silence detection dropped from spec (covered by existing `voice_snapshot` heuristics).
 - A1 / A7 / end-page 5-tap reload all confirmed intentional (loan-phone rearm chain via title-page 5-tap-bottom).
 
-Additional capability shipped in Round 19:
+Additional capability shipped in Round 19 + 20:
 - **P0.5 Fix 1e diagnostic** (bg-geo v2.8.0) — `getAlarmWakeStats` exposes the BG-5 AlarmManager counter to the webapp every 30 s; lets us detect "alarm fires but JS got no fresh callback" (WebView Doze suspension) at VILLEURBANNE.
 - **PO-9 hibernation watch** (power-opt v0.3.1) — `IsAutoRevokeWhitelisted` polled at parcours entry; flags long-idle Android 11+ devices that have had permissions auto-stripped.
+- **Architecture D** (bg-geo v2.9.0) — Raw-primary with Fused fallback. `FusedLocationProviderClient` runs in parallel to LocationManager; native dedupe state machine forwards Fused only when Raw is stale (>20 s) or absent (cold start). JS sees a single source-tagged stream (`raw` / `raw-keepalive` / `fused`). Closes the original B3 / BG-6 spec without a conditional OEM allowlist. Battery is accepted by design (loan-phone fleet on chargers).
 
 **Open items requiring VILLEURBANNE data:**
 1. B4 UI freeze-band — threshold from `real_callback_freshness` distribution.
 2. E1/E2/E3 zone-overshoot gates — accuracy and sustain thresholds from `accuracy_near_border`.
-3. B3 / BG-6 FusedLocationProvider — escalate only if Android Doze blackouts recur.
-4. P0.5 Fix 1e behaviour layer — depends on whether `alarm_wake_stats` shows JS suspension despite alarm fires.
+3. Architecture D field validation — `location_dispatch_stats` will quantify how often Fused saved the day. If `fusedDelivered` is consistently 0 across the fleet, Raw is doing its job and Architecture D is pure insurance; if it climbs on restrictive OEMs (Samsung A15-class), it confirms FLP is closing GIVORS-class blackouts.
+4. P0.5 Fix 1e behaviour layer — depends on whether `alarm_wake_stats` shows JS suspension despite alarm fires (still open even with Architecture D, since FLP and BG-5 alarms are independent mechanisms).

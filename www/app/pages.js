@@ -2131,6 +2131,7 @@ PAGES['parcours'] = async () => {
             plugin_bgloc_getPowerState:          !!(typeof BackgroundGeolocation !== 'undefined' && typeof BackgroundGeolocation.getPowerState  === 'function'),
             plugin_bgloc_forceReacquire:         !!(typeof BackgroundGeolocation !== 'undefined' && typeof BackgroundGeolocation.forceReacquire === 'function'),
             plugin_bgloc_getAlarmWakeStats:      !!(typeof BackgroundGeolocation !== 'undefined' && typeof BackgroundGeolocation.getAlarmWakeStats === 'function'),
+            plugin_bgloc_getLocationDispatchStats: !!(typeof BackgroundGeolocation !== 'undefined' && typeof BackgroundGeolocation.getLocationDispatchStats === 'function'),
             plugin_bgloc:       !!(typeof BackgroundGeolocation !== 'undefined'),
             plugin_permissions: !!(typeof cordova !== 'undefined' && cordova.plugins && cordova.plugins.permissions),
             // Runtime flags
@@ -3090,6 +3091,18 @@ setInterval(() => {
         if (bgGeoAW && typeof bgGeoAW.getAlarmWakeStats === 'function') {
             bgGeoAW.getAlarmWakeStats().then(function(stats) {
                 if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('alarm_wake_stats', Object.assign({}, stats, {
+                    real_age_ms: lastReal != null ? Date.now() - lastReal : null,
+                    step: (typeof PARCOURS !== 'undefined' && PARCOURS.state) ? PARCOURS.state.stepIndex : null,
+                }));
+            }).catch(function(e) { /* non-fatal */ });
+        }
+        // v2.9.0 Architecture D — Raw/Fused dispatch counters (Android only).
+        // fusedDelivered > 0 means FLP filled a Raw stall during this session.
+        // fusedSuppressed counts how often Fused was ready but Raw was still
+        // fresh — high values are healthy (Raw is doing its job).
+        if (bgGeoAW && typeof bgGeoAW.getLocationDispatchStats === 'function') {
+            bgGeoAW.getLocationDispatchStats().then(function(stats) {
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('location_dispatch_stats', Object.assign({}, stats, {
                     real_age_ms: lastReal != null ? Date.now() - lastReal : null,
                     step: (typeof PARCOURS !== 'undefined' && PARCOURS.state) ? PARCOURS.state.stepIndex : null,
                 }));

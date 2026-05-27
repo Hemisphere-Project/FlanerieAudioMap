@@ -976,7 +976,13 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
             }, function() {
                 // F-G4: native keepalive ticks set is_keepalive=true so JS correctly skips
                 //        updating lastRealCallbackTime and the B4 forceReacquire watchdog fires.
-                var src = location.is_keepalive ? 'keepalive' : 'bg_location';
+                // v2.9.0 Architecture D: dispatch_source='fused' tags Fused-fallback fixes
+                //        (parallel FLP stream filling Raw stalls). Treated as a real callback
+                //        but tagged separately for post-hoc analysis.
+                var src;
+                if (location.is_keepalive)                  src = 'keepalive';
+                else if (location.dispatch_source === 'fused') src = 'fused';
+                else                                        src = 'bg_location';
                 positionCallback(position, {source: src, visibility: APP_VISIBILITY});
             });
         });
@@ -1004,7 +1010,10 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
                 lat: location.latitude,
                 lng: location.longitude,
             }, function() {
-                var src = location.is_keepalive ? 'keepalive' : 'bg_stationary';
+                var src;
+                if (location.is_keepalive)                  src = 'keepalive';
+                else if (location.dispatch_source === 'fused') src = 'fused';
+                else                                        src = 'bg_stationary';
                 positionCallback(position, {source: src, visibility: APP_VISIBILITY});
             });
         });

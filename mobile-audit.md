@@ -72,13 +72,13 @@ Each onboarding gate hard-blocks until its check passes.
 |---|---|---|
 | `cordova-plugin-audiofocus` | 1.6.0 | ✅ pinned |
 | `cordova-plugin-power-optimization` | 0.3.1 | ✅ pinned @ `3e89474` |
-| `cordova-background-geolocation-plugin` | 2.8.0 | ✅ pinned @ `284a5c2` |
+| `cordova-background-geolocation-plugin` | 2.9.0 | ✅ pinned @ `a00b818` |
 
 **Workstream coverage (post-GIVORS):**
 | Workstream | Status |
 |---|---|
 | A — Walk-session lifecycle hygiene (A1–A8b) | All shipped. A1 keeps state in localStorage by design (only the title-page 5-tap-bottom clears it — used to rearm loan phones). A2 awaits engine reset before first play. A3 (rearm) awaits `releaseSession` before `resetAudioSession` to prevent the iOS deactivate/activate race |
-| B — Android resilience (B1, B2, B4) | B1 shipped. B2 closed by BG-5 native AlarmManager. B4 diagnostic + iOS `forceReacquire` shipped; UI freeze-band still blocks on field threshold calibration. P0.5 Fix 1e (Android JS-suspended-despite-alarm diagnostic) shipped in bg-geo v2.8.0 — telemetry-only via `alarm_wake_stats` |
+| B — Android resilience (B1, B2, B3, B4) | B1 shipped. B2 closed by BG-5 native AlarmManager. B3 closed by **Architecture D in bg-geo v2.9.0** — Raw-primary parallel with Fused fallback, dedupe in native plugin (no OEM allowlist, fail-soft on no-GMS, JS sees a single source-tagged stream). B4 diagnostic + iOS `forceReacquire` shipped; UI freeze-band still blocks on field threshold calibration. P0.5 Fix 1e (Android JS-suspended-despite-alarm diagnostic) shipped in v2.8.0 — telemetry-only via `alarm_wake_stats` |
 | C — Audio reliability (C1–C5) | C1, C2, C4, R7.2 shipped. C3 covered by C2. C4 runs on both platforms intentionally (Android playerrors can also be caused by audiofocus loss). C5 — `IsAutoRevokeWhitelisted` shipped in power-opt v0.3.1. C6 deferred |
 | D — iOS GPS native (D1–D6) | D1 warning shipped. D3 (`forceReacquire`), D4 (flag re-assertion), D5 (SLC auto-reacquire) all closed by plugin work. D6 covered by B4. D7 = dedicated iOS field test still TBD |
 | E — Step lifecycle correctness (E1/E2/E3) | Not shipped — blocks on `accuracy_near_border` field data |
@@ -88,7 +88,6 @@ Each onboarding gate hard-blocks until its check passes.
 **Open items requiring next field test data:**
 - **B4 UI freeze-band** — need `real_callback_freshness` distribution to fix threshold above the ~20 s NSTimer/Handler floor.
 - **E1/E2/E3 zone-overshoot gates** — need `accuracy_near_border` distribution to set accuracy and sustain thresholds.
-- **B3/BG-6 FusedLocationProvider** — escalate only if v2.7.0 still shows ≥2 Android Doze blackouts ≥5 min on restrictive OEMs.
 
 ---
 
@@ -120,7 +119,7 @@ A4, A5, A6, A8, A8b, B1, B4 (diagnostic + iOS `forceReacquire`), C1, C2, D1, R7.
 ## Telemetry events (current code)
 
 ### GPS / lifecycle
-`session_start`, `session_resume`, `session_restart_click`, `session_end`, `session_diag`, `parcours_restore`, `parcours_freshness_check`, `parcours_update_chosen`, `bg_geo_authorization`, `app_visibility`, `gps_lost`, `gps_recovered`, `gps_callback_gap`, `real_callback_freshness` (30 s, includes `cl_state` on iOS + `alarm_wake_stats` on Android), `ios_power_state` (60 s iOS), `bg_restrictions_recheck` (5 min Android, includes `memory_info` + `standby_bucket`), `power_state_at_parcours` (now includes `auto_revoke_whitelisted` on Android), `gps_frozen` / `gps_unfrozen` (UI band deferred), `alarm_wake_stats` (30 s Android, bg-geo v2.8.0 P0.5 Fix 1e diagnostic).
+`session_start`, `session_resume`, `session_restart_click`, `session_end`, `session_diag`, `parcours_restore`, `parcours_freshness_check`, `parcours_update_chosen`, `bg_geo_authorization`, `app_visibility`, `gps_lost`, `gps_recovered`, `gps_callback_gap`, `real_callback_freshness` (30 s, includes `cl_state` on iOS + `alarm_wake_stats` + `location_dispatch_stats` on Android), `ios_power_state` (60 s iOS), `bg_restrictions_recheck` (5 min Android, includes `memory_info` + `standby_bucket`), `power_state_at_parcours` (now includes `auto_revoke_whitelisted` on Android), `gps_frozen` / `gps_unfrozen` (UI band deferred), `alarm_wake_stats` (30 s Android, bg-geo v2.8.0 P0.5 Fix 1e diagnostic), `location_dispatch_stats` (30 s Android, bg-geo v2.9.0 Architecture D: `{fusedAvailable, rawDelivered, rawKeepalive, fusedDelivered, fusedSuppressed, fusedStaleIgnored, lastDeliveredSource}`). Each `bg-geo` location event now carries `dispatch_source` ∈ `{raw, raw-keepalive, fused}` and `is_keepalive` on Android (`is_keepalive` already on iOS via F-G4).
 
 ### Step / parcours
 `step_fire`, `step_done`, `step_skip_done`, `step_implicit_done`, `step_audio_trigger` (carries `accuracy`, `consecutive_inside_samples`, `time_since_first_inside_ms`, `neighbor_distances`, `step_fire_latency_ms`), `step_resume_current`, `step_past_unload`, `step_voice_failed`, `step_afterplay_fallback`, `step_prewarm_next`, `parcours_store`, `accuracy_near_border` (when within 20 m), `voice_snapshot`, `voice_snapshot_skipped`, `user_lost`, `user_recovered`.
@@ -200,14 +199,14 @@ R7.2 default-afterplay map gating, B1 past-step media unload, A6 parcours freshn
 ### Phase 2 — plugin rebuild (shipped 2026-05-27, awaiting field validation)
 - **G1** audiofocus v1.6.0: AF-1 channel description, AF-2 iOS deactivation order, AF-3 START_STICKY recovery, AF-4 power-save receiver, AF-5 iOS route-change events, AF-6 `getAudioSessionState`, AF-7 app icon. Plus `resetAudioSession()` + `releaseSession()` actions used by A1/A2/A3.
 - **G2** power-opt v0.3.1: PO-1 LeTV intent fix, PO-2 `GetLastExitReasons`, PO-3 `GetMemoryInfo`, PO-4 `GetStandbyBucket`, PO-5 JSON booleans, PO-6 iOS stub, PO-7 Xiaomi MIUI autostart, PO-8 `skipProtectedAppCheck` guard, **PO-9 `IsAutoRevokeWhitelisted` + `RequestAutoRevokeWhitelist` (v0.3.1)**.
-- **G3** bg-geo: v2.5.0 (BG-3 `getCLState`, BG-4 `getPowerState`, BG-7 keepalive flag re-assertion); v2.6.0 (BG-2 `forceReacquire`, BG-5 Android AlarmManager Doze keepalive, BG-10 iOS SLC auto-reacquire); v2.7.0 (F-G1 native auth callback, F-G3 keepalive `bg_task_id`, F-G4 `is_keepalive` flag so B4 watchdog fires correctly); **v2.8.0 (BG-3 schema clarification — `hasLocation` + `locationTimestampAgeMs`; P0.5 Fix 1e diagnostic — `sAlarmFireCount` counter + `getAlarmWakeStats` CDV action)**.
+- **G3** bg-geo: v2.5.0 (BG-3 `getCLState`, BG-4 `getPowerState`, BG-7 keepalive flag re-assertion); v2.6.0 (BG-2 `forceReacquire`, BG-5 Android AlarmManager Doze keepalive, BG-10 iOS SLC auto-reacquire); v2.7.0 (F-G1 native auth callback, F-G3 keepalive `bg_task_id`, F-G4 `is_keepalive` flag so B4 watchdog fires correctly); v2.8.0 (BG-3 schema clarification — `hasLocation` + `locationTimestampAgeMs`; P0.5 Fix 1e diagnostic — `sAlarmFireCount` counter + `getAlarmWakeStats` CDV action); **v2.9.0 (Architecture D — `FusedLocationProviderHelper` parallel stream, native-side dedupe in `RawLocationProvider` with `STALE_RAW_MS=20s` / `MAX_FUSED_AGE=60s`, `dispatch_source` + `is_keepalive` fields propagated to JS, `getLocationDispatchStats` CDV action exposing counters)**.
 
 ### Phase 1B remainder (blocked on VILLEURBANNE data)
 - **B4 watchdog UI** — `#frozen-band` overlay with "Téléphone en veille — déverrouillez pour continuer". Need `real_callback_freshness` distribution to set threshold above NSTimer floor (~20 s).
 - **E1/E2/E3 zone-overshoot gates** — accuracy-gated step entry. Need `accuracy_near_border` distribution.
 
 ### Phase 3 — deferred, conditional
-- **B3 / BG-6** Android `FusedLocationProvider` — only if v2.7.0 field data shows ≥2 Android Doze blackouts ≥5 min on restrictive OEMs.
+- **B3 / BG-6** ✅ **Closed by v2.9.0 Architecture D** (Raw-primary parallel with Fused fallback). No OEM allowlist; fail-soft on no-GMS.
 - **C6b** Android `NativeMediaPlayer` migration — only if R4.1-class cold-load hangs recur after A8/A8b.
 - **P3.5 Plan B/C** native `getCurrentPosition()` during GPS tasks / native plugin save on lifecycle — only if `voice_snapshot` shows iOS position-staleness after Phase 1B.
 
@@ -309,6 +308,7 @@ For the analytical context behind these rounds see `20260520-GIVORS-report.md`. 
 | 17 | 2026-05-27 | JS | A8b SAS step 0 pre-warm |
 | 18 | 2026-05-27 | plugin | bg-geo v2.7.0 (F-G1 auth callback, F-G3 `bg_task_id`, F-G4 `is_keepalive`) |
 | 19 | 2026-05-27 | post-verification | A2 event renamed `audio_engine_reset`; A3 `releaseSession` promisified + awaited before reset; bg-geo v2.8.0 (BG-3 schema fix + P0.5 Fix 1e diagnostic counter + `getAlarmWakeStats`); power-opt v0.3.1 (PO-9 `IsAutoRevokeWhitelisted` / `RequestAutoRevokeWhitelist`); webapp `alarm_wake_stats` + `auto_revoke_whitelisted` wiring |
+| 20 | 2026-05-27 | plugin | bg-geo v2.9.0 — Architecture D: Raw-primary with Fused fallback. New `FusedLocationProviderHelper` (FLP, fail-soft on no-GMS); dedupe state machine in `RawLocationProvider` (`_lastRawFreshMs`, suppress Fused when Raw < 20 s, ignore Fused fixes > 60 s old); `BackgroundLocation` propagates `dispatch_source` (`raw` / `raw-keepalive` / `fused`) + `is_keepalive` to JS; `getLocationDispatchStats` CDV action; geoloc.js recognises `dispatch_source='fused'` as a distinct source. Closes B3 / BG-6 without conditional OEM allowlist. |
 
 ---
 
