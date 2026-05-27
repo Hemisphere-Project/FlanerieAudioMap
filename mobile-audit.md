@@ -1,7 +1,9 @@
 # Mobile Audit Remediation Plan
 
 Original: 2026-04-27  
-Last updated: 2026-05-26 (Round 8.5 / Phase 1B partial — 4 field-data-independent items shipped early: R7.2 default-afterplay map gating, B1 past-step media unload, A6 parcours freshness check, C2 passive media integrity)
+Last updated: 2026-05-27 (Round 10 — `cordova-plugin-audiofocus` v1.6.0: AF-1 notification channel description, AF-2 iOS deactivation observer-ordering fix, AF-3 `START_STICKY` service restart recovery (`AudioFocus.instance.onServiceRestarted()`), AF-4 `ACTION_POWER_SAVE_MODE_CHANGED` broadcast receiver, AF-5 iOS `AVAudioSessionRouteChangeNotification` route-change events, AF-6 `getAudioSessionState` action (Android + iOS), AF-7 notification app icon; plugin v1.6.0 released + FlanerieCordova lockfile updated)  
+Previous: 2026-05-27 (Round 9 — `cordova-plugin-power-optimization` v0.2.0: PO-1 LeTV intent copy-paste fix, PO-2 `GetLastExitReasons()` (API 30+), PO-3 `GetMemoryInfo()`, PO-4 `GetStandbyBucket()` (API 28+), PO-5 proper JSON booleans + JS wrapper update, PO-6 iOS no-op stub (`IsPowerSaveMode` → `isLowPowerModeEnabled`), PO-7 Xiaomi MIUI autostart intent, PO-8 `skipProtectedAppCheck` flag logic; plugin v0.2.0 released + FlanerieCordova lockfile updated, all container checks pass)  
+Previous: 2026-05-26 (Round 8.5 / Phase 1B partial — 4 field-data-independent items shipped early: R7.2 default-afterplay map gating, B1 past-step media unload, A6 parcours freshness check, C2 passive media integrity)
 Previous: 2026-05-26 (Round 8 / Phase 1A — 5 behaviour fixes + 10 diagnostic additions, JS-only, no plugin rebuild: A4 cross-step voice-pos contamination, C1 audio error classification, D1 iOS 26.3.x onboarding warning, A7 end-of-walk session close, A5 persistent device UUID + server registry; B4-diag/F-G2/F-A1/F-Z1/F-Z2/F-Z3/F-N3/F-R1/F-R2/F-K3 diagnostic telemetry)
 Previous: 2026-05-20 (Round 7 — field test 2026-05-20 telemetry batch, FLANERIE_GIVORS, ~39 visitor walks: iOS 26.3.x background-GPS blackout P1.34, iOS step-narration playerror R7.1, recovery-map auto-open regression R7.2, iOS audiofocus-request-fail flood R7.3. New reusable analysis tooling in `telemetry/scripts/` R7.0)  
 Previous: 2026-05-20 (P1.33 — Android GPS cold-start: `RawLocationProvider` also requests `NETWORK_PROVIDER` + delivers last-known-network fix immediately on start)  
@@ -1046,7 +1048,7 @@ Files:
 - `www/app/pages.js` (split `checkbatteryopt` `check()` into a new `runDozeCheck()` helper, prepend `IsBackgroundRestricted` probe)
 - `www/app/app.html` (`#checkbatteryopt-restricted` paragraph element with Samsung-targeted copy)
 
-NOTE: this edit is in-place on `FlanerieCordova/plugins/cordova-plugin-power-optimization/` because no fork exists at `~/Bakery/cordova-plugin-power-optimization/` yet. The audiofocus pattern (`~/Bakery/cordova-plugin-audiofocus/` as the canonical source, mirrored into `FlanerieCordova/plugins/...` at install time) should be replicated for power-optimization in a follow-up cleanup — for now the deployed copy IS the source of truth.
+NOTE: ✅ The fork now exists at `~/Bakery/cordova-plugin-power-optimization/` and is the canonical source of truth (G2, v0.2.0 shipped 2026-05-27). All subsequent plugin edits target the fork, not the in-tree `FlanerieCordova/plugins/` copy.
 
 Regression risk: **LOW** — additive plugin method; JS gate only activates when the underlying API exists AND returns true.
 
@@ -1404,13 +1406,15 @@ Ten observability additions targeting the open questions from the GIVORS field d
 | B4-diag | `real_callback_freshness` (30 s periodic) | Distinguishes real GPS callbacks from 15 s NSTimer/Handler keepalive ticks; exposes `real_callback_age_ms` to narrow the P1.34 iOS and P1.31 Android blackout windows |
 | F-G2 | `app_visibility` (deduped) | Background/foreground transitions on iOS (`document.pause/resume/visibilitychange`) and Android (`bgGeo on('background'/'foreground')`); closes the iOS blind spot noted in P3.5b |
 | F-A1 | `audio_play_started.load_duration_ms` | Time from `play()` call to first `play` event — confirms whether cold-load delay (R4.1) is load latency or a stuck player |
+| F-A2 | `audio_session_state` (60 s periodic, JS wiring pending) | `AudioFocus.getAudioSessionState()` — native snapshot: volume, route/port, category, `sessionActive`. Confirms iOS AVAudioSession is not silently degraded mid-walk. Enabled by plugin v1.6.0 (AF-6). |
+| F-A3 | `audio_route_changed` (event-driven, JS wiring pending) | `onFocusChange` JSON `AUDIO_ROUTE_CHANGED` — instant BT disconnect / headphone unplug / route override event with `reason`, `previous_port`, `current_port`. Enabled by plugin v1.6.0 (AF-5). |
 | F-Z1 | `accuracy_near_border` (throttled) | GPS accuracy when the walker is within 20 m of a step boundary — drives Phase 1B E1/E2/E3 accuracy gate calibration |
 | F-Z2 | `step_resume_current` enriched | Adds `accuracy`, `consecutive_inside_samples`, `time_since_first_inside_ms`, `real_callback_age_ms` — quantifies false re-arm triggers |
 | F-Z3 | `step_implicit_done` | Fires when an undone step is silently stopped by the "stop all other steps" loop — surfaces missed `step_done` emissions |
 | F-N3 | `_jsReceivedAt` stamp + `step_audio_trigger.real_callback_age_ms` | JS-side timestamp on every position callback; `step_audio_trigger` gets `real_callback_age_ms` to track keepalive-vs-real at trigger time |
 | F-R1 | `session_start.inter_session_idle_ms` | Time since prior session ended (from localStorage) — distinguishes cold-start from rapid-relaunch patterns |
 | F-R2 | `rearm_pre_state` snapshot | Parcours state dump on rearm button tap — captures whether the prior session ended cleanly or was abandoned mid-walk |
-| F-K3 | `bg_restrictions_recheck` (5 min periodic, Android) | Re-checks `IsBackgroundRestricted()` / `IsPowerSaveMode()` mid-walk — detects settings changes that happen after onboarding (e.g. OEM auto-sleep activating) |
+| F-K3 | `bg_restrictions_recheck` (5 min periodic, Android) + `POWER_SAVE_CHANGED` native broadcast (AF-4, JS wiring pending) | 5-min poll re-checks `IsBackgroundRestricted()` / `IsPowerSaveMode()` mid-walk. Plugin v1.6.0 (AF-4) also fires `POWER_SAVE_CHANGED` instantly on any power-save toggle via `onFocusChange` JSON event. |
 
 Files: `www/app/assets/geoloc.js` (B4-diag, F-G2, F-N3), `www/app/assets/player.js` (F-A1, via C1 above), `www/app/assets/parcours.js` (F-Z1), `www/app/assets/spot.js` (F-Z2, F-Z3, F-N3 stamp), `www/app/assets/telemetry.js` (F-R1), `www/app/pages.js` (F-R2, F-K3)
 
@@ -1469,9 +1473,23 @@ A minimal reproducible rebuild + smoke checklist now lives in [FlanerieCordova/R
 - `cordova-plugin-media` — install variable `KEEP_AVAUDIOSESSION_ALWAYS_ACTIVE` changed `NO` → `YES` (2026-05-13, P1.11b). Variable is read at plugin install time only; existing builds keep the old value. Required step on next build: `cordova plugin remove cordova-plugin-media && cordova plugin add cordova-plugin-media@7.0.0` OR `cordova platform remove ios && cordova platform add ios`.
 - After build: verify `platforms/ios/App/config.xml` contains `<preference name="KeepAVAudioSessionAlwaysActive" value="YES" />` (lowercased key `keepavaudiosessionalwaysactive` is what `CDVSound.m:38` actually reads).
 
-#### C5 Deferred plugin fork — power optimization [PARTIAL — `IsBackgroundRestricted` shipped 2026-05-19 as R5.2; rest open]
+#### C5 Deferred plugin fork — power optimization [MOSTLY DONE — v0.2.0 shipped 2026-05-27; only `IsAutoRevokeWhitelisted` open]
 
-**2026-05-27 code cross-check:** the local fork now exists at `~/Bakery/cordova-plugin-power-optimization/`, the container dependency points at `github:Maigre/cordova-plugin-power-optimization`, and the previously-listed `RequestOptimizationsMenu` fix plus OEM intent-table expansion are already in code. The remaining backlog here is the additive plugin work: `GetStandbyBucket()`, `IsAutoRevokeWhitelisted()`, `RequestAutoRevokeWhitelist()`, and any decision to repoint local development to the workspace fork instead of the GitHub URL.
+**2026-05-27 v0.2.0 shipped:** all meaningful backlog items are now in the fork and released.
+
+| Item | Status |
+|---|---|
+| PO-1 LeTV `setComponent` copy-paste bug | ✅ fixed |
+| PO-2 `GetLastExitReasons()` (API 30+) | ✅ shipped |
+| PO-3 `GetMemoryInfo()` (ActivityManager + Debug heap) | ✅ shipped |
+| PO-4 `GetStandbyBucket()` (API 28+) | ✅ shipped |
+| PO-5 proper JSON booleans + JS `execute_boolean` updated | ✅ shipped |
+| PO-6 iOS no-op stub (`IsPowerSaveMode` → `isLowPowerModeEnabled`) | ✅ shipped |
+| PO-7 Xiaomi MIUI autostart intent (`com.miui.securitycenter/AutoStartManagementActivity`) | ✅ shipped |
+| PO-8 `skipProtectedAppCheck` only set when OEM intent was launched | ✅ fixed |
+| `IsAutoRevokeWhitelisted()` / `RequestAutoRevokeWhitelist()` | ⏳ open (long-tail, not show-blocking) |
+
+Fork at `github:Maigre/cordova-plugin-power-optimization@v0.2.0`. FlanerieCordova lockfile bumped. Container validation passed.
 
 
 
@@ -1628,6 +1646,41 @@ Regression risk: **LOW** — C7.1 is a pure try/catch wrap.
 ---
 
 ## Recommended Execution Sequence
+
+### Round 10 — `cordova-plugin-audiofocus` v1.6.0 (2026-05-27) — ✅ code complete
+
+Native plugin diagnostic + robustness batch. FlanerieCordova lockfile updated by `sync-workspace-plugins.mjs --apply`. Requires a Cordova rebuild for the changes to land in the APK/IPA.
+
+- **AF-1** Notification channel `setDescription("Service de lecture audio pour Flanerie")` — surfaces a human-readable description in Android notification settings.
+- **AF-2** iOS `deactivateSession:` ordering fix — `setActive:NO` now runs **before** `removeObserver:self` so re-entrant interruption notifications are not silently swallowed on some iOS versions.
+- **AF-3** `START_STICKY` restart recovery — `static AudioFocus instance` set in `pluginInitialize()`; `AudioFocusService.onStartCommand(null)` calls `instance.onServiceRestarted()` which restores `keepaliveActive`, re-requests audio focus, and fires `AUDIOFOCUS_SERVICE_RESTARTED` JSON event to JS. **[TEST-FIRST]** — fires only when the service is killed while the Cordova process stays alive (Android dev-options "Background process limit").
+- **AF-4** `ACTION_POWER_SAVE_MODE_CHANGED` `BroadcastReceiver` registered/unregistered with keepalive lifecycle — fires `POWER_SAVE_CHANGED` JSON event via `onFocusChange` callback; supplements F-K3 5-min poll with an instant native event. **JS wiring pending.**
+- **AF-5** iOS `AVAudioSessionRouteChangeNotification` observer added in `registerInterruptionObserver` — `handleRouteChange:` fires `AUDIO_ROUTE_CHANGED` JSON event with `reason`, `previous_port`, `current_port`; closes F-A3 diagnostic blind spot. **JS wiring pending.**
+- **AF-6** `getAudioSessionState` action on Android (streamVolume, mode, ringerMode, keepaliveActive, hasAudioFocus) and iOS (outputVolume, currentPort, currentPortName, category, secondaryAudioShouldBeSilenced, sessionActive) + `AudioFocus.getAudioSessionState()` Promise export — enables F-A2 periodic native session snapshot from JS. **JS wiring pending.**
+- **AF-7** Notification `smallIcon` from `getApplicationInfo().icon` (fallback `ic_media_play`) — shows the Flanerie launcher icon instead of the Android generic media icon.
+
+Files: `cordova-plugin-audiofocus/src/android/AudioFocus.java`, `.../AudioFocusService.java`, `.../ios/AudioFocus.m`, `.../www/AudioFocus.js`, `plugin.xml`, `package.json` (v1.5.1 → v1.6.0), `FlanerieCordova/package-lock.json`
+
+**JS side:** `onFocusChange` now carries both plain strings (`"AUDIOFOCUS_GAIN"`) and JSON strings (`{"event":"AUDIO_ROUTE_CHANGED",...}`). Detect structured events with `event[0] === '{'`. Existing string-comparison dispatch code is unaffected.
+
+---
+
+### Round 9 — `cordova-plugin-power-optimization` v0.2.0 (2026-05-27) — ✅ code complete
+
+Native plugin improvement batch. FlanerieCordova lockfile updated via `sync-workspace-plugins.mjs --apply`.
+
+- **PO-1** LeTV intent corrected (copy-paste from OnePlus → `com.letv.android.batteryManageMainActivity`).
+- **PO-2** `GetLastExitReasons()` (API 30+) — previous death cause from `ApplicationExitInfo`.
+- **PO-3** `GetMemoryInfo()` — `totalMem`, `availMem`, `threshold`, `lowMemory`.
+- **PO-4** `GetStandbyBucket()` (API 28+) — UsageStatsManager standby bucket.
+- **PO-5** Proper JSON boolean types for all boolean return values + JS wrapper update.
+- **PO-6** iOS no-op stub: `IsPowerSaveMode` maps to `NSProcessInfo.isLowPowerModeEnabled`.
+- **PO-7** Xiaomi MIUI autostart intent added to OEM table.
+- **PO-8** `skipProtectedAppCheck` flag: skips the protected-apps flow without suppressing power-opt detection.
+
+Files: `cordova-plugin-power-optimization/src/android/PowerOptimization.java`, `.../www/PowerOptimization.js`, `plugin.xml`, `package.json` (v0.1.1 → v0.2.0), `FlanerieCordova/package-lock.json`
+
+---
 
 ### Round 8.5 / Phase 1B partial (2026-05-26) — field-data-independent items ✅ code complete
 
@@ -1798,8 +1851,9 @@ Requires Cordova rebuild and Play Store upgrade. Coordinate with show schedule (
 
 - **A3 + remaining A1/A2 cleanup** Walk-session lifecycle: broader end-state teardown, re-arm confirmation flow, and any remaining JS hard-reset work after the now-shipped G1 slice.
 - **G1 follow-up only if needed**: iOS `audiofocus_request_fail` suppression/backoff if the awaited startup reset does not materially reduce R7.3 in field telemetry.
-- **G2** Power-optimization plugin: promote `~/Bakery/cordova-plugin-power-optimization/` fork (currently only in-tree); add `GetStandbyBucket()` / `IsAutoRevokeWhitelisted()` / `RequestAutoRevokeWhitelist()` Java methods; extend OEM intent table (full C5 backlog).
+- **G2** ✅ DONE (2026-05-27, v0.2.0): `GetLastExitReasons()`, `GetMemoryInfo()`, `GetStandbyBucket()`, iOS no-op stub, Xiaomi autostart intent, LeTV fix, boolean type fix, `skipProtectedAppCheck` logic. Fork released + FlanerieCordova lockfile updated. Remaining: `IsAutoRevokeWhitelisted()` / `RequestAutoRevokeWhitelist()` (hibernation watch, long-tail, not show-blocking).
 - **G3** BG-geo plugin: F-G1 (native `locationManager:didChangeAuthorizationStatus:` callback), F-G3 (background-task ID in keepalive tick), F-G4 (NSTimer vs CLLocationManager callback source tag).
+- **G4** ✅ DONE (2026-05-27, v1.6.0): audiofocus diagnostic + robustness batch — AF-1 channel description, AF-2 iOS deactivation order, AF-3 `START_STICKY` recovery, AF-4 power-save receiver, AF-5 iOS route-change events, AF-6 `getAudioSessionState` action, AF-7 app icon. Fork released + FlanerieCordova lockfile updated. `onFocusChange` callback now carries structured JSON events (`event[0] === '{'`) in addition to plain-string focus events. AF-3 is TEST-FIRST (requires killing the service while the process stays alive).
 - **P1.33** `RawLocationProvider`: add `NETWORK_PROVIDER` request + last-known-network fix delivery on `onStart()` for Android GPS cold-start warmup.
 
 ### Phase 3 (deep native + dedicated field session)
