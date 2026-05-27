@@ -974,7 +974,10 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
                 lat: location.latitude,
                 lng: location.longitude,
             }, function() {
-                positionCallback(position, {source: 'bg_location', visibility: APP_VISIBILITY});
+                // F-G4: native keepalive ticks set is_keepalive=true so JS correctly skips
+                //        updating lastRealCallbackTime and the B4 forceReacquire watchdog fires.
+                var src = location.is_keepalive ? 'keepalive' : 'bg_location';
+                positionCallback(position, {source: src, visibility: APP_VISIBILITY});
             });
         });
     });
@@ -1001,7 +1004,8 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
                 lat: location.latitude,
                 lng: location.longitude,
             }, function() {
-                positionCallback(position, {source: 'bg_stationary', visibility: APP_VISIBILITY});
+                var src = location.is_keepalive ? 'keepalive' : 'bg_stationary';
+                positionCallback(position, {source: src, visibility: APP_VISIBILITY});
             });
         });
     });
