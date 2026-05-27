@@ -1,7 +1,8 @@
 # Mobile Audit Remediation Plan
 
 Original: 2026-04-27  
-Last updated: 2026-05-27 (Round 11 — JS wiring for AF v1.6.0 + PO v0.2.0: F-A2 `audio_session_state` 60 s interval, F-A3 `audio_route_changed` dispatch, AF-4 `POWER_SAVE_CHANGED` dispatch, AF-3 `AUDIOFOCUS_SERVICE_RESTARTED` dispatch in `onFocusChange`; `session_diag` extended with PO v0.2.0 method-presence flags; `power_state_at_parcours` extended with `GetStandbyBucket` + `GetLastExitReasons`; `bg_restrictions_recheck` extended with `GetMemoryInfo` + `GetStandbyBucket`; JS-only, no plugin rebuild)  
+Last updated: 2026-05-27 (Round 12 — `cordova-background-geolocation-plugin` v2.5.0: BG-1 non-issue (no NETWORK_PROVIDER registration), BG-3 iOS `getCLState` diagnostic action + JS wrapper, BG-4 iOS `getPowerState` action + `batteryMonitoringEnabled` in init + JS wrapper, BG-7 keepalive flag re-assertion in `_keepaliveTick:`; plugin v2.5.0 released + FlanerieCordova lockfile updated)  
+Previous: 2026-05-27 (Round 11 — JS wiring for AF v1.6.0 + PO v0.2.0: F-A2 `audio_session_state` 60 s interval, F-A3 `audio_route_changed` dispatch, AF-4 `POWER_SAVE_CHANGED` dispatch, AF-3 `AUDIOFOCUS_SERVICE_RESTARTED` dispatch in `onFocusChange`; `session_diag` extended with PO v0.2.0 method-presence flags; `power_state_at_parcours` extended with `GetStandbyBucket` + `GetLastExitReasons`; `bg_restrictions_recheck` extended with `GetMemoryInfo` + `GetStandbyBucket`; JS-only, no plugin rebuild)  
 Previous: 2026-05-27 (Round 10 — `cordova-plugin-audiofocus` v1.6.0: AF-1 notification channel description, AF-2 iOS deactivation observer-ordering fix, AF-3 `START_STICKY` service restart recovery (`AudioFocus.instance.onServiceRestarted()`), AF-4 `ACTION_POWER_SAVE_MODE_CHANGED` broadcast receiver, AF-5 iOS `AVAudioSessionRouteChangeNotification` route-change events, AF-6 `getAudioSessionState` action (Android + iOS), AF-7 notification app icon; plugin v1.6.0 released + FlanerieCordova lockfile updated)  
 Previous: 2026-05-27 (Round 9 — `cordova-plugin-power-optimization` v0.2.0: PO-1 LeTV intent copy-paste fix, PO-2 `GetLastExitReasons()` (API 30+), PO-3 `GetMemoryInfo()`, PO-4 `GetStandbyBucket()` (API 28+), PO-5 proper JSON booleans + JS wrapper update, PO-6 iOS no-op stub (`IsPowerSaveMode` → `isLowPowerModeEnabled`), PO-7 Xiaomi MIUI autostart intent, PO-8 `skipProtectedAppCheck` flag logic; plugin v0.2.0 released + FlanerieCordova lockfile updated, all container checks pass)  
 Previous: 2026-05-26 (Round 8.5 / Phase 1B partial — 4 field-data-independent items shipped early: R7.2 default-afterplay map gating, B1 past-step media unload, A6 parcours freshness check, C2 passive media integrity)
@@ -15,7 +16,7 @@ Previous: 2026-05-18 (Round 3 — field test 2026-05-15 on FRAPPAZ_V10-modif_mon
 Previous: 2026-05-14 (Round 2 codebase review: resume `update()` gate P1.23, `init()` no-op listener removal P1.24, LOST↔afterplay/step-progression unification P1.25, GPS stop on walk end P1.26, duplicate `step_done` guard P1.27, page-exit cleanup gaps P1.28, recovery map on default-afterplay P1.29, defensive hardening cluster P2.12, telemetry session key P2.13, resume gate fast-path P2.14, structural refactors P3.6, server resilience C7)  
 Previous: 2026-05-13 (LOST state machine P1.18, voice/afterplay fallback P1.19, RESUME cue P1.20, AUDIOFOCUS auto-retry P1.21, devmode tools page P1.22, paused() crash fix; Architecture Summary + telemetry list aligned with current code)  
 Scope: Cordova launcher + downloaded local webapp, GPS-triggered audio walk, locked-screen pocket usage, published parcours FLANERIE_ELYSEE  
-Plugin: [`cordova-background-geolocation-plugin`](https://github.com/Maigre/cordova-background-geolocation-plugin) v2.4.0 (Flanerie fork of HaylLtd v2.3.3)
+Plugin: [`cordova-background-geolocation-plugin`](https://github.com/Maigre/cordova-background-geolocation-plugin) v2.5.0 (Flanerie fork of HaylLtd v2.3.3)
 
 ## Field Safety Legend
 
@@ -1663,6 +1664,20 @@ Native plugin diagnostic + robustness batch. FlanerieCordova lockfile updated by
 Files: `cordova-plugin-audiofocus/src/android/AudioFocus.java`, `.../AudioFocusService.java`, `.../ios/AudioFocus.m`, `.../www/AudioFocus.js`, `plugin.xml`, `package.json` (v1.5.1 → v1.6.0), `FlanerieCordova/package-lock.json`
 
 **JS side:** `onFocusChange` now carries both plain strings (`"AUDIOFOCUS_GAIN"`) and JSON strings (`{"event":"AUDIO_ROUTE_CHANGED",...}`). Detect structured events with `event[0] === '{'`. Existing string-comparison dispatch code is unaffected.
+
+---
+
+### Round 12 — `cordova-background-geolocation-plugin` v2.5.0 (2026-05-27) — ✅ code complete
+
+Native plugin diagnostic and defensive batch. FlanerieCordova lockfile updated via `sync-workspace-plugins.mjs --apply`.
+
+- **BG-1** NETWORK_PROVIDER listener audit — confirmed non-issue. P1.33 registers a single `requestLocationUpdates(provider, ..., this)` call; `removeUpdates(this)` in `onStop` covers the single listener. No NETWORK_PROVIDER separate registration exists. No code change needed.
+- **BG-3** `getCLState` action (iOS — `CDVBackgroundGeolocation.m` + `BackgroundGeolocation.js`): new diagnostic action returning a `CLLocationManager` state snapshot — `locationTimestampAge` (seconds since last location fix), `allowsBackgroundLocationUpdates`, `pausesLocationUpdatesAutomatically`, `showsBackgroundLocationIndicator`, `authorizationStatus`, `locationServicesEnabled`. Designed to be called from the F-G1 30 s diagnostic timer in JS once wired.
+- **BG-4** `getPowerState` action (iOS — `CDVBackgroundGeolocation.m` + `BackgroundGeolocation.js`): new action returning `{lowPowerMode, batteryLevel, batteryState}` via `NSProcessInfo.isLowPowerModeEnabled` + `UIDevice`. `batteryMonitoringEnabled = YES` set once in `pluginInitialize` so readings are always valid.
+- **BG-7** Keepalive flag re-assertion (iOS — `MAURRawLocationProvider.m`): in `_keepaliveTick:`, after each keepalive delivery, re-asserts `allowsBackgroundLocationUpdates = YES` and `pausesLocationUpdatesAutomatically = NO` on the inner `CLLocationManager`. Defends against iOS silently flipping these flags under memory pressure (D4).
+- **BG-8** Dedicated heartbeat event — deferred. The keepalive already emits a `location` event; a separate `heartbeat` event requires a new persistent callback registration mechanism not worth the v2.5.0 scope.
+
+Files: `ios/CDVBackgroundGeolocation/CDVBackgroundGeolocation.m` (BG-3, BG-4, batteryMonitoringEnabled), `ios/common/BackgroundGeolocation/MAURRawLocationProvider.m` (BG-7), `www/BackgroundGeolocation.js` (BG-3, BG-4 JS wrappers), `plugin.xml` + `package.json` (v2.4.4 → v2.5.0)
 
 ---
 
