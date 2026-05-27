@@ -1455,17 +1455,17 @@ Android SDK 36 + Build Tools 36.0.0 must be installed via SDK Manager first.
 
 `app_run()` in `apputils.js` replaces `.js` globally in `app.html`, which would corrupt `.json` references if any appear. Currently safe — no JSON script tags. Fix if `app.html` structure changes.
 
-#### C4 Container build checklist [open]
+#### C4 Container build checklist ✅ DONE (2026-05-27)
 
-No reproducible build checklist or smoke-test script. Add a minimal one (Android debug build + iOS prepare in Xcode) before the next platform upgrade.
+A minimal reproducible rebuild + smoke checklist now lives in [FlanerieCordova/README.md](../FlanerieCordova/README.md). It covers Android debug build, iOS prepare / Xcode handoff, required plugin reinstalls, and a short runtime smoke pass for launcher / offline cache / locked-screen walk behaviour.
 
-**Known reinstall requirements** to bake into the checklist when written:
+**Reinstall requirements now captured in the checklist:**
 - `cordova-plugin-media` — install variable `KEEP_AVAUDIOSESSION_ALWAYS_ACTIVE` changed `NO` → `YES` (2026-05-13, P1.11b). Variable is read at plugin install time only; existing builds keep the old value. Required step on next build: `cordova plugin remove cordova-plugin-media && cordova plugin add cordova-plugin-media@7.0.0` OR `cordova platform remove ios && cordova platform add ios`.
 - After build: verify `platforms/ios/App/config.xml` contains `<preference name="KeepAVAudioSessionAlwaysActive" value="YES" />` (lowercased key `keepavaudiosessionalwaysactive` is what `CDVSound.m:38` actually reads).
 
 #### C5 Deferred plugin fork — power optimization [PARTIAL — `IsBackgroundRestricted` shipped 2026-05-19 as R5.2; rest open]
 
-**2026-05-19 update:** the `IsBackgroundRestricted()` sub-item — the single biggest missing signal called out below — shipped under [R5.2](#r52-power-optimization-plugin-isbackgroundrestricted-detection--done-2026-05-19-safe-today). The plugin method, JS wrapper, and `checkbatteryopt` hard-block gate are all in place. The remaining items below (standby bucket, hibernation whitelist, OEM intent table expansion, `RequestOptimizationsMenu` conditional fix) stay open for a follow-up session. The fork directory at `~/Bakery/cordova-plugin-power-optimization/` still doesn't exist — R5.2 was applied in-place on the deployed copy; promote to a proper fork as part of the next round.
+**2026-05-27 code cross-check:** the local fork now exists at `~/Bakery/cordova-plugin-power-optimization/`, the container dependency points at `github:Maigre/cordova-plugin-power-optimization`, and the previously-listed `RequestOptimizationsMenu` fix plus OEM intent-table expansion are already in code. The remaining backlog here is the additive plugin work: `GetStandbyBucket()`, `IsAutoRevokeWhitelisted()`, `RequestAutoRevokeWhitelist()`, and any decision to repoint local development to the workspace fork instead of the GitHub URL.
 
 
 
@@ -1475,18 +1475,16 @@ No reproducible build checklist or smoke-test script. Add a minimal one (Android
 
 The current plugin handles only Doze (`ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`) and a stale OEM intent list. Everything else that actually kills a foreground service on modern Android is invisible to it. For a 45-min locked-pocket walk, the biggest unhandled signals are stock-Android background restriction and OEM-specific sleep features (Samsung "Apps en veille profonde", Xiaomi autostart, etc.).
 
-**Java methods to add:**
+**Java methods still worth adding:**
 
 | Method | API | Purpose |
 |---|---|---|
-| `IsBackgroundRestricted()` | 28+ | `ActivityManager.isBackgroundRestricted()` — single biggest missing signal; user toggled "Restrict background activity" → FG service killed at lock within seconds |
-| `IsPowerSaveMode()` | universal | `PowerManager.isPowerSaveMode()` — phone-wide battery saver; soft warning, user may need it |
 | `GetStandbyBucket()` | 28+ | `UsageStatsManager.getAppStandbyBucket()` — `RESTRICTED`/`RARE` buckets throttle aggressively |
 | `IsAutoRevokeWhitelisted()` | 30+ | `PackageManager.isAutoRevokeWhitelisted()` — hibernation watch (long-tail) |
 | `RequestAutoRevokeWhitelist()` | 30+ | `Intent.ACTION_AUTO_REVOKE_PERMISSIONS` |
-| `GetManufacturer()` | universal | `Build.MANUFACTURER` + `Build.MODEL` — already available via `cordova-plugin-device` but useful for plugin self-tests |
-| `OpenAppDetailsSettings()` | universal | `ACTION_APPLICATION_DETAILS_SETTINGS` — universal fallback when OEM intents fail |
-| `RequestOptimizationsMenu()` **FIX** | 23+ | Existing method's `if (pm.isIgnoringBatteryOptimizations(...))` conditional is inverted — opens settings page only when already whitelisted. Either remove the guard or invert it. JS fix already in P1.12 (button now bypasses to `showAppSettings()`), so this is cleanup. |
+| `OpenAppDetailsSettings()` | universal | optional plugin-side fallback if we want the power-opt plugin to own the full Settings path instead of relying on bg-geo `showAppSettings()` |
+
+Already shipped in code: `IsBackgroundRestricted()`, `IsPowerSaveMode()`, `RequestOptimizationsMenu()` fix, and the broader OEM intent table expansion.
 
 **OEM intent table expansion (`Constants.java`):**
 
@@ -1807,7 +1805,7 @@ Requires Cordova rebuild and Play Store upgrade. Coordinate with show schedule (
 
 ### Next implementation session (cannot republish this session)
 
-- **Launcher-level telemetry beacon** (extracted from P1.32, option C) — `navigator.sendBeacon` from `launcher.js` before `app_run()` with `cordova.platformId`, `device.version`, `device.model`, last error. Pair with P1.32 option A (re-enable the commented `.catch`). SAFE-TODAY, half a day. Standalone value regardless of P1.32 status.
+- **Launcher-level telemetry beacon** ✅ DONE (2026-05-27) — `navigator.sendBeacon` now fires from the Cordova shell before `app_run()` and on launcher/update failures, posting a small payload to `/launcher-beacon` so pre-webapp launch failures are visible server-side.
 - **P0.5 Fix 1e** Android AlarmManager JS wakeup (only if WebView-suspended-despite-FG-service shows up in telemetry)
 - **P3.5 Plan C** native plugin save on `applicationDidEnterBackground` / `onPause` (only if Plan B insufficient or iOS shows full localStorage write-loss on kill)
 

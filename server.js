@@ -268,6 +268,79 @@ app.post('/errorhandler', express.urlencoded({ extended: true }), (req, res) => 
   res.status(200).send('Error logged');
 });
 
+const LAUNCHER_BEACON_DIR = path.join(__dirname, 'telemetry', 'launcher');
+
+function parseLauncherBeaconBody(body) {
+  if (!body) return null;
+  if (typeof body === 'object') return body;
+  if (typeof body !== 'string') return null;
+  try {
+    return JSON.parse(body);
+  } catch (e) {
+    return null;
+  }
+}
+
+function listLauncherBeacons(limit = 100) {
+  if (!fs.existsSync(LAUNCHER_BEACON_DIR)) return [];
+
+  const files = fs.readdirSync(LAUNCHER_BEACON_DIR)
+    .filter(name => name.endsWith('.ndjson'))
+    .sort()
+    .reverse();
+
+  const records = [];
+  for (const file of files) {
+    const fullPath = path.join(LAUNCHER_BEACON_DIR, file);
+    const lines = fs.readFileSync(fullPath, 'utf8').split('\n').filter(Boolean);
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+      try {
+        const parsed = JSON.parse(lines[i]);
+        if (parsed && typeof parsed === 'object') records.push(parsed);
+      } catch (e) {
+        // Skip malformed NDJSON lines.
+      }
+      if (records.length >= limit) return records;
+    }
+  }
+
+  return records;
+}
+
+app.options('/launcher-beacon', (req, res) => {
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.set('Access-Control-Allow-Headers', 'Content-Type');
+  res.sendStatus(204);
+});
+
+app.post('/launcher-beacon', express.text({ type: '*/*', limit: '32kb' }), (req, res) => {
+  res.set('Access-Control-Allow-Origin', '*');
+  const payload = parseLauncherBeaconBody(req.body);
+  if (!payload || typeof payload !== 'object') {
+    return res.status(400).json({ error: 'invalid beacon payload' });
+  }
+
+  const now = new Date();
+  const outFile = path.join(LAUNCHER_BEACON_DIR, `${now.toISOString().split('T')[0]}.ndjson`);
+  const record = Object.assign({ received_at: now.toISOString() }, payload);
+
+  try {
+    if (!fs.existsSync(LAUNCHER_BEACON_DIR)) fs.mkdirSync(LAUNCHER_BEACON_DIR, { recursive: true });
+    fs.appendFileSync(outFile, JSON.stringify(record) + '\n');
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[launcher-beacon] write failed:', e.message);
+    res.status(500).json({ error: 'write failed' });
+  }
+});
+
+app.get('/launcher-beacons', requireAdmin, (req, res) => {
+  const rawLimit = Number(req.query && req.query.limit);
+  const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(500, Math.round(rawLimit))) : 100;
+  res.json({ beacons: listLauncherBeacons(limit), count: limit });
+});
+
 
 // Telemetry: receive events from app (CORS for Cordova app on file://)
 app.options('/telemetry-push', (req, res) => {

@@ -5,7 +5,7 @@
 **Field reports cross-referenced:** Mélanie (FP3 08:57), John (~16h loan phone), Justine (operator tent), unnamed teacher (iPhone 09h–09h30)  
 **Expected visitors:** ~45–50 (15–20 on loaned phones)  
 **Builds:** apk 12 (iOS) / apk 13 (Android) — apk just tracks platform, not a within-platform skew. webapp `fdf504c8` + `2f77776e` are split **roughly evenly per device** (~29 / ~35 visitor sessions), not 30/70; the version is per-device PWA cache, not a timed rollout. Which build is newer is **not confirmed** — see §11.  
-**Generated:** 2026-05-22 · **Revised:** 2026-05-22 (telemetry cross-check)
+**Generated:** 2026-05-22 · **Revised:** 2026-05-27 (telemetry + code cross-check)
 
 ---
 
@@ -842,19 +842,23 @@ Files: [cordova-background-geolocation-plugin/android/...](../cordova-background
 
 ### 12.8. Sequencing & risk
 
-**Phase 1 — JS-only, ship for next field test (1–2 days, NO plugin rebuild)**
-A3, A4, A5, A6 (server piece), A7; B1, B4; C1, C2, C3, C4, C5; D1, D6; E1, E2, E3; F2–F5 (analyze.mjs).  
-**Plus all JS-only diagnostic telemetry from §12.6b**: F-K3, F-G2, F-A1, F-A4, F-Z1, F-Z2, F-Z3, F-R1, F-R2, F-N3 (≈1 extra day). Ships before any behaviour change so the next field run produces the data needed to validate / calibrate phase-1 behaviour changes.  
-Risk: most are low-blast-radius behaviour changes. B1 (aggressive unload) and E2/E3 (sustain gates) are the highest-risk items and should be exercised on the `tools` devmode page before shipping.
+**Status update — code cross-check 2026-05-27**
 
-**Phase 2 — Plugin rebuild + Play Store push (3–5 days)**
-A1, A2 (plugin-action half), G1 (audiofocus reset/release), G2 (power-opt fork promotion + GetStandbyBucket).  
-**Plus plugin-extension diagnostic telemetry from §12.6b**: F-K1, F-K2 (power-opt), F-G1, F-G3, F-G4 (bg-geo), F-A2, F-A3 (audiofocus), F-N1 (file quota). All small native additions bundled with the same plugin rebuilds.  
-Validation matrix: full 45-min Samsung A15 walk; full 45-min iPhone walk; loan-phone re-arm cycle ×5 (the Justine scenario).
+- **Phase 1A is shipped, not pending.** The A4 / A5 / A7 / C1 / D1 items from §12.10 are implemented in the current codebase, along with the Phase 1A diagnostic telemetry batch.
+- **Phase 1B partial is also shipped.** R7.2 / B1 / A6 / C2 from §12.11 are implemented in the current codebase.
+- **The remaining pre-field-test behaviour work is the calibrated subset only:** B4 watchdog and E1 / E2 / E3 zone-overshoot gates. Both stay blocked on new field telemetry.
+- **Phase 2 / Phase 3 remain unchanged in principle:** plugin rebuild work (G1 / G2 / G3, A1 / A2 plugin half) and deep native investigation (D3–D5, B2 / B3, conditional Android media path) still belong after the next field pass.
 
-**Phase 3 — Deep native + Android resilience (1 week, dedicated field test)**
-B2, B3, G3 (Android AlarmManager + Fused); D3, D4, D5, G3 (iOS reacquire/flag/SLC); C6 conditional on whether wjfo recurs after C2/C4/B1.  
-Validation requires dedicated outings: a Samsung A15-class device under deliberate memory pressure; a side-by-side iOS 26.3.1 + 26.4.x walk.
+**Immediate non-field-test work still worth doing**
+
+- keep this report and `mobile-audit.md` aligned with the code status
+- add launcher-level telemetry from the Cordova shell before `app_run()` so failed launches are visible even when the hosted app never boots
+- write the missing container rebuild / smoke checklist before the next plugin rebuild
+
+**Risk**
+
+- Do not ship B4 or E1 / E2 / E3 constants blind; both now depend on the Phase 1A telemetry already added to the build.
+- Do not reopen Phase 1 JS behaviour work that is already merged unless field validation falsifies it.
 
 ### 12.9. Open decisions / unknowns
 
@@ -863,20 +867,9 @@ Validation requires dedicated outings: a Samsung A15-class device under delibera
 3. **C4 retry path** assumes a single playerror is recoverable by engine reset. If field telemetry from C1 shows playerrors are dominated by `decode_failed` (i.e. truly broken file), C4 is the wrong fix and we should pivot to a per-file fallback chain (download a backup variant or skip the file with a spoken "désolé, fichier indisponible" placeholder). Decide after one field test with C1 telemetry. **Status: blocked on phase 1A C1 telemetry → next-week field test.**
 4. **Loan-phone identity (A5)**: do we want the device UUID echoed to the server during onboarding (so operators can see "this phone is FP-A12-04" on a dashboard), or kept telemetry-only? Affects whether server.js needs a `/devices` registration endpoint. **Status (2026-05-23): RESOLVED — add `/devices` endpoint. A5 scope grows: server.js gets a `POST /devices` that takes `{uuid, last_seen, manufacturer, model, friendly_name?}` and an operator-only `GET /devices` dashboard JSON.**
 
-### 12.10. Phase 1A — recommended next batch (drafted 2026-05-23)
+### 12.10. Phase 1A — shipped 2026-05-26 (historical plan, code-verified 2026-05-27)
 
-Calendar context (decided 2026-05-23):
-- Next field test: **next week** (~2026-05-30, ±2 days).
-- Next show: **~4 weeks out** (~2026-06-20).
-- Target: most GIVORS issues fixed before the show.
-
-Backwards-planned schedule:
-- **This week**: Phase 1A — pure JS-only batch, ships before next field test. Diagnostic telemetry + trivial fixes that don't need field-data calibration.
-- **Next week**: field test on the Phase 1A build. Telemetry from F-Z*, F-A1, F-K3, F-R*, F-G2 calibrates Phase 1B.
-- **Week 3**: Phase 1B (calibrated behaviour changes) + Phase 2 (plugin rebuild + Play Store submission).
-- **Week 4**: Phase 3 (native iOS reacquire + Android resilience) + final field validation before show.
-
-iOS test-device note (2026-05-23): no 26.3.x device confirmed yet, user will source one. Workstream D native code (D3/D4/D5) is still planned to ship — implemented against Apple's docs; validated on whatever iOS device is available + on a 26.3.x device when one surfaces. The B4 watchdog is platform-independent and validates the JS-side hypothesis on any iOS device.
+This section is kept as the original execution plan for the first GIVORS follow-up batch. A code cross-check on 2026-05-27 confirms that the Phase 1A items below are now implemented in the codebase: **A4, A5, A7, C1, D1**, plus the Phase 1A diagnostic telemetry batch described under R8.0 / §12.6b. Read the tables below as shipped scope and validation targets, not as pending implementation work.
 
 #### Phase 1A scope (this week, ~2 days)
 
@@ -954,7 +947,7 @@ After confirming Phase 1A devices and items, the four Phase 1B items that do **n
 - **B4 watchdog** — threshold calibration from `real_callback_freshness`.
 - **E1/E2/E3 zone-overshoot gates** — accuracy threshold from `accuracy_near_border`.
 
-### §12.12 What you actually need from the field test (next week)
+### §12.12 What you actually need from the field test (later this week)
 
 Given limited time and device range, the next field test has two distinct jobs:
 

@@ -163,6 +163,28 @@
         .event-panel.active {
             display: block;
         }
+        .beacon-panel {
+            margin-bottom: 18px;
+            padding: 14px;
+            border-radius: 12px;
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.08);
+        }
+        .beacon-table-wrap {
+            max-height: 260px;
+            overflow: auto;
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,0.06);
+        }
+        .beacon-stage {
+            font-family: monospace;
+            color: #8bd3ff;
+        }
+        .beacon-error {
+            color: rgba(255,255,255,0.72);
+            font-size: 0.82rem;
+            word-break: break-word;
+        }
         .event-table-wrap {
             max-height: 320px;
             overflow: auto;
@@ -247,6 +269,31 @@
 
     <div id="main">
         <a href="/control" class="btn btn-outline-secondary btn-sm mb-3">&larr; Parcours list</a>
+
+        <div class="beacon-panel">
+            <div class="toolbar-row mb-2">
+                <div>
+                    <strong>Launcher beacons</strong>
+                    <div class="results-meta mb-0">Cordova-shell launch attempts and failures before the hosted webapp fully boots.</div>
+                </div>
+                <button id="refresh-beacons" class="btn btn-outline-info btn-sm">Refresh beacons</button>
+            </div>
+            <div id="beacon-meta" class="results-meta">Loading…</div>
+            <div class="beacon-table-wrap">
+                <table class="table table-sm align-middle mb-0">
+                    <thead>
+                        <tr>
+                            <th>Received</th>
+                            <th>Stage</th>
+                            <th>Device</th>
+                            <th>App</th>
+                            <th>Error</th>
+                        </tr>
+                    </thead>
+                    <tbody id="beacon-list"></tbody>
+                </table>
+            </div>
+        </div>
 
         <div class="filters-bar">
             <div>
@@ -334,6 +381,7 @@
     var preserveGroupMapViewOnNextRender = false;
     var archiveMode = false;
     var activeErrorPopover = null;
+    var launcherBeacons = [];
 
     var ERROR_BADGE_KINDS = {
         gap: {
@@ -447,6 +495,13 @@
         if (value == null || Number.isNaN(value)) return '-';
         if (value >= 1000) return (value / 1000).toFixed(value >= 10000 ? 0 : 1) + 's';
         return value + 'ms';
+    }
+
+    function formatDateTime(value) {
+        if (!value) return '-';
+        var d = new Date(value);
+        if (isNaN(d.getTime())) return esc(String(value));
+        return d.toLocaleString('fr-FR');
     }
 
     function hasOwn(obj, key) {
@@ -1581,6 +1636,58 @@
         setTimeout(function() { map.invalidateSize(); }, 80);
     }
 
+    function getBeaconDeviceLabel(beacon) {
+        var parts = [];
+        if (beacon.manufacturer && beacon.model && String(beacon.model).toLowerCase().indexOf(String(beacon.manufacturer).toLowerCase()) === -1) {
+            parts.push(beacon.manufacturer);
+        }
+        if (beacon.model) parts.push(beacon.model);
+        if (!parts.length && beacon.platform) parts.push(beacon.platform);
+        return parts.join(' ') || '-';
+    }
+
+    function renderLauncherBeacons() {
+        var meta = document.getElementById('beacon-meta');
+        var tbody = document.getElementById('beacon-list');
+        if (!launcherBeacons.length) {
+            meta.textContent = 'No launcher beacons found.';
+            tbody.innerHTML = '<tr><td colspan="5" class="text-muted">No launcher beacons found.</td></tr>';
+            return;
+        }
+
+        meta.textContent = launcherBeacons.length + ' recent beacon' + (launcherBeacons.length > 1 ? 's' : '');
+        tbody.innerHTML = launcherBeacons.map(function(beacon) {
+            var error = beacon.last_error && beacon.last_error.message
+                ? beacon.last_error.stage + ': ' + beacon.last_error.message
+                : '-';
+            var appInfo = [beacon.platform, beacon.app_version].filter(Boolean).join(' · ') || '-';
+            return '<tr>' +
+                '<td>' + formatDateTime(beacon.received_at || beacon.t) + '</td>' +
+                '<td><span class="beacon-stage">' + esc(beacon.stage || '-') + '</span></td>' +
+                '<td>' + esc(getBeaconDeviceLabel(beacon)) + '</td>' +
+                '<td>' + esc(appInfo) + '</td>' +
+                '<td class="beacon-error">' + esc(error) + '</td>' +
+            '</tr>';
+        }).join('');
+    }
+
+    function loadLauncherBeacons() {
+        document.getElementById('beacon-meta').textContent = 'Loading…';
+        return fetch(cacheBustUrl('/launcher-beacons?limit=100'))
+            .then(function(response) {
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                return response.json();
+            })
+            .then(function(payload) {
+                launcherBeacons = Array.isArray(payload && payload.beacons) ? payload.beacons : [];
+                renderLauncherBeacons();
+            })
+            .catch(function(error) {
+                document.getElementById('beacon-meta').textContent = 'Failed to load launcher beacons.';
+                document.getElementById('beacon-list').innerHTML = '<tr><td colspan="5" class="text-danger">Failed to load launcher beacons: ' + esc(String(error)) + '</td></tr>';
+            });
+    }
+
     function setRefreshButtonState(isRefreshing) {
         var button = document.getElementById('refresh-sessions');
         if (!button) return;
@@ -1633,7 +1740,10 @@
 
         Promise.resolve()
             .then(function() {
-                return reloadSessions({ preserveView: true });
+                return Promise.all([
+                    reloadSessions({ preserveView: true }),
+                    loadLauncherBeacons()
+                ]);
             })
             .finally(function() {
                 refreshInFlight = false;
@@ -1642,7 +1752,10 @@
     }
 
     function loadSessions() {
-        reloadSessions({ preserveView: false });
+        Promise.all([
+            reloadSessions({ preserveView: false }),
+            loadLauncherBeacons()
+        ]);
     }
 
     document.getElementById('apply-filters').addEventListener('click', function() {
@@ -1651,6 +1764,7 @@
     });
 
     document.getElementById('refresh-sessions').addEventListener('click', refreshSessions);
+    document.getElementById('refresh-beacons').addEventListener('click', loadLauncherBeacons);
     document.getElementById('export-summary-json').addEventListener('click', exportFilteredSessionsAsJson);
     document.getElementById('export-summary-csv').addEventListener('click', exportFilteredSessionsAsCsv);
 
