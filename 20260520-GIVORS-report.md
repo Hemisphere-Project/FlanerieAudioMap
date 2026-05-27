@@ -912,16 +912,16 @@ Still open from the original C5 list: `IsAutoRevokeWhitelisted()` / `RequestAuto
 
 Files: [cordova-plugin-power-optimization/src/android/PowerOptimization.java](../cordova-plugin-power-optimization/src/android/PowerOptimization.java), [cordova-plugin-power-optimization/src/android/Constants.java](../cordova-plugin-power-optimization/src/android/Constants.java), [cordova-plugin-power-optimization/src/android/ProtectedApps.java](../cordova-plugin-power-optimization/src/android/ProtectedApps.java), [cordova-plugin-power-optimization/src/ios/PowerOptimization.m](../cordova-plugin-power-optimization/src/ios/PowerOptimization.m), [cordova-plugin-power-optimization/www/PowerOptimization.js](../cordova-plugin-power-optimization/www/PowerOptimization.js), [cordova-plugin-power-optimization/plugin.xml](../cordova-plugin-power-optimization/plugin.xml), [cordova-plugin-power-optimization/package.json](../cordova-plugin-power-optimization/package.json), [FlanerieCordova/package-lock.json](../FlanerieCordova/package-lock.json).
 
-**G3. cordova-background-geolocation-plugin extensions [RESEARCH-FIRST]**.  
-Three independent additions, all to the same fork:
+**G3. cordova-background-geolocation-plugin extensions [TEST-FIRST — shipped 2026-05-27, Round 18]**.  
+Original spec covered B2/B3/D3/D4/D5; those were shipped in v2.5.0 (Round 12) and v2.6.0 (Round 13). The remaining G3 scope was redefined as three pure-diagnostic iOS additions, all shipped in **v2.7.0**:
 
-- B2 — Android AlarmManager wakeup (`LocationWakeReceiver.java`).
-- B3 — Android conditional FusedLocationProvider.
-- D3 / D4 / D5 — iOS forced reacquire + periodic flag re-assertion + SLC-triggered reacquire bridge.
+- **F-G1** — `MAURRawLocationProvider`: added `locationManager:didChangeAuthorizationStatus:` + `locationManagerDidChangeAuthorization:` (iOS 14+) for the `_slcManager` delegate. Mid-walk auth revocations now propagate immediately through the delegation chain to the JS `bg_geo_authorization` telemetry event, instead of only surfacing at the next 30 s `getCLState` poll.
+- **F-G3** — `_keepaliveTick:` starts a short `UIBackgroundTask` (`beginBackgroundTaskWithName:@"flanerie.keepalive"`) and stores its identifier as `bg_task_id` in the `MAURLocation` dict sent to JS. Post-hoc analysis can correlate keepalive firings with background-task expiry events (correlate GPS blackout onset with task ID going invalid).
+- **F-G4** — `_keepaliveTick:` sets `isKeepalive = YES` on the `MAURLocation`; propagated to JS as `is_keepalive: true`. `geoloc.js` now sets `source = 'keepalive'` for these ticks instead of `'bg_location'`, which means `lastRealCallbackTime` is no longer reset by NSTimer stale-cache ticks. The B4 `forceReacquire` watchdog now fires correctly after a 60 s real-GPS-callback stall even when the keepalive is still active.
 
-Bump plugin version 2.4.0 → 2.5.0.
+Bump plugin version 2.6.0 → 2.7.0.
 
-Files: [cordova-background-geolocation-plugin/android/...](../cordova-background-geolocation-plugin/android/), [cordova-background-geolocation-plugin/ios/...](../cordova-background-geolocation-plugin/ios/), `plugin.xml`, [www/app/assets/geoloc.js](www/app/assets/geoloc.js).
+Files: `MAURLocation.h/m` (new `isKeepalive`/`bgTaskId` properties), `MAURRawLocationProvider.m` (F-G1 delegate, F-G3 task, F-G4 flag), `geoloc.js` (F-G4 source detection).
 
 ### 12.8. Sequencing & risk
 
@@ -1108,6 +1108,24 @@ All work from the GIVORS follow-up remediation through 2026-05-27. Detailed note
 
 ---
 
+### §12.15 Round 18 shipped (2026-05-27) — G3 bg-geo v2.7.0 iOS diagnostics
+
+Plugin + JS. Requires app rebuild + store upgrade for full iOS diagnostic coverage.
+
+| Item | Description | Shipped status |
+|---|---|---|
+| F-G1 native auth callback | `MAURRawLocationProvider`: `didChangeAuthorizationStatus:` for `_slcManager` — mid-walk auth revocations forwarded immediately to JS `bg_geo_authorization` | ✅ **Shipped** v2.7.0 |
+| F-G3 bg-task ID in keepalive | Keepalive tick starts `UIBackgroundTask`, stores ID as `bg_task_id` in location dict — task expiry correlation in telemetry | ✅ **Shipped** v2.7.0 |
+| F-G4 keepalive source tag | `isKeepalive` flag → JS `is_keepalive` → `source='keepalive'` in `geoloc.js` — `lastRealCallbackTime` no longer reset by NSTimer ticks; B4 forceReacquire watchdog now fires on real GPS stalls | ✅ **Shipped** v2.7.0 |
+
+#### Still open (next session or field-calibration dependent)
+
+- **B4 UI freeze-band** — requires `real_callback_freshness` field data to calibrate threshold.
+- **E1/E2/E3** zone-overshoot sustain gates — need `accuracy_near_border` distribution.
+- **B3/BG-6** FusedLocationProvider Android — escalate to next plugin release if v2.6.0/v2.7.0 field data shows ≥2 Android Doze blackouts ≥5 min on restrictive OEMs.
+- **C2** audio file integrity check — still in phase 1B queue.
+- **Phase 2** plugin rebuild (Play Store / TestFlight cycle).
+
 ### §12.14 Round 16 shipped (2026-05-27) — C4 + A3/A1 lifecycle cleanup
 
 JS-only batch. No plugin rebuild. Closes the M3 / P4 / P7 lifecycle gaps and the R7.1 iOS playerror cluster.
@@ -1124,5 +1142,5 @@ JS-only batch. No plugin rebuild. Closes the M3 / P4 / P7 lifecycle gaps and the
 - **E1/E2/E3** zone-overshoot sustain gates — still need `accuracy_near_border` distribution.
 - **B3/BG-6** FusedLocationProvider Android — **elevated to strong consideration** (see B3 note above). Escalate to next plugin release if v2.6.0 field data shows ≥2 Android Doze blackouts ≥5 min on restrictive OEMs.
 - **C2** audio file integrity check — still in phase 1B queue.
-- **Phase 2** plugin rebuild (Play Store / TestFlight cycle for v2.5.0 + v2.6.0).
+- **Phase 2** plugin rebuild (Play Store / TestFlight cycle for v2.5.0–v2.7.0).
 

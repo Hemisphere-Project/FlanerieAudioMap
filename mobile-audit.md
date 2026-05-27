@@ -1,7 +1,8 @@
 # Mobile Audit Remediation Plan
 
 Original: 2026-04-27  
-Last updated: 2026-05-27 (Round 17 — A8b SAS step 0 pre-warm: `PAGES['sas']` now calls `PARCOURS.spots.steps[0].prewarmForLockedStart('sas-entry')` at entry, giving Howler the ~5–30 s the visitor spends typing 4321 to load BLOC_01_Parc before GPS fires step 0; complements A8 deferred-play; JS-only, no plugin rebuild)
+Last updated: 2026-05-27 (Round 18 — G3 bg-geo v2.7.0 iOS diagnostics: F-G1 native `didChangeAuthorizationStatus:` callback for SLC manager forwarding mid-walk auth revocations to JS; F-G3 UIBackgroundTaskIdentifier logged in keepalive tick via `bg_task_id` field; F-G4 `is_keepalive` flag on NSTimer ticks — `geoloc.js` uses it to set `source='keepalive'` so `lastRealCallbackTime` is not reset by stale-cache ticks, B4 forceReacquire watchdog now fires correctly; plugin v2.7.0 released + FlanerieCordova lockfile updated)
+Previous: 2026-05-27 (Round 17 — A8b SAS step 0 pre-warm: `PAGES['sas']` now calls `PARCOURS.spots.steps[0].prewarmForLockedStart('sas-entry')` at entry, giving Howler the ~5–30 s the visitor spends typing 4321 to load BLOC_01_Parc before GPS fires step 0; complements A8 deferred-play; JS-only, no plugin rebuild)
 Previous: 2026-05-27 (Round 16 — C4 audio `playerror` retry + A3/A1 walk-session lifecycle cleanup: `PlayerStep` voice `playerror` now attempts `resetAudioSession()` + reload before falling back to `startAfterplay()`; `PAGES['end']` drains `PAUSED_PLAYERS`/`DUCKED_PLAYERS` and reloads `SILENT_PLAYER`; rearm button gets a confirm guard + full A1 teardown + `PAGE('rdv')` routing for the new visitor; JS-only, no plugin rebuild; closes P4/M3-rearm for next field test)
 Previous: 2026-05-27 (Round 15 — A8 Howler cold-load deferred play: `PlayerSimple.play()` now registers `once('load', …)` when Howler state is `'loading'`, bypassing the silent internal-queue failure on Android WebView; resolves R4.1 (deferred since 2026-05-18); confirmed by GIVORS 2026-05-20 §M4/P9 restart-pair analysis (5eb0/4ha8/85iu/ygi1))
 Previous: 2026-05-27 (Round 14 — JS wiring for bg-geo v2.5.0 + v2.6.0: F-G1 `getCLState` call in 30 s `real_callback_freshness` interval (iOS, logs `cl_state` event); F-G1b `getPowerState` 60 s interval (iOS, logs `ios_power_state`); B4 watchdog `forceReacquire` in `geoloc.js` `stateUpdateTimer` (iOS, fires after 60 s real-callback stall, max 3/session, throttled 90 s); `session_diag` extended with `plugin_bgloc_getCLState` / `plugin_bgloc_getPowerState` / `plugin_bgloc_forceReacquire` flags; JS-only, no plugin rebuild)  
@@ -1685,6 +1686,32 @@ Files: `www/app/pages.js` (F-G1, F-G1b, session_diag), `www/app/assets/geoloc.js
 
 ---
 
+### Round 18 — G3 bg-geo v2.7.0 iOS diagnostics (2026-05-27) — ✅ code complete
+
+Plugin + JS. No UI changes. Requires plugin rebuild + app store upgrade for iOS diagnostic coverage.
+
+**F-G1 — Native `didChangeAuthorizationStatus:` callback for SLC manager** (`MAURRawLocationProvider.m`):
+- Added `locationManager:didChangeAuthorizationStatus:` and `locationManagerDidChangeAuthorization:` (iOS 14+) CLLocationManagerDelegate methods to `MAURRawLocationProvider`.
+- Guarded to `manager == _slcManager` to avoid double-firing with the main manager's existing path through `MAURLocationManager`.
+- Maps raw `CLAuthorizationStatus` (Restricted/Denied → Denied, AuthorizedAlways → Allowed, AuthorizedWhenInUse → Foreground, other → NotDetermined) and forwards to `[self.delegate onAuthorizationChanged:]`.
+- Means mid-walk auth revocations (user goes to Settings and removes Always permission) are detected immediately via the existing `bg_geo_authorization` telemetry event in `geoloc.js` line 1061, rather than only at the next `getCLState` 30 s poll.
+
+**F-G3 — UIBackgroundTaskIdentifier in keepalive tick** (`MAURRawLocationProvider.m`, `MAURLocation.h/.m`):
+- `_keepaliveTick:` now calls `beginBackgroundTaskWithName:@"flanerie.keepalive"` and stores the resulting `UIBackgroundTaskIdentifier` as `bgloc.bgTaskId` (new `NSNumber*` property on `MAURLocation`).
+- Propagated to JS as `bg_task_id` in the location dict from `toDictionary`.
+- Background task is ended 2 s after the delegate callback (enough to cover JS processing).
+- Post-hoc telemetry analysis can cross-reference keepalive firings with `UIBackgroundTaskIdentifier` values to detect task expiry events (expiry → task ID goes invalid → CPU time cut, correlated with GPS blackout windows).
+
+**F-G4 — NSTimer vs CLLocationManager source tag** (`MAURRawLocationProvider.m`, `MAURLocation.h/.m`, `geoloc.js`):
+- `_keepaliveTick:` sets `bgloc.isKeepalive = YES` (new `BOOL` property on `MAURLocation`).
+- Propagated to JS as `is_keepalive: true` in the location dict.
+- In `geoloc.js`, `bgGeo.on('location')` and `bgGeo.on('stationary')` callbacks check `location.is_keepalive` and set `source = 'keepalive'` instead of `'bg_location'`/`'bg_stationary'`.
+- **Key behavioural fix**: `lastRealCallbackTime` in `_callbackPosition` is only updated for non-keepalive sources (line 564 guard: `source !== 'keepalive'`). Previously, NSTimer keepalive ticks fired with `source = 'bg_location'` and reset `lastRealCallbackTime`, preventing the B4 `forceReacquire` watchdog from detecting real GPS-callback stalls. Now the watchdog fires correctly after a 60 s real-callback gap even if the keepalive is still delivering stale cached positions.
+
+Files: `cordova-background-geolocation-plugin/ios/common/BackgroundGeolocation/MAURLocation.h` (F-G3/F-G4 properties), `MAURLocation.m` (serialise + copy), `MAURRawLocationProvider.m` (F-G1 delegate, F-G3 bg task, F-G4 flag), `FlanerieAudioMap/www/app/assets/geoloc.js` (F-G4 source detection)
+
+---
+
 ### Round 17 — A8b SAS step 0 pre-warm (2026-05-27) — ✅ code complete
 
 JS-only. Companion to A8 (Howler cold-load deferred play). No plugin rebuild required.
@@ -1954,7 +1981,7 @@ Requires Cordova rebuild and Play Store upgrade. Coordinate with show schedule (
 - **A3 + remaining A1/A2 cleanup** Walk-session lifecycle: broader end-state teardown, re-arm confirmation flow, and any remaining JS hard-reset work after the now-shipped G1 slice.
 - **G1 follow-up only if needed**: iOS `audiofocus_request_fail` suppression/backoff if the awaited startup reset does not materially reduce R7.3 in field telemetry.
 - **G2** ✅ DONE (2026-05-27, v0.2.0): `GetLastExitReasons()`, `GetMemoryInfo()`, `GetStandbyBucket()`, iOS no-op stub, Xiaomi autostart intent, LeTV fix, boolean type fix, `skipProtectedAppCheck` logic. Fork released + FlanerieCordova lockfile updated. Remaining: `IsAutoRevokeWhitelisted()` / `RequestAutoRevokeWhitelist()` (hibernation watch, long-tail, not show-blocking).
-- **G3** BG-geo plugin: F-G1 (native `locationManager:didChangeAuthorizationStatus:` callback), F-G3 (background-task ID in keepalive tick), F-G4 (NSTimer vs CLLocationManager callback source tag).
+- **G3** ✅ DONE (2026-05-27, v2.7.0): bg-geo iOS diagnostics — F-G1 native `didChangeAuthorizationStatus:` callback (SLC manager forwards auth revocations mid-walk), F-G3 `UIBackgroundTaskIdentifier` in keepalive tick (`bg_task_id` field), F-G4 `is_keepalive` flag on NSTimer ticks (`geoloc.js` uses it to protect `lastRealCallbackTime` and make B4 forceReacquire fire correctly on GPS-callback stalls).
 - **G4** ✅ DONE (2026-05-27, v1.6.0): audiofocus diagnostic + robustness batch — AF-1 channel description, AF-2 iOS deactivation order, AF-3 `START_STICKY` recovery, AF-4 power-save receiver, AF-5 iOS route-change events, AF-6 `getAudioSessionState` action, AF-7 app icon. Fork released + FlanerieCordova lockfile updated. `onFocusChange` callback now carries structured JSON events (`event[0] === '{'`) in addition to plain-string focus events. AF-3 is TEST-FIRST (requires killing the service while the process stays alive).
 - **P1.33** `RawLocationProvider`: add `NETWORK_PROVIDER` request + last-known-network fix delivery on `onStart()` for Android GPS cold-start warmup.
 
