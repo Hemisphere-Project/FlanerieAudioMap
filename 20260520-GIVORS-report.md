@@ -500,8 +500,10 @@ The Samsung A15 case is the canonical "WebView suspended despite FG service runn
 
 Files: [cordova-background-geolocation-plugin/android/common/src/main/java/com/marianhello/bgloc/](../cordova-background-geolocation-plugin/android/common/src/main/java/com/marianhello/bgloc/) (new `LocationWakeReceiver.java` + `LocationManagerService` schedule hook), [cordova-background-geolocation-plugin/plugin.xml](../cordova-background-geolocation-plugin/plugin.xml) (BroadcastReceiver registration), [www/app/assets/geoloc.js](www/app/assets/geoloc.js) (`onAlarmWake` handler).
 
-**B3. Conditional FusedLocationProvider (bg-geo fork) [RESEARCH-FIRST]** — plugin. Closes P0.5 Fix 4 with narrower trigger.  
+**B3. Conditional FusedLocationProvider (bg-geo fork) [RESEARCH-FIRST — elevated to strong consideration]** — plugin. Closes P0.5 Fix 4 with narrower trigger.  
 Today's `RawLocationProvider` (modified in P1.33 for cold-start) keeps raw GPS for everyone. Add `FusedLocationProviderClient` as a parallel provider, registered only when `Build.MANUFACTURER` ∈ {samsung, xiaomi, motorola, tcl, oppo, realme, vivo, honor}. Pixel / non-restrictive devices keep raw-GPS performance; restrictive OEMs get Google's Doze-aware fused stream.
+
+**Elevation note (2026-05-27):** BG-5 (AlarmManager `setExactAndAllowWhileIdle`) covers the Doze wakeup gap but Android coalesces these alarms to ~9 min during deep Doze and some OEMs kill the BG service entirely between alarms. `FusedLocationProvider` is Doze-aware by design and routes through Play Services' own foreground wakelock — it survives the OEM kills that defeat `RawLocationProvider`. If v2.6.0 field data still shows Android Doze blackouts on restrictive OEMs, escalate B3/BG-6 to the next plugin release. Trigger: ≥2 Android Doze blackouts ≥5 min in the next field test.
 
 Files: [cordova-background-geolocation-plugin/android/common/src/main/java/com/marianhello/bgloc/provider/](../cordova-background-geolocation-plugin/android/common/src/main/java/com/marianhello/bgloc/provider/) (new `FusedLocationProvider.java`), `LocationProviderFactory.java` for the conditional registration.
 
@@ -1039,7 +1041,7 @@ All work from the GIVORS follow-up remediation through 2026-05-27. Detailed note
 
 - **B4 UI freeze-band** — `#frozen-band` overlay with "Téléphone en veille" copy. Requires `real_callback_freshness` field data to calibrate the 60 s threshold before turning it into a visible UX block.
 - **E1/E2/E3** zone-overshoot sustain gates — still need `accuracy_near_border` distribution.
-- **B3** FusedLocationProvider Android — RESEARCH-FIRST; escalate if BG-5 + Doze data shows it's insufficient.
+- **B3/BG-6** FusedLocationProvider Android — **elevated to strong consideration** (see B3 note above). Escalate to next plugin release if v2.6.0 field data shows ≥2 Android Doze blackouts ≥5 min on restrictive OEMs.
 - **C2/C4** audio integrity and playerror retry — still in phase 1B queue.
 - **Phase 2** plugin rebuild (Play Store / TestFlight cycle for v2.5.0 + v2.6.0).
 
