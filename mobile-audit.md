@@ -880,11 +880,15 @@ Field test 2026-05-18: 5 Android sessions failed to start the first voice file (
 
 **Root cause confirmed**: `play()` called while Howler state is `'loading'`. Howler's internal play-queue silently fails on Android WebView — the `play` event never fires from the queued call. R4.4's stop+play retry restarts the sequence but still calls into Howler while loading.
 
-**Resolution (A8, 2026-05-27):** In `PlayerSimple.play()` ([player.js:965](www/app/assets/player.js#L965)): after calling `this._player.play()`, if Howler state is `'loading'`, register a `this._player.once('load', …)` callback that re-calls `play()` when the file finishes loading (guarded by `_playRequested && !playing()`). Applied to both the direct path and the `requestAudioFocus().then(…)` path. The `'play'` event handler already guards against double-fire via `_playRequested`. The R4.4 15 s watchdog is retained as a safety net for other stuck states.
+**Resolution (A8 + A8b, 2026-05-27):**
+
+- **A8** — In `PlayerSimple.play()` ([player.js:965](www/app/assets/player.js#L965)): after calling `this._player.play()`, if Howler state is `'loading'`, register a `this._player.once('load', …)` callback that re-calls `play()` when the file finishes loading (guarded by `_playRequested && !playing()`). Applied to both the direct path and the `requestAudioFocus().then(…)` path. The `'play'` event handler already guards against double-fire via `_playRequested`. The R4.4 15 s watchdog is retained as a safety net for other stuck states.
+
+- **A8b** — In `PAGES['sas']` ([pages.js](www/app/pages.js)): call `PARCOURS.spots.steps[0].prewarmForLockedStart('sas-entry')` at page entry (guarded by `PARCOURS.valid() && steps.length > 0`). Gives Howler the ~5–30 s the visitor spends typing `4321` to load BLOC_01_Parc before GPS fires, so A8's deferred-play fires immediately on load completion rather than waiting from step 0 fire time. No-op if already loaded (re-arm / second attempt); no-op if parcours not yet built (bypassed onboarding / devmode entering directly from another route).
 
 See GIVORS 2026-05-20 §M4/P9 for four confirmed session pairs (first-install restart-pairs: `5eb0`→`9qf4`, `4ha8`→`aibf`, `85iu`→`2tqf`, `ygi1`→`0vvc`).
 
-Files: [www/app/assets/player.js](www/app/assets/player.js)
+Files: [www/app/assets/player.js](www/app/assets/player.js) (A8), [www/app/pages.js](www/app/pages.js) (A8b)
 
 #### R4.2 parcours_restore lifecycle + session_resume payload enrichment ✅ DONE (2026-05-18) [SAFE-TODAY]
 
@@ -1678,6 +1682,21 @@ JS-only wiring to leverage the new native actions added in Rounds 12–13. No pl
 - **session_diag flags**: `plugin_bgloc_getCLState`, `plugin_bgloc_getPowerState`, `plugin_bgloc_forceReacquire` added so post-hoc analysis can identify which APK build first carried each method.
 
 Files: `www/app/pages.js` (F-G1, F-G1b, session_diag), `www/app/assets/geoloc.js` (B4 watchdog)
+
+---
+
+### Round 17 — A8b SAS step 0 pre-warm (2026-05-27) — ✅ code complete
+
+JS-only. Companion to A8 (Howler cold-load deferred play). No plugin rebuild required.
+
+**A8b — SAS page step 0 pre-warm** (`www/app/pages.js`, `PAGES['sas']`):
+- Added `PARCOURS.spots.steps[0].prewarmForLockedStart('sas-entry')` at the top of `PAGES['sas']`, guarded by `PARCOURS.valid() && steps.length > 0`.
+- Calls the existing `Step.prewarmForLockedStart()` method, which calls `loadAudio()` if not already loaded and logs `step_prewarm_next {reason: 'sas-entry'}` telemetry.
+- Gives Howler the ~5–30 s the visitor spends typing `4321` to load BLOC_01_Parc before GPS fires step 0. On most devices (non-edge-case bandwidth) the file finishes loading before the visitor exits the SAS page, so A8's `once('load')` deferred-play fires immediately at step 0 rather than waiting from `play()` call time.
+- No-op on re-arm / second attempt (file already loaded); no-op if parcours not yet built (bypassed onboarding, devmode direct-route).
+- Complements A8: even if loading hasn't finished by step 0, A8 ensures play fires the moment it does. Together they eliminate the M4 cold-load silence window on virtually all first-install scenarios.
+
+Files: `www/app/pages.js` (A8b)
 
 ---
 
