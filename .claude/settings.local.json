@@ -55,7 +55,21 @@
       "Read(//home/mgr/Bakery/**)",
       "Bash(git add *)",
       "Bash(git commit -m ' *)",
-      "Bash(git restore *)"
+      "Bash(git restore *)",
+      "Bash(find /home/mgr/Bakery/Flanerie -name \"GIVORS*\" 2>/dev/null; find /home/mgr -maxdepth 4 -name \"GIVORS*\" 2>/dev/null)",
+      "Read(//home/mgr/**)",
+      "Bash(ls /run/user/1000/gvfs/ 2>/dev/null)",
+      "Read(//run/user/1000/gvfs/**)",
+      "Bash(python3 -m json.tool)",
+      "Bash(python3 -)",
+      "Bash(npm install *)",
+      "Bash(git tag *)",
+      "Bash(git push *)",
+      "Bash(node scripts/sync-workspace-plugins.mjs)",
+      "Bash(node scripts/sync-workspace-plugins.mjs --apply --no-cordova)",
+      "Bash(node -e \"require\\('./www/app/pages.js'\\)\")",
+      "Bash(node --check www/app/pages.js)",
+      "Bash(node --check www/app/assets/geoloc.js)"
     ]
   }
 }
