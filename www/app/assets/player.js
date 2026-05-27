@@ -889,6 +889,8 @@ class PlayerSimple extends EventEmitter
             // Genuinely stuck. Retry once: stop the underlying, re-issue play.
             // On Android (Howler path) the first voice cold-load can hang the
             // Howl in 'loading' forever; a stop+play forces a fresh attempt.
+            // A8 deferred-play via once('load') should prevent this path on cold
+            // starts, but keep the retry as a safety net for other stuck states.
             // Cap at 1 retry so we don't loop on a hopeless file.
             const MAX_STUCK_RETRIES = 1
             if (this._playStuckRetries < MAX_STUCK_RETRIES) {
@@ -962,9 +964,24 @@ class PlayerSimple extends EventEmitter
 
         // Unknown/unavailable focus state (-1) should not block playback unless
         // this specific play requires a fresh native audio-session activation.
+        // Belt-and-suspenders deferred play for the Android Howler cold-load
+        // race (M4/P9): when the file is still loading at play() time, Howler's
+        // internal play-queue silently fails on Android WebView. Calling play()
+        // again from the 'load' event fires it the moment the file is ready.
+        // The 'play' event handler guards against double-fire via _playRequested.
+        const _deferIfLoading = () => {
+            if (!this._player) return
+            if (typeof this._player.state === 'function' && this._player.state() === 'loading') {
+                this._player.once('load', () => {
+                    if (this._player && this._playRequested && !this._player.playing()) this._player.play()
+                })
+            }
+        }
+
         if (!needsFocusRequest) {
             if (!this._player) return
             this._player.play()
+            _deferIfLoading()
 
             console.log('PlayerSimple PLAY:', this._player._src, 'seek:', seek, 'volume:', volume)
 
@@ -978,8 +995,9 @@ class PlayerSimple extends EventEmitter
             requestAudioFocus().then(() => {
                 if (!this._player) return
                 this._player.play()
+                _deferIfLoading()
                 console.log('PlayerSimple PLAY:', this._player._src, 'seek:', seek, 'volume:', volume)
-    
+
                 if (this._fadeTime > 0) {
                     this._volume = volume
                     this._player.fade(this._player.volume(), this._volume * this._media.master, this._fadeTime)
@@ -1173,6 +1191,12 @@ class PlayerStep extends EventEmitter
         // DEFAULT_AFTERPLAY_PLAYER (because the step's own afterplay is missing
         // or failed to load). All afterplay-routed ops must check this flag.
         this._defaultAfterplayActive = false
+        // C4 — playerror retry counter reset in load() per voice assignment;
+        // tracks how many times this step's voice has fired playerror so we
+        // can attempt one reset+reload before giving up to afterplay.
+        this._voicePlayerrorCount = 0
+        this._lastLoadBasepath = null
+        this._lastLoadMedia = null
 
         this.voice.rewindOnPause(3000)
         this.voice.on('end', () => {
@@ -1193,7 +1217,48 @@ class PlayerStep extends EventEmitter
             this.startAfterplay()
         }
         this.voice.on('loaderror', () => onVoiceFail('loaderror'))
-        this.voice.on('playerror', () => onVoiceFail('playerror'))
+        // C4: first playerror on iOS → reset audio engine and reload before
+        // falling back to afterplay. Targets the rumx/vigi stale-ref cluster
+        // (R7.1) where the file is fine but the cordova-plugin-media handle is
+        // dead after a process restart. Second playerror or no plugin → falls
+        // through to afterplay as before.
+        this.voice.on('playerror', () => {
+            if (this.state !== 'play') return
+            this._voicePlayerrorCount++
+            if (this._voicePlayerrorCount === 1 &&
+                this._lastLoadBasepath && this._lastLoadMedia &&
+                typeof cordova !== 'undefined' && cordova.plugins && cordova.plugins.audiofocus &&
+                typeof cordova.plugins.audiofocus.resetAudioSession === 'function') {
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_playerror_retry', {
+                    attempt: 1,
+                    step: this._step ? this._step._index : null,
+                    step_name: this._step && this._step._spot ? this._step._spot.name : null,
+                })
+                cordova.plugins.audiofocus.resetAudioSession(
+                    () => {
+                        if (this.state !== 'play') return
+                        this.voice.load(this._lastLoadBasepath, this._lastLoadMedia.voice)
+                        this.voice.play()
+                    },
+                    () => {
+                        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_playerror_retry', {
+                            attempt: 1, gave_up: true, reason: 'reset_failed',
+                            step: this._step ? this._step._index : null,
+                        })
+                        onVoiceFail('playerror')
+                    }
+                )
+            } else {
+                if (this._voicePlayerrorCount > 1 && typeof TELEMETRY !== 'undefined') {
+                    TELEMETRY.log('audio_playerror_retry', {
+                        attempt: this._voicePlayerrorCount, gave_up: true,
+                        step: this._step ? this._step._index : null,
+                        step_name: this._step && this._step._spot ? this._step._spot.name : null,
+                    })
+                }
+                onVoiceFail('playerror')
+            }
+        })
 
         this.afterplay.rewindOnPause(3000)
     }
@@ -1249,6 +1314,11 @@ class PlayerStep extends EventEmitter
     }
 
     load(basepath, media) {
+        // C4: store load args so the playerror retry handler can reload the
+        // same file after resetAudioSession() clears the stale engine state.
+        this._lastLoadBasepath = basepath
+        this._lastLoadMedia = media
+        this._voicePlayerrorCount = 0
         this.voice.load(basepath, media.voice)
         this.afterplay.load(basepath, media.afterplay)
         this.playstate = 'play'

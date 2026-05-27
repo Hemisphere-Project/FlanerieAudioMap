@@ -1777,6 +1777,15 @@ PAGES['checkbackground'] = () => PAGE('sas')
 // SAS
 //
 PAGES['sas'] = () => {
+    // Pre-warm step 0 audio while the visitor types 4321 (~5–30 s window).
+    // Gives Howler time to finish loading BLOC_01_Parc before GPS fires step 0,
+    // reducing the M4 cold-load race (GIVORS §P9) to near-zero on most devices.
+    // Guard: parcours must be valid; no-op if already loaded or not yet built.
+    if (typeof PARCOURS !== 'undefined' && PARCOURS.valid()
+            && PARCOURS.spots && PARCOURS.spots.steps && PARCOURS.spots.steps.length > 0) {
+        PARCOURS.spots.steps[0].prewarmForLockedStart('sas-entry')
+    }
+
     $('#sas-code').hide()
 
     TYPEWRITE('sas-desc')
@@ -2233,6 +2242,17 @@ PAGES['end'] = () => {
     clearLostUI();
     if (testplayer) { testplayer.stop(); testplayer.clear(); testplayer = null; }
 
+    // A1: drain the interrupt/duck queues so stale player refs from this walk
+    // cannot phantom-resume into the next visitor's session. PAUSED_PLAYERS and
+    // DUCKED_PLAYERS are module-globals in player.js; clearing them here is safe
+    // because all players were stopped above.
+    PAUSED_PLAYERS = [];
+    DUCKED_PLAYERS.clear();
+    // Reload the shared SILENT_PLAYER so the next walk starts from a clean
+    // looped-player instance rather than whatever state this walk left it in
+    // (M3 silent-audio-on-first-play on loan-phone re-arm).
+    SILENT_PLAYER.load(BASEURL + '/images/', {src: 'flanerie.mp3', master: 1}, false);
+
     // G1/A1: fully release the session-scoped audiofocus state. stopKeepalive
     // alone tears down the foreground service, but it intentionally leaves some
     // audio-session state alive; that's useful across page switches, but wrong
@@ -2352,15 +2372,15 @@ function devmode(dev)
 devmode(DEVMODE);
 
 // DEV TOOLS
-$('#parcours-rearm').click(() => {
+$('#parcours-rearm').click(async () => {
     console.log('REARM');
-    // F-R2 — snapshot the audio + GPS engine state at re-arm. Today the rearm
-    // logic just resets parcours state without rebuilding the audio engine,
-    // which is the P7 root cause Justine flagged (4-5 silent-audio recoveries
-    // per day on the SM-A515F loan phone). Once A2 (engine reset at session
-    // start) ships in phase 2 we'll be able to confirm the snapshot improves;
-    // without the snapshot we can't tell whether the staleness is in
-    // AUDIOFOCUS, SILENT_PLAYER, PAUSED_PLAYERS, or somewhere else.
+    // A3: explicit confirmation prevents accidental mid-walk re-arm and makes
+    // the operator intent explicit. Cancel is the safe default so an errant tap
+    // never disrupts a walk in progress.
+    if (!confirm('Confirmer : la balade précédente est terminée ?')) return;
+
+    // F-R2 — snapshot the audio + GPS engine state at re-arm so we can confirm
+    // the A3 teardown is reaching each device correctly.
     if (typeof TELEMETRY !== 'undefined') {
         try {
             TELEMETRY.log('rearm_pre_state', {
@@ -2380,6 +2400,33 @@ $('#parcours-rearm').click(() => {
             });
         } catch (e) { console.warn('[F-R2] rearm_pre_state log failed:', e); }
     }
+
+    // A3/A1: stop tracking and audio before teardown (mirrors PAGES['end']).
+    PARCOURS.stopTracking();
+    PARCOURS.stopAudio();
+    GPSLOST_PLAYER.stop();
+    SILENT_PLAYER.stop();
+    LOST_PLAYER.stop();
+    RESUME_PLAYER.stop();
+
+    // A3/A1: drain interrupt/duck queues and rebuild SILENT_PLAYER, matching
+    // the teardown at PAGES['end'] so the new visitor's first play can't race
+    // a phantom resume from the previous walk.
+    PAUSED_PLAYERS = [];
+    DUCKED_PLAYERS.clear();
+    SILENT_PLAYER.load(BASEURL + '/images/', {src: 'flanerie.mp3', master: 1}, false);
+
+    // A3/G1: release the full session-scoped audiofocus state (stopKeepalive
+    // alone leaves iOS AVAudioSession active; releaseSession does the teardown).
+    if (typeof cordova !== 'undefined' && cordova.plugins && cordova.plugins.audiofocus &&
+        typeof cordova.plugins.audiofocus.releaseSession === 'function') {
+        cordova.plugins.audiofocus.releaseSession(
+            () => { if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audiofocus_session_released', {source: 'rearm'}); },
+            (err) => { if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audiofocus_session_release_error', {source: 'rearm', error: String(err)}); }
+        );
+    }
+
+    // Restart the telemetry session for the new visitor, then reset parcours state.
     TELEMETRY.restart(
         'rearm_button',
         PARCOURS.pID || PARCOURS.info.name || '',
@@ -2391,13 +2438,12 @@ $('#parcours-rearm').click(() => {
     PARCOURS._lostBeyondSince = null
     clearLostUI()
     closeMapForRecovery({source: 'rearm'})
-    openMapForRecovery({source: 'rearm'})
-    PARCOURS.startTracking()
-    PARCOURS.stopAudio()
 
-    if (updateStepsMarkers) updateStepsMarkers();
-
-    setTimeout(() => document.MAP.fire('move'), 2000)
+    // A3/A2: reset the audio engine for the new visitor's session, then route
+    // to PAGES['rdv'] so the full preload + sas + walk-start flow runs cleanly
+    // (rather than dropping the new visitor mid-parcours without a sas check).
+    await resetAudioSessionForFreshParcoursStart();
+    PAGE('rdv');
 })
 
 $('#parcours-restart').click(() => {

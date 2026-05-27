@@ -1,7 +1,10 @@
 # Mobile Audit Remediation Plan
 
 Original: 2026-04-27  
-Last updated: 2026-05-27 (Round 14 — JS wiring for bg-geo v2.5.0 + v2.6.0: F-G1 `getCLState` call in 30 s `real_callback_freshness` interval (iOS, logs `cl_state` event); F-G1b `getPowerState` 60 s interval (iOS, logs `ios_power_state`); B4 watchdog `forceReacquire` in `geoloc.js` `stateUpdateTimer` (iOS, fires after 60 s real-callback stall, max 3/session, throttled 90 s); `session_diag` extended with `plugin_bgloc_getCLState` / `plugin_bgloc_getPowerState` / `plugin_bgloc_forceReacquire` flags; JS-only, no plugin rebuild)  
+Last updated: 2026-05-27 (Round 17 — A8b SAS step 0 pre-warm: `PAGES['sas']` now calls `PARCOURS.spots.steps[0].prewarmForLockedStart('sas-entry')` at entry, giving Howler the ~5–30 s the visitor spends typing 4321 to load BLOC_01_Parc before GPS fires step 0; complements A8 deferred-play; JS-only, no plugin rebuild)
+Previous: 2026-05-27 (Round 16 — C4 audio `playerror` retry + A3/A1 walk-session lifecycle cleanup: `PlayerStep` voice `playerror` now attempts `resetAudioSession()` + reload before falling back to `startAfterplay()`; `PAGES['end']` drains `PAUSED_PLAYERS`/`DUCKED_PLAYERS` and reloads `SILENT_PLAYER`; rearm button gets a confirm guard + full A1 teardown + `PAGE('rdv')` routing for the new visitor; JS-only, no plugin rebuild; closes P4/M3-rearm for next field test)
+Previous: 2026-05-27 (Round 15 — A8 Howler cold-load deferred play: `PlayerSimple.play()` now registers `once('load', …)` when Howler state is `'loading'`, bypassing the silent internal-queue failure on Android WebView; resolves R4.1 (deferred since 2026-05-18); confirmed by GIVORS 2026-05-20 §M4/P9 restart-pair analysis (5eb0/4ha8/85iu/ygi1))
+Previous: 2026-05-27 (Round 14 — JS wiring for bg-geo v2.5.0 + v2.6.0: F-G1 `getCLState` call in 30 s `real_callback_freshness` interval (iOS, logs `cl_state` event); F-G1b `getPowerState` 60 s interval (iOS, logs `ios_power_state`); B4 watchdog `forceReacquire` in `geoloc.js` `stateUpdateTimer` (iOS, fires after 60 s real-callback stall, max 3/session, throttled 90 s); `session_diag` extended with `plugin_bgloc_getCLState` / `plugin_bgloc_getPowerState` / `plugin_bgloc_forceReacquire` flags; JS-only, no plugin rebuild)  
 Previous: 2026-05-27 (Round 13 — `cordova-background-geolocation-plugin` v2.6.0: BG-2 iOS `forceReacquire` action (CLLocationManager stop/restart with flag re-assertion) + JS wrapper; BG-5 Android AlarmManager Doze keepalive (`LocationWakeReceiver` inner class, `setExactAndAllowWhileIdle`, 30 s non-Doze / ~9 min Doze cadence, pure native path); BG-10 iOS SLC auto-reacquire (`_slcManager` separate CLLocationManager, auto-triggers `_doForceReacquire` when real callbacks stalled >90 s + SLC fresh <30 s, max 3/session); plugin v2.6.0 released + FlanerieCordova lockfile updated)  
 Previous: 2026-05-27 (Round 11 — JS wiring for AF v1.6.0 + PO v0.2.0: F-A2 `audio_session_state` 60 s interval, F-A3 `audio_route_changed` dispatch, AF-4 `POWER_SAVE_CHANGED` dispatch, AF-3 `AUDIOFOCUS_SERVICE_RESTARTED` dispatch in `onFocusChange`; `session_diag` extended with PO v0.2.0 method-presence flags; `power_state_at_parcours` extended with `GetStandbyBucket` + `GetLastExitReasons`; `bg_restrictions_recheck` extended with `GetMemoryInfo` + `GetStandbyBucket`; JS-only, no plugin rebuild)  
 Previous: 2026-05-27 (Round 10 — `cordova-plugin-audiofocus` v1.6.0: AF-1 notification channel description, AF-2 iOS deactivation observer-ordering fix, AF-3 `START_STICKY` service restart recovery (`AudioFocus.instance.onServiceRestarted()`), AF-4 `ACTION_POWER_SAVE_MODE_CHANGED` broadcast receiver, AF-5 iOS `AVAudioSessionRouteChangeNotification` route-change events, AF-6 `getAudioSessionState` action (Android + iOS), AF-7 notification app icon; plugin v1.6.0 released + FlanerieCordova lockfile updated)  
@@ -871,20 +874,17 @@ Test setup: 22 telemetry sessions across 8 unique devices on FLANERIE_GIVORS_V7_
 
 Two major field-test items deferred to dedicated outings (R4.1, R4.3 below). One quick-wins batch shipped immediately to unblock the next field test's diagnostics (R4.2 / R4.4 / R4.5 / R4.6 / R4.7 / R4.8 / R4.9).
 
-#### R4.1 Android first-voice cold-load hangs silently [RESEARCH-FIRST] DEFERRED
+#### R4.1 Android first-voice cold-load hangs silently ✅ DONE (2026-05-27 / A8) [SAFE-TODAY]
 
-Field test 2026-05-18: 5 Android sessions (Xiaomi `j4lx`, Samsung A515F `0m39`/`u6wy`/`vw44`, Samsung A415F `1y9f`/`427z`, Moto G7 `kzm4`) failed to start the first voice file of the walk (`GIVORS26_BLOC_01_parc_V8_CBR.mp3`). The 15s [`audio_play_timeout`](www/app/assets/player.js) watchdog fired but the previous version logged and walked away. Worst case (`j4lx`): step 0 fires at t=0.3s, watchdog fires at t=15.3s, then **325 seconds of pos=0.00 while playstate="play"** — PlayerStep state was lying; underlying Howl never actually started. Voice finally played at t=331.6 after a second `audio_play_requested` (most likely triggered by zone re-entry). Walker stood in step 0 for 5.5 minutes hearing silence.
+Field test 2026-05-18: 5 Android sessions failed to start the first voice file (`GIVORS26_BLOC_01_parc_V8_CBR.mp3`). R4.4 (2026-05-18) added a stop+play retry — but GIVORS 2026-05-20 field data confirmed R4.4 alone is not enough: `5eb0`, `4ha8`, `85iu`, `ygi1` all hit `audio_play_stuck` at +30 s with the file still loading, and audio didn't start until +70 s (visitor had restarted by then). The stop+play retry fires when Howl is stuck, but if the file is still loading at that point the second play() call queues again and fails identically.
 
-iPhone session (`ywav`) does NOT have this — step 0 plays at t=0.8 and pos advances normally. That is P3.4 NativeMediaPlayer migration paying off on iOS. Android still goes through Howler and inherits exactly the cold-load failure mode P3.4 fixed for iOS.
+**Root cause confirmed**: `play()` called while Howler state is `'loading'`. Howler's internal play-queue silently fails on Android WebView — the `play` event never fires from the queued call. R4.4's stop+play retry restarts the sequence but still calls into Howler while loading.
 
-**R4.4 (this round) makes the watchdog actually attempt recovery** (cross-check actual play state, retry stop+play once if genuinely stuck) — that may close the issue without further work, but needs field validation on the same Xiaomi/Samsung fleet. If R4.4 doesn't recover, options are:
+**Resolution (A8, 2026-05-27):** In `PlayerSimple.play()` ([player.js:965](www/app/assets/player.js#L965)): after calling `this._player.play()`, if Howler state is `'loading'`, register a `this._player.once('load', …)` callback that re-calls `play()` when the file finishes loading (guarded by `_playRequested && !playing()`). Applied to both the direct path and the `requestAudioFocus().then(…)` path. The `'play'` event handler already guards against double-fire via `_playRequested`. The R4.4 15 s watchdog is retained as a safety net for other stuck states.
 
-1. **Diagnostic first**: confirm whether the issue is "Howler stuck" (recoverable by stop+play, which R4.4 attempts) or "WebView audio context stuck" (needs a different fix). The new `audio_play_stuck_retry` / `audio_play_stuck` / `audio_play_timeout_self_healed` telemetry will tell us.
-2. **Likely fix**: route Android step voices through `cordova-plugin-media` too — extend `NativeMediaPlayer` to Android (the Media plugin supports MediaPlayer/ExoPlayer natively). Pattern identical to P3.4. Bigger change but matches the iOS resolution.
-3. **Fallback**: pre-warm step 0 voice file at parcours-page entry (proactive `.load()` before step_fire). Doesn't fix the underlying race but moves the cold-load to a quiet moment.
-4. **Operational mitigation today**: brief the team that BLOC_01 on Android may stay silent for ~30 s; if it does, asking the walker to step out and back into the zone usually triggers a successful retry.
+See GIVORS 2026-05-20 §M4/P9 for four confirmed session pairs (first-install restart-pairs: `5eb0`→`9qf4`, `4ha8`→`aibf`, `85iu`→`2tqf`, `ygi1`→`0vvc`).
 
-Files (when picked up): `www/app/assets/player.js`, possibly `cordova-plugin-media` (Android backend wrapper)
+Files: [www/app/assets/player.js](www/app/assets/player.js)
 
 #### R4.2 parcours_restore lifecycle + session_resume payload enrichment ✅ DONE (2026-05-18) [SAFE-TODAY]
 
@@ -1678,6 +1678,29 @@ JS-only wiring to leverage the new native actions added in Rounds 12–13. No pl
 - **session_diag flags**: `plugin_bgloc_getCLState`, `plugin_bgloc_getPowerState`, `plugin_bgloc_forceReacquire` added so post-hoc analysis can identify which APK build first carried each method.
 
 Files: `www/app/pages.js` (F-G1, F-G1b, session_diag), `www/app/assets/geoloc.js` (B4 watchdog)
+
+---
+
+### Round 16 — C4 audio `playerror` retry + A3/A1 walk lifecycle cleanup (2026-05-27) — ✅ code complete
+
+JS-only. Targets M3 (silent audio on loan-phone re-arm, P7) and R7.1/`rumx`/`vigi` iOS playerror clusters. No plugin rebuild required.
+
+**C4 — audio `playerror` retry with engine reset** (`www/app/assets/player.js`, `PlayerStep`):
+- Added `_voicePlayerrorCount`, `_lastLoadBasepath`, `_lastLoadMedia` fields. `_voicePlayerrorCount` reset in `load()` so each new voice assignment starts fresh.
+- First voice `playerror` (iOS only, when `resetAudioSession` is available): calls `cordova.plugins.audiofocus.resetAudioSession()`, then on success reloads + replays from stored args. Logs `audio_playerror_retry {attempt: 1, step, step_name}`. If the reset callback itself fails, logs `{attempt: 1, gave_up: true, reason: 'reset_failed'}` and falls through to `startAfterplay()`.
+- Second `playerror` (after the retry reload) or first `playerror` on Android (no `resetAudioSession`): logs `audio_playerror_retry {attempt: N, gave_up: true}` then calls `startAfterplay()` as before.
+- `loaderror` still routes directly to `startAfterplay()` — no retry for file-not-found; only `playerror` (stale engine handle) benefits from a reload.
+
+**A1 completion — `PAGES['end']` queue drain + SILENT_PLAYER reload** (`www/app/pages.js`):
+- Added `PAUSED_PLAYERS = []; DUCKED_PLAYERS.clear();` after the existing audio-stop block. Drains the module-global interrupt/duck queues so stale player refs from this walk cannot phantom-resume into the next visitor's session.
+- Added `SILENT_PLAYER.load(BASEURL + '/images/', {src: 'flanerie.mp3', master: 1}, false)` reload so the next walk starts from a clean looped-player instance. Directly targets the M3 silent-audio-on-first-play pattern on loan-phone re-arm.
+
+**A3 — rearm confirmation + teardown + `rdv` routing** (`www/app/pages.js`, `$('#parcours-rearm')`):
+- Added `confirm('Confirmer : la balade précédente est terminée ?')` guard at handler entry (cancel = safe default). Closes P4 (operator accidental mid-walk rearm on `oupu`).
+- On confirm: runs inline A1 teardown — `stopTracking()`, `stopAudio()`, `PAUSED_PLAYERS = []`, `DUCKED_PLAYERS.clear()`, `SILENT_PLAYER.load()`, `releaseSession()` (G1/A1).
+- Calls `resetAudioSessionForFreshParcoursStart()` (A2), then routes to `PAGE('rdv')` so the new visitor's preload + sas + walk-start flow runs cleanly. Previously the handler stayed on the parcours page, dropping the new visitor mid-walk without sas gating (P7 root cause for Justine's 4–5 silent-audio recoveries/day on the SM-A515F loan phone).
+
+Files: `www/app/assets/player.js` (C4), `www/app/pages.js` (A1 completion, A3)
 
 ---
 

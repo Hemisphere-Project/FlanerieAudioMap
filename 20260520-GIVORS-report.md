@@ -5,7 +5,7 @@
 **Field reports cross-referenced:** Mélanie (FP3 08:57), John (~16h loan phone), Justine (operator tent), unnamed teacher (iPhone 09h–09h30)  
 **Expected visitors:** ~45–50 (15–20 on loaned phones)  
 **Builds:** apk 12 (iOS) / apk 13 (Android) — apk just tracks platform, not a within-platform skew. webapp `fdf504c8` + `2f77776e` are split **roughly evenly per device** (~29 / ~35 visitor sessions), not 30/70; the version is per-device PWA cache, not a timed rollout. Which build is newer is **not confirmed** — see §11.  
-**Generated:** 2026-05-22 · **Revised:** 2026-05-27 (telemetry + code cross-check) · **Updated:** 2026-05-27 (Rounds 9–14 shipped — see §12.13)
+**Generated:** 2026-05-22 · **Revised:** 2026-05-27 (telemetry + code cross-check; M4/P9 added 2026-05-27 from operator field notes + telemetry re-analysis) · **Updated:** 2026-05-27 (Rounds 9–14 shipped — see §12.13)
 
 ---
 
@@ -31,6 +31,7 @@
 | **MODERATE** | M1 | iOS 26.4.2 GPS brief gaps (2–5 min) — walk stopped at step 15, last step never fired | 19dh, rumx | GPS-lost recovery UX |
 | **MODERATE** | M2 | step_resume_current stutter — 2 s audio jump-back; in severe cases GPS places phone just inside the adjacent zone, current step marked done prematurely, wrong step starts. List rebuilt from `stepResumeCurrent` telemetry — see §P6 | yapj, 19dh, 189t, 5kd4, c7qo, h6os, 5kkz, 2tqf (≥2×) | Gate on GPSSIGNAL_OK in spot.js |
 | **MODERATE** | M3 | Silent audio on loan-phone re-arm — walk page loads normally after 4321 GO but audio does not start; navigating to app root and back resolves it; recurs 4–5 times/day | SM-A515F loan phone (Justine, operator) | Proper walk-end shutdown + audio engine reset on new session → see P7 |
+| **MODERATE** | M4 | Android Howler cold-load race — first-install phone enters walk page, GPS fires step 0 at +0.6 s while BLOC_01_Parc is still loading; `play()` silently queues inside Howler but never fires; 15 s stuck-retry fires twice but file is still loading; audio starts 70 s late (visitor has already restarted). Loan phones unaffected (BLOC_01 pre-cached from prior sessions). Also reported: user's own phone (first-time install, 2026-05-20). → see P9 | 5eb0→9qf4, 4ha8→aibf, 85iu→2tqf, ygi1→0vvc (4 confirmed restart-pairs; all Android, none SM-A515F) | Defer Howler `play()` via `once('load', …)` when player state is `'loading'` → see A8 |
 | **MINOR** | m1 | Android OEM kill — app crashed and refired step, walk recovered. ~20 sessions had ≥1 `session_resume` (now all visible since `analyze` flags `resumes≥1`) — heaviest: f743 (7), mqgf (4), wjfo (4), 2j5u/rumx (3) | f743, mqgf, wjfo, 2j5u, rumx, **2d5g** + ~14 more | Foreground service |
 | **MINOR** | m2 | iOS audiofocus failures — 4929 events fleet-wide, never walk-breaking. Not iOS-26-only: iOS 18 devices also hit it (4rma 747 on 18.5, 7p2j 272 on 18.0) | c7qo, 4zq0, 4rma, 19dh, 7p2j, xuyx | Monitor; iOS-wide audiofocus contention |
 | **MINOR** | m3 | No walk-end shutdown — GPS/audio kept running 1–2 h post-completion, telemetry not flushed | 7p2j, xuyx, 9hjo, mwbo | Proper walk-end sequence (flush telemetry, stop engines, lock UI) |
@@ -321,6 +322,64 @@ All four fire with the phone within ~0.5 m of a zone border — inside the GPS n
 
 ---
 
+### P9 — Android Howler cold-load race on first-install walk start (M4)
+
+**Reported:** User's own phone (first-time install, 2026-05-20). After 4321 GO: walk page loaded, map was already hidden ("Je suis perdu" visible → step 0 fired), but **no audio for ~70 s**. User did 5-tap restart → onboarding again → 4321 → worked second time. Loan phones (SM-A515F) did not exhibit this — they had BLOC_01_Parc cached from prior sessions.
+
+**Telemetry evidence (2026-05-27 analysis):** Four confirmed failed-first-attempt pairs:
+
+| Failed session | Device | Start (CEST) | Successful retry |
+|---|---|---|---|
+| `5eb0` | SM-A125F (Galaxy A12) | 10:05:55 | `9qf4` (+2 min 23 s) |
+| `4ha8` | SM-A528B (Galaxy A52s) | 16:18:01 | `aibf` (+2 min 29 s) |
+| `85iu` | moto g24 power | 17:15:46 | `2tqf` (+1 min 34 s) |
+| `ygi1` | SM-A047F (Galaxy A04s) | 17:19:14 | `0vvc` (+1 min 17 s) |
+
+All four share identical telemetry:
+
+```
++0.0 s  session_start  (is_resume_branch: false)
++0.1 s  audio_play_started  (SILENT_PLAYER — flanerie.mp3 — works)
++0.6 s  step_audio_trigger  step 0, player_load_state_before_play: 'loading,empty'
++0.6 s  audio_play_requested / audio_play_gate
++0.7 s  step_fire  step 0 (map hidden → visitor sees "Je suis perdu", no audio)
++15 s   audio_play_requested  (stuck-retry)
++30 s   audio_play_stuck + audio_play_timeout  (retries: 1 — gives up)
++70 s   audio_play_started  (finally — but visitor has already restarted)
+```
+
+The 5-tap restart triggers `location.reload()`, which creates a new session file (session_end is flushed before reload). On the second attempt, BLOC_01 is already in Howler's memory from the aborted load, so `audio_play_started` fires at +0.1 s.
+
+**Mechanism:** BLOC_01_Parc_V8_CBR.mp3 is the largest file in the parcours (11.2 MB). On a first-install Android device, Howler begins loading it on prewarm. GPS fires step 0 at +0.6 s (visitor already in starting zone). `PlayerSimple.play()` is called while Howler state is `'loading'`. Howler's internal play-queue receives the call but silently fails to execute it on Android WebView — the `play` event never fires. The 15 s stuck-timeout retries once, but BLOC_01 is still loading; 15 s later it gives up. Audio eventually starts when Howler finishes loading (~70 s), but by then the visitor has restarted.
+
+**Why loan phones are unaffected:** SM-A515F phones ran 30+ re-arm sessions throughout the day. BLOC_01 was already in Howler's buffer (`step_prewarm_next` shows `already_loaded: true, already_ready: true`). No cold-load race on re-arm.
+
+**Why second attempt works:** After `location.reload()` and re-onboarding, Howler has the BLOC_01 buffer already populated from the first aborted load. Cold-load race cannot recur.
+
+**Distinction from M3 / P7:** M3 is about a *stale audio engine from a previous session* (loan phone re-arm, iOS, fixed by A2 `resetAudioSession`). M4 is an *Android Howler cold-load* issue: the audio engine is fresh, SILENT_PLAYER works, but the step audio player is in loading state when `play()` is called. Different root cause, different platform.
+
+> **This issue was first identified in [mobile-audit.md R4.1](mobile-audit.md) (2026-05-18 field test); deferred pending field validation of the R4.4 watchdog retry. GIVORS 2026-05-20 confirms the retry is insufficient (file still loading after two 15 s retries). The A8 fix resolves R4.1 definitively.**
+
+**Fix (A8):** In `PlayerSimple.play()` ([www/app/assets/player.js:967](www/app/assets/player.js#L967)), after `this._player.play()`, add a belt-and-suspenders deferred-play via Howler's `'load'` event when the player is still in loading state:
+
+```js
+this._player.play()
+// Howler's internal play-queue silently fails on Android cold-load
+// (M4/P9 — 5eb0/4ha8/85iu/ygi1 showed 70 s silence on first BLOC_01 load).
+// Explicitly defer via 'load' so play() fires the moment the file is ready.
+if (typeof this._player.state === 'function' && this._player.state() === 'loading') {
+    this._player.once('load', () => {
+        if (this._player && this._playRequested && !this._player.playing()) this._player.play()
+    })
+}
+```
+
+The `'play'` event handler already guards against double-fire (checks `_playRequested` and `_isActive`), so if Howler's internal queue happens to work on a given device, the `once('load')` handler safely no-ops. The same fix applies to the `requestAudioFocus().then(...)` branch at [player.js:980](www/app/assets/player.js#L980).
+
+This eliminates the cold-load race entirely — instead of 70 s of silence + visitor restart, audio starts within milliseconds of Howler finishing the load.
+
+---
+
 ### P8 — Stale seek-position on iOS app crash resume (`rumx`)
 
 **Observed:** `rumx` (iPhone14,5, iOS 26.4.2, 09:05:59) had 3 app crashes (`session_resume` events). All 3 resumes restore `seek_pos = 279.0 s` regardless of which step is being resumed (steps 13 and 15, twice). A fixed seek position identical across different steps indicates the resume position is not being updated in persistent storage when the step changes — the position written by a previous step's `parcours_store` interval is being applied to the new step's audio.
@@ -391,6 +450,7 @@ Inputs that shaped this plan:
 | M1 — iOS 26.4.2 short GPS gaps + stalled step 16 | B4/D2, D3, plus a step-16 cutoff-tuning side note in E4 |
 | M2 — `step_resume_current` stutter + zone overshoot (P6/P6a) | E1, E2, E3 |
 | M3 — Silent audio on loan-phone re-arm (P7) | A1 (walk-end shutdown), A2 (session-start engine reset), A3 (re-arm = end+start) |
+| M4 — Android Howler cold-load race on first-install (P9) | A8 (deferred play via Howler `once('load', …)`) |
 | m1 — Android OEM kill | B1 (memory), B2 (AlarmManager wakeup), B3 (conditional Fused), B4 (watchdog visibility) |
 | m2 — iOS audiofocus contention | C5 (request parsimony for persistent players), G1 (interruption logging) |
 | m3 — No walk-end shutdown | A1, A7 (post-walk lock screen) |
@@ -412,8 +472,8 @@ A clean **end → reset → start** boundary fixes M3, m3, P4, P7, P8, t4, and t
 1. Force a final `TELEMETRY.flush()` and await ack (or 5 s timeout). Closes R7.5 telemetry-loss caveat.
 2. Clear `state.resumeStepVoicePos = 0`, `state.lost = false`, and every `Step._done` flag. Persist once via `PARCOURS.store('walk_end')`.
 3. Existing audio stops (already present).
-4. **NEW:** rebuild SILENT_PLAYER from scratch (`new PlayerSimple(...)`); null out `PAUSED_PLAYERS`, `DUCKED_PLAYERS`.
-5. **NEW:** `cordova.plugins.audiofocus.releaseSession()` — new plugin action (G1) that calls `setActive:NO` on iOS AVAudioSession and `stopKeepalive() + cancelFocus()` on Android (today only one of those runs in cleanup).
+4. **NEW — shipped Round 16:** rebuild SILENT_PLAYER from scratch (`new PlayerSimple(...)`); null out `PAUSED_PLAYERS`, `DUCKED_PLAYERS`.
+5. **NEW — shipped Round 16 (via PAGES_CLEANUP[’parcours’] + explicit call in PAGES[’end’]):** `cordova.plugins.audiofocus.releaseSession()` — new plugin action (G1) that calls `setActive:NO` on iOS AVAudioSession and `stopKeepalive() + cancelFocus()` on Android (today only one of those runs in cleanup).
 6. Existing `GEO.stopGeoloc()` (already present).
 7. Emit `walk_end_shutdown` telemetry with what was torn down (F3).
 8. Hand off to A7 lock screen.
@@ -429,13 +489,15 @@ Closes the underlying mechanism of P7 (and Justine's "navigate away and back" wo
 
 Files: [www/app/pages.js](www/app/pages.js) (`PAGES['parcours']` entry), [www/app/assets/player.js](www/app/assets/player.js) (SILENT_PLAYER lifecycle), [cordova-plugin-audiofocus](../cordova-plugin-audiofocus/).
 
-**A3. `rearm_button` = clean end + clean start [TEST-FIRST]** — webapp.  
+**A3. `rearm_button` = clean end + clean start [TEST-FIRST — shipped 2026-05-27, Round 16]** — webapp.  
 [pages.js:2112](www/app/pages.js#L2112) currently only resets `currentStep`, clears LOST, and restarts tracking — explaining both P4 (`oupu` was re-armed mid-walk because there was no confirmation) and most of P7 (the audio engine never got reset between visitors). Update:
 
 1. Modal: "Confirmer: la balade précédente est terminée?" with cancel default; require explicit confirm tap.
 2. On confirm: run the A1 shutdown sequence (without the A7 lock-screen step).
 3. Reset PARCOURS state (already there) and call A2.
 4. Resume into `PAGES['rdv']`, not back into `parcours`.
+
+**Shipped (Round 16, 2026-05-27):** all four points above implemented. The handler is now `async`; after teardown it `await`s `resetAudioSessionForFreshParcoursStart()` then calls `PAGE('rdv')`, giving the new visitor the full preload + sas + walk-start path.
 
 Files: [www/app/pages.js](www/app/pages.js).
 
@@ -468,6 +530,11 @@ At [pages.js:1797 `PAGES['parcours']` entry](www/app/pages.js#L1797), after R6.3
 Avoids the `892p` / `c7qo` 18-step-vs-17-step skew silently.
 
 Files: [www/app/pages.js](www/app/pages.js), [www/app/assets/parcours.js](www/app/assets/parcours.js), [server.js](server.js) (add `X-Parcours-Steps` to GET + HEAD responses).
+
+**A8. Howler cold-load deferred play [SAFE-TODAY]** — webapp. Closes M4/P9.  
+In `PlayerSimple.play()` ([player.js:967](www/app/assets/player.js#L967) and the `requestAudioFocus()` branch at [player.js:980](www/app/assets/player.js#L980)): after calling `this._player.play()`, check whether Howler's state is still `'loading'` and register a `once('load', …)` callback that calls `play()` again if `_playRequested` is still true and the player isn't already playing. Howler's `'play'` event handler is idempotent against double-fire (already guards via `_playRequested`), so if Howler's internal queue eventually fires, the deferred call is a safe no-op.
+
+Files: [www/app/assets/player.js](www/app/assets/player.js).
 
 **A7. End-of-walk lock screen [SAFE-TODAY]** — webapp. Closes m3.  
 After PAGES['end'] runs its A1 sequence and the typewriter ends, render a full-screen overlay with no interactive elements — only the existing 5-tap-bottom devmode/restart pattern can dismiss it. Prevents the post-walk noise sessions and inadvertent restarts. Uses the existing tap pattern so no new gesture surface.
@@ -544,13 +611,15 @@ Files: [www/app/assets/parcours.js](www/app/assets/parcours.js) (preload pipelin
 
 **C3. `walk_start_cache_verify` event [SAFE-TODAY]** — already covered by C2.
 
-**C4. Audio playerror retry with engine reset [TEST-FIRST]** — webapp.  
+**C4. Audio playerror retry with engine reset [TEST-FIRST — shipped 2026-05-27, Round 16]** — webapp.  
 Today (P1.19) a single `audio_playerror` short-circuits to `startAfterplay()` — fatal for GIVORS where every afterplay is missing (R7.2). Instead:
 
 1. First playerror: call `cordova.plugins.audiofocus.resetAudioSession()` (G1), `PlayerSimple.clear()` + `load()` + `play()`. Telemetry `audio_playerror_retry`.
 2. Second playerror or playerror on retry path: short-circuit to afterplay as today.
 
 Targets the `rumx` / `vigi` iOS playerror clusters where post-crash audio refs are stale but the file is fine.
+
+**Shipped (Round 16, 2026-05-27):** `PlayerStep` now tracks `_voicePlayerrorCount` (reset in `load()`) and `_lastLoadBasepath` / `_lastLoadMedia`. First voice `playerror` on iOS triggers `resetAudioSession()` + reload + replay; second playerror or Android falls through to `startAfterplay()`. Telemetry: `audio_playerror_retry {attempt, step, step_name, gave_up?, reason?}`.
 
 Files: [www/app/assets/player.js](www/app/assets/player.js) (`PlayerStep` voice playerror handler).
 
@@ -1037,11 +1106,23 @@ All work from the GIVORS follow-up remediation through 2026-05-27. Detailed note
 | F-A2 `audio_session_state` | deferred, needs AF v1.6.0 | ✅ **Shipped** (Round 11) |
 | F-A3 `audio_route_changed` | deferred, needs AF v1.6.0 | ✅ **Shipped** (Round 11) |
 
+---
+
+### §12.14 Round 16 shipped (2026-05-27) — C4 + A3/A1 lifecycle cleanup
+
+JS-only batch. No plugin rebuild. Closes the M3 / P4 / P7 lifecycle gaps and the R7.1 iOS playerror cluster.
+
+| Item | Original status | Shipped status |
+|---|---|---|
+| C4 audio `playerror` retry | TEST-FIRST, phase 1B | ✅ **Shipped** — `PlayerStep` voice `playerror` now attempts `resetAudioSession()` + reload before `startAfterplay()` (Round 16) |
+| A1 `PAGES['end']` queue drain | TEST-FIRST, items 4–5 pending | ✅ **Shipped** — `PAUSED_PLAYERS` drain, `DUCKED_PLAYERS` clear, `SILENT_PLAYER` reload added (Round 16) |
+| A3 rearm confirmation + rdv routing | TEST-FIRST, pending | ✅ **Shipped** — `confirm()` guard, full A1 teardown, `releaseSession()`, `resetAudioSessionForFreshParcoursStart()`, `PAGE('rdv')` (Round 16) |
+
 #### Still open (next session or field-calibration dependent)
 
 - **B4 UI freeze-band** — `#frozen-band` overlay with "Téléphone en veille" copy. Requires `real_callback_freshness` field data to calibrate the 60 s threshold before turning it into a visible UX block.
 - **E1/E2/E3** zone-overshoot sustain gates — still need `accuracy_near_border` distribution.
 - **B3/BG-6** FusedLocationProvider Android — **elevated to strong consideration** (see B3 note above). Escalate to next plugin release if v2.6.0 field data shows ≥2 Android Doze blackouts ≥5 min on restrictive OEMs.
-- **C2/C4** audio integrity and playerror retry — still in phase 1B queue.
+- **C2** audio file integrity check — still in phase 1B queue.
 - **Phase 2** plugin rebuild (Play Store / TestFlight cycle for v2.5.0 + v2.6.0).
 
