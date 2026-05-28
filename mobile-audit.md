@@ -85,7 +85,7 @@ Each onboarding gate hard-blocks until its check passes.
 | E — Step lifecycle correctness (E1/E2/E3) | Not shipped — blocks on `accuracy_near_border` field data |
 | F — Telemetry & diagnostics (F-K1..F-N3) | All Phase 1A JS items shipped. F-A4 silence detection dropped (covered by `voice_snapshot` heuristics) |
 | G — Plugin extensions (G1–G4) | G1 (audiofocus v1.7.1 — incl. Round 21 `ExtraFocusListener`), G2 (power-opt v0.3.1), G3 (bg-geo v2.9.0), **G4 (cordova-plugin-exoplayer-simple v0.1.1 — NEW Android Media3 backend, Round 21)** all shipped |
-| H — Android audio backend (H1) | H1 (ExoPlayer plugin + `AUDIO_BACKEND_ANDROID` flag + `_backend` telemetry field) shipped — **default still `'howler'`; flip to `'exoplayer'` after one clean field test** |
+| H — Android audio backend (H1) | H1 (audio-simple plugin + `AUDIO_BACKEND_ANDROID` flag + `_backend` telemetry field) shipped — **default is now `'exoplayer'`** (canary bucket retired in Round 24 plugin rename; set `window.AUDIO_BACKEND_ANDROID = 'howler'` pre-load to opt back). Full Howler retirement still pending second clean field test. |
 | iOS native plan (H/I/J/K/L) | See §[iOS native plan (R22–R26) — settled design decisions](#ios-native-plan-r22r26--settled-design-decisions) below. All five workstreams shipped between R22 and R26. **L (CLMonitor iOS 17+)** scope reduced to visit events only via legacy `startMonitoringVisits` (CLMonitor proper deferred indefinitely). |
 
 **Open items requiring next field test data:**
