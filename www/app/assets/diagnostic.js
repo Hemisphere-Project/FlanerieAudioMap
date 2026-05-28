@@ -305,16 +305,25 @@ class DiagnosticRunner extends EventEmitter {
         return this._trackPlayer(h)
     }
 
-    // On iOS, returns a NativeMediaPlayer (file:// path, no WebKit user-gesture restriction).
-    // On Android with AUDIO_BACKEND_ANDROID === 'exoplayer', returns a plugin-side
-    // ExoPlayer-backed Player so T3/T4/T8/T9 exercise the live audio backend.
-    // Falls back to Howl on Android (default backend) / browser / when native
-    // path cannot be resolved.
+    // On iOS, returns a cordova.plugins.audio.Player when AUDIO_BACKEND_IOS ===
+    // 'audio-simple' (R25 default), else NativeMediaPlayer (cordova-plugin-media
+    // legacy path). On Android with AUDIO_BACKEND_ANDROID === 'exoplayer',
+    // returns the same cordova.plugins.audio.Player (ExoPlayer-backed) so
+    // T3/T4/T8/T9 exercise the live audio backend on both platforms. Falls
+    // back to Howl on Android (default backend) / browser / when native path
+    // cannot be resolved.
     _makeTestPlayer(src, loop) {
-        if (PLATFORM === 'ios' && typeof NativeMediaPlayer !== 'undefined') {
-            let httpSrc = BASEURL + '/images/' + src
-            let nativeSrc = typeof httpToNativePath === 'function' ? httpToNativePath(httpSrc) : null
-            if (nativeSrc) {
+        let httpSrc = BASEURL + '/images/' + src
+        let nativeSrc = typeof httpToNativePath === 'function' ? httpToNativePath(httpSrc) : null
+        if (PLATFORM === 'ios') {
+            if (nativeSrc
+                && typeof AUDIO_BACKEND_IOS !== 'undefined' && AUDIO_BACKEND_IOS === 'audio-simple'
+                && typeof cordova !== 'undefined'
+                && cordova.plugins && cordova.plugins.audio
+                && typeof cordova.plugins.audio.Player === 'function') {
+                return this._trackPlayer(new cordova.plugins.audio.Player(nativeSrc, { loop: !!loop, volume: 1.0 }))
+            }
+            if (nativeSrc && typeof NativeMediaPlayer !== 'undefined') {
                 return this._trackPlayer(new NativeMediaPlayer(nativeSrc, { loop: !!loop }))
             }
         }
@@ -323,9 +332,7 @@ class DiagnosticRunner extends EventEmitter {
             && AUDIO_BACKEND_ANDROID === 'exoplayer'
             && typeof cordova !== 'undefined'
             && cordova.plugins && cordova.plugins.audio) {
-            let httpSrc = BASEURL + '/images/' + src
-            let nativeSrc = (typeof httpToNativePath === 'function' && httpToNativePath(httpSrc)) || httpSrc
-            return this._trackPlayer(new cordova.plugins.audio.Player(nativeSrc, { loop: !!loop, volume: 1.0 }))
+            return this._trackPlayer(new cordova.plugins.audio.Player(nativeSrc || httpSrc, { loop: !!loop, volume: 1.0 }))
         }
         return this._makeTestHowl(src, loop)
     }

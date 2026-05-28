@@ -611,14 +611,17 @@ class Parcours extends EventEmitter {
 
         // R21: dual-write to NSUserDefaults (iOS only). Defensive backup of
         // resumeStepVoicePos that survives a WKWebView cache wipe. Fire-and-
-        // forget — never block store() on the native bridge.
+        // forget — never block store() on the native bridge. R25: surface
+        // migrated from cordova-plugin-audiofocus to cordova-plugin-audio-simple;
+        // NSUserDefaults keys preserved across the migration so any visitor
+        // snapshot written before the upgrade is still readable after.
         try {
             if (typeof PLATFORM !== 'undefined' && PLATFORM === 'ios'
                 && typeof cordova !== 'undefined' && cordova.plugins
-                && cordova.plugins.audiofocus
-                && typeof cordova.plugins.audiofocus.setResumeSnapshot === 'function'
+                && cordova.plugins.audio
+                && typeof cordova.plugins.audio.setResumeSnapshot === 'function'
                 && this.state.stepIndex >= 0) {
-                cordova.plugins.audiofocus.setResumeSnapshot({
+                cordova.plugins.audio.setResumeSnapshot({
                     stepId:     this.state.stepIndex,
                     seekPosSec: this.state.resumeStepVoicePos || 0,
                     pID:        this.pID || ''
@@ -664,15 +667,15 @@ class Parcours extends EventEmitter {
     _checkNativeResumeSnapshot() {
         if (typeof PLATFORM === 'undefined' || PLATFORM !== 'ios') return;
         if (typeof cordova === 'undefined' || !cordova.plugins
-            || !cordova.plugins.audiofocus
-            || typeof cordova.plugins.audiofocus.getResumeSnapshot !== 'function') return;
+            || !cordova.plugins.audio
+            || typeof cordova.plugins.audio.getResumeSnapshot !== 'function') return;
 
         let lsStepId   = this.state.stepIndex;
         let lsSeekPos  = this.state.resumeStepVoicePos || 0;
         let lsPID      = this.pID;
         let lsUpdated  = this.state.lastUpdatedMs || 0;
 
-        cordova.plugins.audiofocus.getResumeSnapshot().then((snap) => {
+        cordova.plugins.audio.getResumeSnapshot().then((snap) => {
             if (!snap || !snap.found) return;
             let pidMatches  = (snap.pID === lsPID);
             let stepMatches = (Number(snap.stepId) === Number(lsStepId));
@@ -721,12 +724,13 @@ class Parcours extends EventEmitter {
         catch (error) { console.error('Error clearing parcours store:', error); }
         // R21: also clear the native NSUserDefaults snapshot so a rearmed
         // loan phone does not resurrect the previous visitor's seek position.
+        // R25: surface migrated to cordova-plugin-audio-simple.
         try {
             if (typeof PLATFORM !== 'undefined' && PLATFORM === 'ios'
                 && typeof cordova !== 'undefined' && cordova.plugins
-                && cordova.plugins.audiofocus
-                && typeof cordova.plugins.audiofocus.clearResumeSnapshot === 'function') {
-                cordova.plugins.audiofocus.clearResumeSnapshot();
+                && cordova.plugins.audio
+                && typeof cordova.plugins.audio.clearResumeSnapshot === 'function') {
+                cordova.plugins.audio.clearResumeSnapshot();
             }
         } catch (e) { /* fire-and-forget */ }
     }

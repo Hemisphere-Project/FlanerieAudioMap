@@ -22,6 +22,19 @@ if (typeof AUDIO_BACKEND_ANDROID === 'undefined') {
     var AUDIO_BACKEND_ANDROID = (typeof window !== 'undefined' && window.AUDIO_BACKEND_ANDROID) ? window.AUDIO_BACKEND_ANDROID : 'exoplayer'
 }
 
+// iOS audio backend selector (R25, ios-native-plan §2 I.B) — 'audio-simple'
+// (cordova-plugin-audio-simple v0.3.0's AVAudioPlayer pool with single-owner
+// AVAudioSession) or 'native-media' (legacy cordova-plugin-media via
+// NativeMediaPlayer wrapper). Default 'audio-simple' from R25 so the field
+// test exercises the new backend; set window.AUDIO_BACKEND_IOS = 'native-media'
+// for emergency rollback. The `backend` field on audio_uri_resolved /
+// audio_*error telemetry events buckets post-rollout comparisons. Distinct
+// from AUDIO_BACKEND_ANDROID because the underlying engines (AVAudioPlayer
+// vs ExoPlayer) and platform behaviours diverge.
+if (typeof AUDIO_BACKEND_IOS === 'undefined') {
+    var AUDIO_BACKEND_IOS = (typeof window !== 'undefined' && window.AUDIO_BACKEND_IOS) ? window.AUDIO_BACKEND_IOS : 'audio-simple'
+}
+
 function showResumeOverlayIfNeeded(pausedCount) {
     if (pausedCount > 0) $('#resume-overlay').css('display', 'flex');
     else $('#resume-overlay').hide();
@@ -666,7 +679,19 @@ class PlayerSimple extends EventEmitter
         this._backend = 'howler'   // default; set per-branch below
         if (PLATFORM === 'ios') {
             let nativeSrc = httpToNativePath(fullSrc)
-            if (nativeSrc) {
+            if (nativeSrc
+                && AUDIO_BACKEND_IOS === 'audio-simple'
+                && typeof cordova !== 'undefined'
+                && cordova.plugins && cordova.plugins.audio
+                && typeof cordova.plugins.audio.Player === 'function') {
+                // R25 iOS native engine: AVAudioPlayer pool with single-owner
+                // AVAudioSession. Same Howler-shaped Player class used on
+                // Android (ExoPlayer backend) so this branch can share JS.
+                this._player = new cordova.plugins.audio.Player(nativeSrc, { loop: this._loop, volume: 1.0 })
+                this._backend = 'audio-simple'
+            } else if (nativeSrc) {
+                // Legacy iOS path — cordova-plugin-media via NativeMediaPlayer.
+                // Kept as the AUDIO_BACKEND_IOS='native-media' rollback target.
                 this._player = new NativeMediaPlayer(nativeSrc, { loop: this._loop })
                 this._backend = 'native'
             } else {

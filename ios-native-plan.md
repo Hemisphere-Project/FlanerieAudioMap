@@ -107,7 +107,7 @@ If iOS relaunches us from terminated on a region cross:
 
 ---
 
-## 2. **Workstream I — Native iOS audio engine** *(major; phase 1 shipped Round 24 / audio-simple v0.2.0 rename; phase 2 iOS engine + cutover in Round 25)*
+## 2. **Workstream I — Native iOS audio engine** *(major; phase 1 ✅ Round 24 / audio-simple v0.2.0 rename; phase 2 ✅ Round 25 / audio-simple v0.3.0 + audiofocus v1.9.0 — awaiting iOS device build/test)*
 
 ### Why
 
@@ -282,8 +282,8 @@ Suggested sequencing (all decisions settled):
 3. **Workstream H (rail of wake-up regions)** — ✅ Round 23 (bg-geo v2.10.0).
 4. **Workstream I (native audio engine)** — split into two phases:
    - **I.A** plugin rename `exoplayer-simple` → `audio-simple` (Decision 2.A) — ✅ Round 24 (audio-simple v0.2.0).
-   - **I.B** iOS native audio engine + AVAudioSession ownership migration from audiofocus + JS cutover (Decision 2.C single cutover) — **next, Round 25.**
-5. **Workstream L (CLMonitor)** — folded into workstream H's implementation choice. Currently shipped on legacy `startMonitoringForRegion:` (iOS 13+). CLMonitor upgrade (with visit events per Decision 5 Option B) deferred to a follow-up round on iOS 17+ devices.
+   - **I.B** iOS native audio engine + AVAudioSession migration from audiofocus + JS cutover (Decision 2.C single cutover) — ✅ Round 25 (audio-simple v0.3.0 + audiofocus v1.9.0). `AUDIO_BACKEND_IOS='audio-simple'` flag drives the choice; `'native-media'` keeps the cordova-plugin-media path for emergency rollback.
+5. **Workstream L (CLMonitor)** — folded into workstream H's implementation choice. Currently shipped on legacy `startMonitoringForRegion:` (iOS 13+). CLMonitor upgrade (with visit events per Decision 5 Option B) deferred to a follow-up round on iOS 17+ devices. **Next remaining iOS-native-plan workstream.**
 
 After each: bump fork version, commit dirty repos, re-install in FlanerieCordova, regenerate package-lock, ship a build for VILLEURBANNE.
 
