@@ -8,6 +8,20 @@ var AUDIOFOCUS_DUCK_FACTOR = 0.25
 // broken locked-screen audio path. Reset on app reload only.
 var IOS_NATIVE_FALLBACK_DETECTED = false
 
+// Android audio backend selector — 'howler' (legacy WebView-bound) or
+// 'exoplayer' (cordova-plugin-exoplayer-simple, AndroidX Media3, hosted in a
+// MediaSessionService for background-reliable playback). Default 'howler'
+// during initial rollout; flip to 'exoplayer' once one clean field test
+// validates the new backend. Per-session value is captured into session_diag
+// and into audio_uri_resolved / audio_*error events via `backend` field so
+// post-rollout analyze.mjs can bucket comparisons cleanly.
+//
+// Override at runtime via devmode or via window.AUDIO_BACKEND_ANDROID before
+// the first PlayerSimple is constructed (page load).
+if (typeof AUDIO_BACKEND_ANDROID === 'undefined') {
+    var AUDIO_BACKEND_ANDROID = (typeof window !== 'undefined' && window.AUDIO_BACKEND_ANDROID) ? window.AUDIO_BACKEND_ANDROID : 'howler'
+}
+
 function showResumeOverlayIfNeeded(pausedCount) {
     if (pausedCount > 0) $('#resume-overlay').css('display', 'flex');
     else $('#resume-overlay').hide();
@@ -594,8 +608,8 @@ class PlayerSimple extends EventEmitter
                 error: message,
                 error_type: errorType,
                 error_code: code,
-                backend: this._isNativeFallback ? 'howler-fallback'
-                    : (PLATFORM === 'ios' ? 'native' : 'howler'),
+                backend: this._backend || (this._isNativeFallback ? 'howler-fallback'
+                    : (PLATFORM === 'ios' ? 'native' : 'howler')),
                 cleared: !this._player
             }, extra))
         }
@@ -649,10 +663,12 @@ class PlayerSimple extends EventEmitter
         this.clear()
 
         this._isNativeFallback = false
+        this._backend = 'howler'   // default; set per-branch below
         if (PLATFORM === 'ios') {
             let nativeSrc = httpToNativePath(fullSrc)
             if (nativeSrc) {
                 this._player = new NativeMediaPlayer(nativeSrc, { loop: this._loop })
+                this._backend = 'native'
             } else {
                 // FATAL on iOS — Howler cannot start playback from a background GPS
                 // callback when the phone is locked. checkaudio gates on this flag.
@@ -665,9 +681,23 @@ class PlayerSimple extends EventEmitter
                     has_localapp: !!document.LOCALAPP_PATH_NATIVE,
                 })
                 this._player = new Howl({ src: fullSrc, loop: this._loop, autoplay: false, volume: 1, html5: true })
+                this._backend = 'howler-fallback'
             }
+        } else if (AUDIO_BACKEND_ANDROID === 'exoplayer'
+                   && typeof cordova !== 'undefined'
+                   && cordova.plugins && cordova.plugins.exoplayer) {
+            // Android Media3 (ExoPlayer) backend. Prefer a file:// URI so
+            // Media3 reads directly via FileDataSource and bypasses the
+            // embedded HTTP server. httpToNativePath() returns null when the
+            // native path was never populated (pre-apputils-patch builds);
+            // ExoPlayer can still read http://localhost via DefaultHttpDataSource,
+            // just slower — fall back rather than refusing to play.
+            let nativeSrc = httpToNativePath(fullSrc) || fullSrc
+            this._player = new cordova.plugins.exoplayer.Player(nativeSrc, { loop: this._loop, volume: 1.0 })
+            this._backend = 'exoplayer'
         } else {
             this._player = new Howl({ src: fullSrc, loop: this._loop, autoplay: false, volume: 1, html5: false })
+            this._backend = 'howler'
         }
 
         // Register the player in the global ALL_PLAYERS array
@@ -685,8 +715,7 @@ class PlayerSimple extends EventEmitter
                 resolved: resolvedSrc,
                 base: basepath,
                 media_src: media.src,
-                backend: this._isNativeFallback ? 'howler-fallback'
-                    : (PLATFORM === 'ios' ? 'native' : 'howler'),
+                backend: this._backend,
             })
         }
 

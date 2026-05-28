@@ -306,7 +306,10 @@ class DiagnosticRunner extends EventEmitter {
     }
 
     // On iOS, returns a NativeMediaPlayer (file:// path, no WebKit user-gesture restriction).
-    // Falls back to Howl on Android/browser or when native path cannot be resolved.
+    // On Android with AUDIO_BACKEND_ANDROID === 'exoplayer', returns a plugin-side
+    // ExoPlayer-backed Player so T3/T4/T8/T9 exercise the live audio backend.
+    // Falls back to Howl on Android (default backend) / browser / when native
+    // path cannot be resolved.
     _makeTestPlayer(src, loop) {
         if (PLATFORM === 'ios' && typeof NativeMediaPlayer !== 'undefined') {
             let httpSrc = BASEURL + '/images/' + src
@@ -314,6 +317,15 @@ class DiagnosticRunner extends EventEmitter {
             if (nativeSrc) {
                 return this._trackPlayer(new NativeMediaPlayer(nativeSrc, { loop: !!loop }))
             }
+        }
+        if (PLATFORM === 'android'
+            && typeof AUDIO_BACKEND_ANDROID !== 'undefined'
+            && AUDIO_BACKEND_ANDROID === 'exoplayer'
+            && typeof cordova !== 'undefined'
+            && cordova.plugins && cordova.plugins.exoplayer) {
+            let httpSrc = BASEURL + '/images/' + src
+            let nativeSrc = (typeof httpToNativePath === 'function' && httpToNativePath(httpSrc)) || httpSrc
+            return this._trackPlayer(new cordova.plugins.exoplayer.Player(nativeSrc, { loop: !!loop, volume: 1.0 }))
         }
         return this._makeTestHowl(src, loop)
     }

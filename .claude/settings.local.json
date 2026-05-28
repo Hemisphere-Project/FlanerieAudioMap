@@ -69,7 +69,10 @@
       "Bash(node scripts/sync-workspace-plugins.mjs --apply --no-cordova)",
       "Bash(node -e \"require\\('./www/app/pages.js'\\)\")",
       "Bash(node --check www/app/pages.js)",
-      "Bash(node --check www/app/assets/geoloc.js)"
+      "Bash(node --check www/app/assets/geoloc.js)",
+      "Bash(cordova plugin *)",
+      "Bash(node scripts/sync-workspace-plugins.mjs --plugins cordova-plugin-exoplayer-simple)",
+      "Bash(node scripts/sync-workspace-plugins.mjs --apply --plugins cordova-plugin-exoplayer-simple)"
     ]
   }
 }

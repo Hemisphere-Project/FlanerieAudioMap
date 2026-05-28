@@ -129,6 +129,35 @@ function resetAudioSessionForFreshParcoursStart()
     });
 }
 
+// Wrap cordova.plugins.exoplayer.releaseAll in a promise. Tears down every
+// ExoPlayer instance the plugin holds and stops the MediaSessionService FG
+// notification (ID 7375). Called BEFORE releaseAudiofocusSession at walk end
+// (A1) and rearm (A3) so the ExoPlayer-side FG service exits before its
+// AudioFocusService counterpart — see ordered teardown decision in
+// mobile-audit.md (Round 21).
+//
+// No-op when the plugin isn't installed or AUDIO_BACKEND_ANDROID === 'howler'
+// (Howler players have no native handles to tear down).
+function releaseExoPlayerAll(source)
+{
+    if (typeof cordova === 'undefined' || !cordova.plugins || !cordova.plugins.exoplayer ||
+        typeof cordova.plugins.exoplayer.releaseAll !== 'function') {
+        return Promise.resolve(false);
+    }
+    return new Promise((resolve) => {
+        cordova.plugins.exoplayer.releaseAll(
+            () => {
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('exoplayer_release_all', source ? {source: source} : {});
+                resolve(true);
+            },
+            (err) => {
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('exoplayer_release_all_error', source ? {source: source, error: String(err)} : {error: String(err)});
+                resolve(false);
+            }
+        );
+    });
+}
+
 // Wrap audiofocus.releaseSession in a promise. Used at A3 rearm to ensure the
 // release (setActive:NO on iOS) completes before resetAudioSession's
 // setCategory + setActive:YES — otherwise the late deactivate callback can
@@ -2286,6 +2315,12 @@ PAGES['end'] = () => {
     // (M3 silent-audio-on-first-play on loan-phone re-arm).
     SILENT_PLAYER.load(BASEURL + '/images/', {src: 'flanerie.mp3', master: 1}, false);
 
+    // Round 21: tear down the ExoPlayer plugin's native players + MediaSession
+    // FG service BEFORE releasing audiofocus, so ExoPlayer's FG notification
+    // (ID 7375) exits ahead of AudioFocusService's (ID 7374). The ordering
+    // mirrors the rearm path below.
+    releaseExoPlayerAll('walk_end');
+
     // G1/A1: fully release the session-scoped audiofocus state. stopKeepalive
     // alone tears down the foreground service, but it intentionally leaves some
     // audio-session state alive; that's useful across page switches, but wrong
@@ -2444,6 +2479,13 @@ $('#parcours-rearm').click(async () => {
     PAUSED_PLAYERS = [];
     DUCKED_PLAYERS.clear();
     SILENT_PLAYER.load(BASEURL + '/images/', {src: 'flanerie.mp3', master: 1}, false);
+
+    // Round 21: release ExoPlayer-plugin players + its FG service before the
+    // audiofocus session teardown, so the ExoPlayer FG notification exits
+    // ahead of AudioFocusService's. Awaited for symmetry with the audiofocus
+    // release below — the new visitor's resetAudioSession must run against
+    // a fully torn-down player layer.
+    await releaseExoPlayerAll('rearm');
 
     // A3/G1: release the full session-scoped audiofocus state (stopKeepalive
     // alone leaves iOS AVAudioSession active; releaseSession does the teardown).
