@@ -1222,6 +1222,16 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
         if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_rail_wake', payload || {});
     });
 
+    // R26 / BG-12 (iOS, v2.11.0): CLVisit fired. iOS infers the user has
+    // stopped at a place; we log it as gps_visit_event for telemetry only.
+    // Decision 5 Option B in ios-native-plan.md — measuring whether visit
+    // detection correlates with step dwell time before considering it as a
+    // step-confirm signal. Pairs naturally with E1/E2/E3 zone-overshoot
+    // calibration from VILLEURBANNE field data.
+    bgGeo.on('visit', function(payload) {
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_visit_event', payload || {});
+    });
+
     if (!backgroundGeolocSetup) {
         // F-G2 — bridge document.pause/resume + visibilitychange into
         // app_visibility telemetry. Today the only emitter is bgGeo's

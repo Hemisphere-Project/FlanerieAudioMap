@@ -266,6 +266,8 @@ Two places, both inside workstream H:
 
 **SETTLED — 5: Option B (extended).** Use `CLMonitor` on iOS 17+ for the rail (cleaner async lifecycle, Apple's documented forward path for region monitoring). Also subscribe to `CLMonitor` visit events and forward them to JS as telemetry (`gps_visit_event`: `latitude`, `longitude`, `horizontalAccuracy`, `arrivalDate`, `departureDate` when available). No behaviour change — visit events are observation-only. Goal: measure at VILLEURBANNE whether iOS visit detection correlates with step dwell time; could eventually power a smarter "user lingered" confirmation gate. On iOS < 17: fall back to legacy `startMonitoringForRegion:`; no visit events (graceful degradation).
 
+**SHIPPED — Round 26 (bg-geo v2.11.0), scope reduced.** Implemented visit events via the legacy `CLLocationManager.startMonitoringVisits` / `locationManager:didVisit:` path (CoreLocation since iOS 8) — no Swift bridge, no iOS-17 version branch, ~50 LOC. Decision at implementation time: CLMonitor proper offers cleaner code but no observable benefit over the existing legacy region API, while visit events were the actual telemetry value Decision 5 Option B was after. CLMonitor migration deferred indefinitely. Emits `gps_visit_event` with `latitude`, `longitude`, `horizontal_accuracy_m`, `arrival_date` (ISO 8601 UTC), `departure_date` (ISO 8601 UTC or null), `arrival_age_ms`, `departure_known` — webapp subscribes through the existing bgGeo event channel.
+
 ### Risk
 
 - Swift requirement: `CLMonitor` is async/await. Easier to wrap in Swift than ObjC. Adds a `.swift` file to the plugin (bridge with `@objc` exported wrapper).
@@ -283,7 +285,7 @@ Suggested sequencing (all decisions settled):
 4. **Workstream I (native audio engine)** — split into two phases:
    - **I.A** plugin rename `exoplayer-simple` → `audio-simple` (Decision 2.A) — ✅ Round 24 (audio-simple v0.2.0).
    - **I.B** iOS native audio engine + AVAudioSession migration from audiofocus + JS cutover (Decision 2.C single cutover) — ✅ Round 25 (audio-simple v0.3.0 + audiofocus v1.9.0). `AUDIO_BACKEND_IOS='audio-simple'` flag drives the choice; `'native-media'` keeps the cordova-plugin-media path for emergency rollback.
-5. **Workstream L (CLMonitor)** — folded into workstream H's implementation choice. Currently shipped on legacy `startMonitoringForRegion:` (iOS 13+). CLMonitor upgrade (with visit events per Decision 5 Option B) deferred to a follow-up round on iOS 17+ devices. **Next remaining iOS-native-plan workstream.**
+5. **Workstream L (CLMonitor)** — folded into workstream H's implementation choice. Legacy `startMonitoringForRegion:` shipped in Round 23 (iOS 13+). Visit-events sub-scope ✅ Round 26 (bg-geo v2.11.0, `startMonitoringVisits` via legacy CLLocationManagerDelegate — no Swift bridge required). CLMonitor proper deferred indefinitely.
 
 After each: bump fork version, commit dirty repos, re-install in FlanerieCordova, regenerate package-lock, ship a build for VILLEURBANNE.
 
