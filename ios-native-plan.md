@@ -22,7 +22,7 @@ Versions in the build today: `cordova-background-geolocation-plugin@2.9.0`, `cor
 
 ---
 
-## 1. **Workstream H — GPS rail of wake-up regions** *(major; DISCUSS before implementing)*
+## 1. **Workstream H — GPS rail of wake-up regions** *(major; decisions settled — ready to implement)*
 
 ### Idea (refined per your feedback)
 
@@ -49,17 +49,21 @@ Step-trigger accuracy is **unchanged**. The regions are pure plumbing: they hand
 
 ### Layout
 
-Two layout choices to settle.
+**SETTLED — 1.A: transition-midpoint circles.**
 
-> `DECISION 1.A — Rail source:`
-> - **Option A** — use each step zone's centroid as a rail point, drop a 250 m radius region on each. Pros: zero new data, follows the actual visit order. Cons: rail density follows step density, large gaps where steps are sparse.
-> - **Option B** — sample N evenly-spaced points along an explicit route polyline (if the parcours has one) or along the chain of step centroids. Pros: even spatial coverage. Cons: needs a route polyline source or a polyline-from-step-chain interpolator.
-> - **Option C (recommended)** — hybrid: start with step centroids, then fill remaining slots with mid-segment points where two adjacent step centroids are >300 m apart. Stays under 20 regions for FLANERIE_ELYSEE / FLANERIE_GIVORS.
+**Context:** FLANERIE walks have ~17 contiguous steps whose polygons touch or are very close. Centering a region on a step centroid would place it well inside the zone — the region would fire too late (or never, if the user already crossed during a GPS stall). And we emphatically do not want to make the zone trigger coarser.
 
-> `DECISION 1.B — Re-registration on the move:`
-> - **Static** — register all rail regions at parcours start; never re-register. Simplest. Fails only if the route is too long to fit 20 × 200 m.
-> - **Dynamic sliding window** — register only the 15 regions closest to the current position; drop trailing regions and add upcoming ones every few minutes. More code, supports unbounded route length. Probably overkill for current parcours.
-> - **Recommendation:** static for v1. Add a `region_count` check at parcours start; warn in DEV if the rail spec exceeds 20.
+**Is the existing SLC + NSTimer keepalive (the "B/C" stack) already sufficient?**
+
+Not reliably. The 15 s NSTimer keepalive fires regardless of CLLocationManager state, but it can only re-deliver the last cached `clm.location` — it cannot restart stalled standard updates on its own. SLC fires on cell-tower significant changes (~300–500 m thresholds), giving us 2–4 events across a typical 1–2 km walk — coverage for 2–4 of the 16 step transitions, not all 16. Crucially, when the WKWebView is suspended in deep background, JS does not run at all: the B4 watchdog timer, telemetry, and the JS-side forceReacquire call all stop. Only NSRunLoop-scheduled native timers and OS-level callbacks (region events) still fire. Region events therefore fill a gap the keepalive + SLC stack genuinely cannot cover.
+
+**Settled layout:** one `CLCircularRegion` at the geographic midpoint between consecutive step centroids — i.e., one circle per step *transition*, not per step. 17 steps → 16 transition circles, comfortably under the 20-region OS limit.
+
+- **Radius: 100 m.** The circle fires when the user is ~100 m from the boundary, on approach. GPS has ~100 m of walking time (~80 s at 1.2 m/s) to recover before the fine-grained polygon entry is checked. Tight steps where adjacent centroids are <200 m apart will produce overlapping circles — that is fine; they're purely wakeup, not semantic boundaries.
+- **Not "before" the preceding step:** a circle at the midpoint between step N and step N+1 sits at the far edge of step N. The walker is already through most of step N's audio before the circle fires. No premature trigger.
+- **Practical note:** for steps whose shared polygon boundary can be computed (convex hull intersection point), that point is slightly more accurate than the centroid midpoint. Start with centroid midpoint; refine if needed after VILLEURBANNE data.
+
+**SETTLED — 1.B: static registration.** Register all 16 circles at parcours start. Add a DEV-mode assertion if `region_count` > 20.
 
 ### Files to touch
 
@@ -72,7 +76,7 @@ Two layout choices to settle.
   - New CDV action `configureRail(regions[])` — JS passes the precomputed rail.
   - New event name `region_wake` sent through the existing `addEventListener` callback channel.
 - `www/app/assets/geoloc.js`
-  - On parcours start: compute rail (per Decision 1.A) and call `configureRail`.
+  - On parcours start: compute 16 transition-midpoint circles (midpoint between each consecutive pair of step centroids, 100 m radius) and call `configureRail`.
   - On `region_wake` event: just log telemetry; no behaviour. The whole point is that fine logic stays unchanged.
 - `www/app/assets/telemetry.js`
   - New event: `gps_rail_wake` (region id, last_real_callback_age_ms, did_force_reacquire, app_state).
@@ -98,15 +102,12 @@ If iOS relaunches us from terminated on a region cross:
 - **iOS asks for "Always" + "While Using"** — already requested by existing code path. No new permission prompt.
 - **Region monitoring counts against power budget?** Apple says no — it's the optimised path. SLC + regions are explicitly cited as low-power monitors.
 - **What if iOS decides to ignore some regions** due to GPS/Wi-Fi unavailability indoors? Some museums might mute regions until a fix is acquired. For an outdoor walk this is unlikely to matter.
-- **Throttling `_doForceReacquire`:** current code allows max 3 per session. Region wakes could legitimately trip this on a bad iOS 26.3.x walk. **Suggestion:** raise to 10 and gate by "only if real callbacks stalled >30 s." Confirm OK.
-
-> `DECISION 1.C — Throttle:` keep max 3 / session, or raise to 10? Recommendation: 10, gated by 30 s stall.
-
-> `DECISION 1.D — Should rail entries also nudge the audio layer?` Recommendation: **no.** Audio is owned by the audio plugin; coupling adds surface area. The rail's job is GPS only.
+- **Throttling `_doForceReacquire`:** ~~current code allows max 3 per session~~ → **SETTLED 1.C: raise to 10 per session, gated by "real callbacks stalled > 30 s."** 3 was sized for the JS-side B4 watchdog; rail regions can fire 16 times in a walk, so 3 would be exhausted in the first quarter. The 30 s gate prevents thrashing during transient signal loss (normal brief drops don't warrant a full CLLocationManager restart).
+- **SETTLED 1.D: rail entries do not nudge the audio layer.** Audio is owned by the audio plugin; coupling adds surface area. The rail's job is GPS only.
 
 ---
 
-## 2. **Workstream I — Native iOS audio engine** *(major; DISCUSS plugin home before implementing)*
+## 2. **Workstream I — Native iOS audio engine** *(major; decisions settled — ready to implement)*
 
 ### Why
 
@@ -130,21 +131,7 @@ Android's ExoPlayer move solved the equivalent problems by:
 - Position polling stays at 250 ms via `addPeriodicTimeObserverForInterval`.
 - Errors reported with high-fidelity `AVPlayerItemFailedToPlayToEndTimeNotification` reason codes (vs cordova-plugin-media's generic MEDIA_ERR_*).
 
-> `DECISION 2.A — Plugin home:`
->
-> **Option A — rename `cordova-plugin-exoplayer-simple` → `cordova-plugin-audio-simple`, add iOS implementation alongside Android.** One JS API for both platforms, native-per-platform. AVAudioSession ownership moves here. `cordova-plugin-audiofocus` retains *only* AudioFocus / FG-service concerns (Android) and interruption-observer-as-telemetry (iOS).
-> - Pros: symmetric mental model, single import in `player.js`, easier maintenance.
-> - Cons: bigger churn (rename touches FlanerieCordova installer; the plugin-upgrade skill needs an entry update).
->
-> **Option B — keep `cordova-plugin-exoplayer-simple` Android-only, create a new sibling `cordova-plugin-native-audio-ios`.** Two plugins, two namespaces.
-> - Pros: no renames, plugins keep platform-specific naming.
-> - Cons: JS layer in `player.js` has to switch on PLATFORM and call two different cordova plugins. We already have `PlayerSimple.iOS = NativeMediaPlayer` vs `Howler`; this perpetuates the dual code paths.
->
-> **Option C — add iOS engine to `cordova-plugin-audiofocus` directly.** Lightest delta: AVAudioSession is already owned there.
-> - Pros: minimum file churn, session and engine live together.
-> - Cons: `cordova-plugin-audiofocus` becomes a misnomer — it'd own audio engine, audio focus, and session. Concept creep.
->
-> **My recommendation:** Option A. Rename is a one-time cost (plugin-upgrade skill update + a `plugin.xml` rename + `package.json` rename + one `cordova plugin remove/add` cycle). Symmetric JS API is worth it long-term, and it matches the user's instinct ("merge into exoplayer-simple").
+**SETTLED — 2.A: Option A — rename `cordova-plugin-exoplayer-simple` → `cordova-plugin-audio-simple`, add iOS implementation alongside Android.** One JS API for both platforms, native-per-platform. AVAudioSession ownership migrates here from `cordova-plugin-audiofocus`. `cordova-plugin-audiofocus` retains Android FG-service + audiofocus concerns and the iOS interruption-observer-as-telemetry path only. Rename is a one-time cost: `plugin-upgrade` skill entry update + `plugin.xml`/`package.json` rename + one `cordova plugin remove/add` cycle in FlanerieCordova.
 
 ### JS contract (regardless of plugin home)
 
@@ -180,19 +167,14 @@ This maps 1:1 to what `PlayerStep` / `PlayerSimple` currently consume.
 
 Important detail: a region-wake event (workstream H) may arrive while the WebView is suspended. If we want audio to start in that window without waiting for JS bootstrap, the native player needs to support a **"resume current step"** path callable directly from `MAURRawLocationProvider`:
 
-> `DECISION 2.B — Cross-plugin direct call:`
-> - **Option A** — native bg-geo plugin can call into native audio plugin via a shared singleton (lightweight, but couples two plugins at the Objective-C level).
-> - **Option B** — bg-geo only emits events; audio plugin reacts via a JS roundtrip after WebView resume. Slower (loses ~200–500 ms) but cleanly decoupled.
-> - **My recommendation:** B for v1. The 200–500 ms is dwarfed by AVPlayerItem load time. Revisit if cold relaunch audio start is too slow in the field.
+**SETTLED — 2.B: JS-mediated only (Option B).** Region-wake events are not precise enough to serve as actual step triggers — they fire ~100 m before a zone boundary, not at it. Their only job is to restart the GPS stack. Audio never starts from a region wake directly; it starts only when the fine-grained JS zone-check fires on a fresh real CLLocationManager callback. The 200–500 ms JS roundtrip delay is irrelevant in that model. Keeps bg-geo and audio-simple decoupled at the ObjC level.
 
 ### Risks
 
 - iOS 17+ AVAudioPlayer behaviour change around prepared-but-not-played files. AVQueuePlayer is the documented forward path.
 - `replaceCurrentItem` has a known short interruption (~10–50 ms). Acceptable for voice→afterplay but if we want it imperceptible we'd need a parallel-tracks crossfade. Defer to round-2 if needed.
 - AVAudioSession Playback category interacts with Siri / phone calls — same surface as today; the C6 interruption-without-ShouldResume fix in audiofocus carries over.
-- MIGRATION: we need to ship a build where both old (`cordova-plugin-media`-based) and new (audioSimple) paths coexist briefly for safety, or do a single-cutover. Recommend single cutover with a feature flag for emergency rollback.
-
-> `DECISION 2.C — Migration strategy:` single cutover + feature flag (default new path on, env override to old path), or graceful coexistence for one field test? Recommend cutover.
+- MIGRATION: **SETTLED 2.C: single cutover.** `NativeMediaPlayer` internals replaced with `audioSimple.*` calls in one round; external Howler-compatible API preserved so `PlayerSimple` / `PlayerStep` call sites are unchanged. Add a JS constant `AUDIO_ENGINE = 'audio-simple'` (was `'native-media'`) for emergency telemetry triage but no runtime toggle.
 
 ---
 
@@ -282,12 +264,7 @@ Two places, both inside workstream H:
 
 ### Scope question
 
-> `DECISION 5 — CLMonitor scope:`
-> - **A (minimal)** — use CLMonitor only on iOS 17+ for the rail; same semantics as legacy regions. Cost: ~half a day. Benefit: forward-compatible code.
-> - **B (extended)** — also wire visit events into telemetry (no behaviour change yet) to measure whether "stopped" detection is reliable enough to use as a step-confirm signal later.
-> - **C (skip)** — stay on legacy `startMonitoringForRegion:` for everything. iOS 13+ minimum, no branching. Defer CLMonitor until we have a concrete use case.
->
-> **Recommendation:** A. Modernise the new code we're writing; don't expand surface area until there's evidence visit events help.
+**SETTLED — 5: Option B (extended).** Use `CLMonitor` on iOS 17+ for the rail (cleaner async lifecycle, Apple's documented forward path for region monitoring). Also subscribe to `CLMonitor` visit events and forward them to JS as telemetry (`gps_visit_event`: `latitude`, `longitude`, `horizontalAccuracy`, `arrivalDate`, `departureDate` when available). No behaviour change — visit events are observation-only. Goal: measure at VILLEURBANNE whether iOS visit detection correlates with step dwell time; could eventually power a smarter "user lingered" confirmation gate. On iOS < 17: fall back to legacy `startMonitoringForRegion:`; no visit events (graceful degradation).
 
 ### Risk
 
@@ -298,7 +275,7 @@ Two places, both inside workstream H:
 
 ## 6. Order of implementation if we proceed with everything
 
-Suggested sequencing once the DISCUSS items are resolved:
+Suggested sequencing (all decisions settled):
 
 1. **Workstream K (native step-state cache)** — small, no architectural dependency. Lands first as risk-reduction infrastructure.
 2. **Workstream J (MPNowPlayingInfo + locked controls)** — small, fits inside the current audiofocus plugin even before Decision 2.A is settled.
@@ -320,17 +297,17 @@ Listing explicitly so we don't oversell:
 
 ---
 
-## 8. Open decisions summary
+## 8. Decisions — all settled
 
-| # | Decision | Recommendation |
+| # | Decision | Settled |
 |---|---|---|
-| 1.A | Rail layout source | Option C — hybrid (centroids + mid-segment fills) |
-| 1.B | Static vs dynamic rail | Static for v1 |
-| 1.C | forceReacquire throttle | 10 / session, gated by 30 s stall |
+| 1.A | Rail layout source | Transition midpoints (centroid midpoint between consecutive steps), 16 circles @ 100 m radius |
+| 1.B | Static vs dynamic rail | Static; DEV assert if region_count > 20 |
+| 1.C | forceReacquire throttle | 10 / session, gated by real-callback stall > 30 s |
 | 1.D | Rail entries nudge audio layer? | No |
-| 2.A | Plugin home for native audio | Option A — rename exoplayer-simple → audio-simple |
-| 2.B | bg-geo → audio cross-plugin call | Option B — JS-mediated |
-| 2.C | Audio migration strategy | Single cutover + feature flag |
-| 5   | CLMonitor scope | Option A — minimal, iOS 17+ branch for the rail only |
+| 2.A | Plugin home for native audio | Option A — rename exoplayer-simple → audio-simple; AVAudioSession ownership migrates there |
+| 2.B | bg-geo → audio cross-plugin call | Option B — JS-mediated; region-wake is wakeup-only, not a trigger |
+| 2.C | Audio migration strategy | Single cutover; `AUDIO_ENGINE` constant for telemetry, no runtime toggle |
+| 5   | CLMonitor scope | Option B — rail on CLMonitor (iOS 17+) + visit events wired to telemetry; fallback to legacy regions on iOS < 17 |
 
-Once these are settled, I can produce per-workstream implementation tickets matching the round-format used in `mobile-audit.md`.
+All decisions settled. Next step: per-workstream implementation rounds in `mobile-audit.md` format.
