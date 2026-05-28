@@ -72,7 +72,20 @@
       "Bash(node --check www/app/assets/geoloc.js)",
       "Bash(cordova plugin *)",
       "Bash(node scripts/sync-workspace-plugins.mjs --plugins cordova-plugin-exoplayer-simple)",
-      "Bash(node scripts/sync-workspace-plugins.mjs --apply --plugins cordova-plugin-exoplayer-simple)"
+      "Bash(node scripts/sync-workspace-plugins.mjs --apply --plugins cordova-plugin-exoplayer-simple)",
+      "Bash(adb devices *)",
+      "Bash(adb shell *)",
+      "Bash(cordova build *)",
+      "Bash(./tools/gradlew :app:processDebugResources --stacktrace)",
+      "Bash(./tools/gradlew --stop)",
+      "Bash(cordova prepare *)",
+      "Bash(adb logcat *)",
+      "Bash(cordova run *)",
+      "Bash(node scripts/sync-workspace-plugins.mjs --apply --plugins cordova-background-geolocation-plugin,cordova-plugin-exoplayer-simple)",
+      "Bash(adb push *)"
+    ],
+    "additionalDirectories": [
+      "/tmp"
     ]
   }
 }
