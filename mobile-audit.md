@@ -1,8 +1,8 @@
 # Mobile Audit & Remediation Plan
 
 **Original:** 2026-04-27
-**Last updated:** 2026-05-27 (consolidated; verification audit of all shipped items completed)
-**Scope:** Cordova launcher (FlanerieCordova) + downloaded local webapp (FlanerieAudioMap) + three forked native plugins
+**Last updated:** 2026-05-28 (Round 21: cordova-plugin-exoplayer-simple v0.1.1 + audiofocus v1.7.1 cross-plugin focus listener)
+**Scope:** Cordova launcher (FlanerieCordova) + downloaded local webapp (FlanerieAudioMap) + four forked native plugins
 **Field tests so far:** ELYSEE (multiple), FRAPPAZ, GUILLOTIÈRE (2024-12), GIVORS (2026-05-20). Next: VILLEURBANNE.
 
 ## Field Safety Legend
@@ -70,9 +70,10 @@ Each onboarding gate hard-blocks until its check passes.
 **Plugin versions in current build:**
 | Plugin | Version | Lockfile (FlanerieCordova) |
 |---|---|---|
-| `cordova-plugin-audiofocus` | 1.6.0 | ✅ pinned |
+| `cordova-plugin-audiofocus` | 1.7.1 | ✅ pinned (Round 21: `ExtraFocusListener` cross-plugin API) |
 | `cordova-plugin-power-optimization` | 0.3.1 | ✅ pinned @ `3e89474` |
 | `cordova-background-geolocation-plugin` | 2.9.0 | ✅ pinned @ `a00b818` |
+| `cordova-plugin-exoplayer-simple` | 0.1.1 | ✅ pinned (Round 21: NEW — AndroidX Media3 backend) |
 
 **Workstream coverage (post-GIVORS):**
 | Workstream | Status |
@@ -83,11 +84,13 @@ Each onboarding gate hard-blocks until its check passes.
 | D — iOS GPS native (D1–D6) | D1 warning shipped. D3 (`forceReacquire`), D4 (flag re-assertion), D5 (SLC auto-reacquire) all closed by plugin work. D6 covered by B4. D7 = dedicated iOS field test still TBD |
 | E — Step lifecycle correctness (E1/E2/E3) | Not shipped — blocks on `accuracy_near_border` field data |
 | F — Telemetry & diagnostics (F-K1..F-N3) | All Phase 1A JS items shipped. F-A4 silence detection dropped (covered by `voice_snapshot` heuristics) |
-| G — Plugin extensions (G1–G3) | G1 (audiofocus v1.6.0), G2 (power-opt v0.3.1), G3 (bg-geo v2.8.0) all shipped |
+| G — Plugin extensions (G1–G4) | G1 (audiofocus v1.7.1 — incl. Round 21 `ExtraFocusListener`), G2 (power-opt v0.3.1), G3 (bg-geo v2.9.0), **G4 (cordova-plugin-exoplayer-simple v0.1.1 — NEW Android Media3 backend, Round 21)** all shipped |
+| H — Android audio backend (H1) | H1 (ExoPlayer plugin + `AUDIO_BACKEND_ANDROID` flag + `_backend` telemetry field) shipped — **default still `'howler'`; flip to `'exoplayer'` after one clean field test** |
 
 **Open items requiring next field test data:**
 - **B4 UI freeze-band** — need `real_callback_freshness` distribution to fix threshold above the ~20 s NSTimer/Handler floor.
 - **E1/E2/E3 zone-overshoot gates** — need `accuracy_near_border` distribution to set accuracy and sustain thresholds.
+- **H1 ExoPlayer backend validation** — flag `AUDIO_BACKEND_ANDROID='exoplayer'` on at least one loan SM-A515F at VILLEURBANNE. Compare `audio_play_started.load_duration_ms`, `audio_play_stuck`, `audio_loaderror` rates vs the Howler fleet (`backend` field on `audio_uri_resolved` / `audio_*error` is the bucket key).
 
 ---
 
@@ -108,11 +111,8 @@ Cross-check of every "✅ shipped" claim against actual source. Items below are 
 | **F-A4** silence detection | ❌ dropped | `voice_snapshot audio_playing=false, pos=0` heuristic at parcours.js:152-157 covers the case. |
 | **bg-geo internal `package-lock.json`** | ✅ — v2.8.0 | Regenerated to 2.8.0 (was stale at 2.3.3, cosmetic only). |
 
-**Genuinely shipped and correct** (verified line-by-line):
-A4, A5, A6, A8, A8b, B1, B4 (diagnostic + iOS forceReacquire), C1, C2, D1, R7.2, F-G1, F-G1b, F-G2, F-G3, F-G4, F-K3, F-N3, F-R1, F-R2, F-Z1, F-Z3, all plugin rounds (audiofocus v1.6.0 AF-1..AF-7, power-opt v0.3.1 PO-1..PO-9, bg-geo v2.5.0..v2.8.0 BG-2..BG-10 + P0.5 Fix 1e diagnostic).
-
-**Genuinely shipped and correct** (verified line-by-line):
-A4, A5, A6, A8, A8b, B1, B4 (diagnostic + iOS `forceReacquire`), C1, C2, D1, R7.2, F-G1, F-G1b, F-G2, F-G3, F-G4, F-K3, F-N3, F-R1, F-R2, F-Z1, F-Z3, all plugin rounds (audiofocus v1.6.0 AF-1..AF-7, power-opt v0.2.0 PO-1..PO-8, bg-geo v2.5.0..v2.7.0 BG-2..BG-10).
+**Genuinely shipped and correct** (verified line-by-line, through Round 21):
+A4, A5, A6, A8, A8b, B1, B4 (diagnostic + iOS `forceReacquire`), C1, C2, D1, R7.2, F-G1, F-G1b, F-G2, F-G3, F-G4, F-K3, F-N3, F-R1, F-R2, F-Z1, F-Z3, all plugin rounds (audiofocus v1.7.1 AF-1..AF-8, power-opt v0.3.1 PO-1..PO-9, bg-geo v2.5.0..v2.9.0 BG-2..BG-10 + P0.5 Fix 1e diagnostic + Architecture D), and **Round 21 G4/H1: ExoPlayer plugin v0.1.1 + AUDIO_BACKEND_ANDROID flag + apputils.js native paths + releaseExoPlayerAll teardown wiring** (verified in source; Gradle build + on-device smoke test still pending).
 
 ---
 
@@ -125,10 +125,10 @@ A4, A5, A6, A8, A8b, B1, B4 (diagnostic + iOS `forceReacquire`), C1, C2, D1, R7.
 `step_fire`, `step_done`, `step_skip_done`, `step_implicit_done`, `step_audio_trigger` (carries `accuracy`, `consecutive_inside_samples`, `time_since_first_inside_ms`, `neighbor_distances`, `step_fire_latency_ms`), `step_resume_current`, `step_past_unload`, `step_voice_failed`, `step_afterplay_fallback`, `step_prewarm_next`, `parcours_store`, `accuracy_near_border` (when within 20 m), `voice_snapshot`, `voice_snapshot_skipped`, `user_lost`, `user_recovered`.
 
 ### Audio
-`audio_play_requested`, `audio_play_started` (carries `load_duration_ms`), `audio_play_gate`, `audio_play_timeout`, `audio_play_stuck`, `audio_play_stuck_retry`, `audio_play_timeout_self_healed`, `audio_loaderror`, `audio_playerror` (both carry `error_type` ∈ {not_found, network, decode_failed, src_unsupported, timeout, stuck}), `audio_uri_resolved`, `audio_playerror_retry`, `audio_engine_reset`, `audio_engine_reset_error`, `audiofocus_request_fail`, `audiofocus_keepalive_started`, `audiofocus_session_released`, `audio_route_changed`, `audio_session_state` (60 s).
+`audio_play_requested`, `audio_play_started` (carries `load_duration_ms`), `audio_play_gate`, `audio_play_timeout`, `audio_play_stuck`, `audio_play_stuck_retry`, `audio_play_timeout_self_healed`, `audio_loaderror`, `audio_playerror` (both carry `error_type` ∈ {not_found, network, decode_failed, src_unsupported, timeout, stuck}), `audio_uri_resolved`, `audio_playerror_retry`, `audio_engine_reset`, `audio_engine_reset_error`, `audiofocus_request_fail`, `audiofocus_keepalive_started`, `audiofocus_session_released`, `audio_route_changed`, `audio_session_state` (60 s). **Round 21:** `audio_uri_resolved` and `audio_loaderror`/`audio_playerror` now carry `backend` ∈ {`exoplayer`, `howler`, `howler-fallback`, `native`} so analyze.mjs can bucket post-rollout comparisons cleanly. On the ExoPlayer path the `error_code` 1–4 is derived natively from `PlaybackException.errorCode` (see `ExoPlayerInstance.mapToHowlerCode` — IO range → 2/4, parsing/decoder → 3, unknown → 4) so `classifyAudioErrorType()` in player.js produces the same `error_type` enum without changes.
 
 ### Operator / rearm
-`rearm_button`, `rearm_pre_state`, `walk_end_shutdown`, `inter_session_idle_ms` (on `session_start`).
+`rearm_button`, `rearm_pre_state`, `walk_end_shutdown`, `inter_session_idle_ms` (on `session_start`), `exoplayer_release_all` / `exoplayer_release_all_error` (Round 21; emitted before `audiofocus_session_released` in both walk-end A1 and rearm A3 paths so the ExoPlayer FG service ID 7375 tears down ahead of AudioFocusService ID 7374).
 
 ### Devices
 Persistent fields in `session_diag`: `deviceUuid`, `isLoanDevice`, plugin-presence flags (`plugin_bgloc_getCLState`, `plugin_bgloc_getPowerState`, `plugin_bgloc_forceReacquire`, power-opt v0.2.0 methods).
@@ -197,9 +197,19 @@ Persistent fields in `session_diag`: `deviceUuid`, `isLoanDevice`, plugin-presen
 R7.2 default-afterplay map gating, B1 past-step media unload, A6 parcours freshness gate, C2 passive media integrity.
 
 ### Phase 2 — plugin rebuild (shipped 2026-05-27, awaiting field validation)
-- **G1** audiofocus v1.6.0: AF-1 channel description, AF-2 iOS deactivation order, AF-3 START_STICKY recovery, AF-4 power-save receiver, AF-5 iOS route-change events, AF-6 `getAudioSessionState`, AF-7 app icon. Plus `resetAudioSession()` + `releaseSession()` actions used by A1/A2/A3.
+- **G1** audiofocus v1.6.0 → v1.7.1 (Round 21): AF-1 channel description, AF-2 iOS deactivation order, AF-3 START_STICKY recovery, AF-4 power-save receiver, AF-5 iOS route-change events, AF-6 `getAudioSessionState`, AF-7 app icon. Plus `resetAudioSession()` + `releaseSession()` actions used by A1/A2/A3. **Round 21 added AF-8: `ExtraFocusListener` static API + fan-out in the OnAudioFocusChangeListener, allowing the new ExoPlayer plugin to register a reflective native handler that pauses ExoPlayer instances on AUDIOFOCUS_LOSS without a JS roundtrip (skips ducking — JS still owns DUCKED_PLAYERS — and skips auto-resume on GAIN — JS still owns PAUSED_PLAYERS).**
 - **G2** power-opt v0.3.1: PO-1 LeTV intent fix, PO-2 `GetLastExitReasons`, PO-3 `GetMemoryInfo`, PO-4 `GetStandbyBucket`, PO-5 JSON booleans, PO-6 iOS stub, PO-7 Xiaomi MIUI autostart, PO-8 `skipProtectedAppCheck` guard, **PO-9 `IsAutoRevokeWhitelisted` + `RequestAutoRevokeWhitelist` (v0.3.1)**.
 - **G3** bg-geo: v2.5.0 (BG-3 `getCLState`, BG-4 `getPowerState`, BG-7 keepalive flag re-assertion); v2.6.0 (BG-2 `forceReacquire`, BG-5 Android AlarmManager Doze keepalive, BG-10 iOS SLC auto-reacquire); v2.7.0 (F-G1 native auth callback, F-G3 keepalive `bg_task_id`, F-G4 `is_keepalive` flag so B4 watchdog fires correctly); v2.8.0 (BG-3 schema clarification — `hasLocation` + `locationTimestampAgeMs`; P0.5 Fix 1e diagnostic — `sAlarmFireCount` counter + `getAlarmWakeStats` CDV action); **v2.9.0 (Architecture D — `FusedLocationProviderHelper` parallel stream, native-side dedupe in `RawLocationProvider` with `STALE_RAW_MS=20s` / `MAX_FUSED_AGE=60s`, `dispatch_source` + `is_keepalive` fields propagated to JS, `getLocationDispatchStats` CDV action exposing counters)**.
+- **G4 (Round 21, shipped 2026-05-28)** `cordova-plugin-exoplayer-simple` v0.1.1 — **NEW**: AndroidX Media3 (ExoPlayer 1.4.1) wrapper with a Howler-compatible JS surface. Architecture:
+  - `MediaSessionService` (FG notification ID 7375, distinct from `AudioFocusService` ID 7374) hosts ONE persistent silent ExoPlayer (`REPEAT_MODE_ALL`, volume 0, BT-resistant `playWhenReady` auto-rearm) — maximum OEM trust without lock-screen UX.
+  - Per-JS-Player ExoPlayer instances built with `handleAudioFocus=false` (audiofocus single-owner) + `WAKE_MODE_LOCAL` for Doze-safe playback.
+  - `ExtraFocusListener` reflectively attached to audiofocus v1.7.1 → native pause on AUDIOFOCUS_LOSS / LOSS_TRANSIENT with no Cordova bridge roundtrip.
+  - `setPlayWhenReady(true)` before STATE_READY is documented-safe → **structurally eliminates the Howler M4/P9 cold-load race** (A8 / A8b workarounds become dead code on the ExoPlayer path).
+  - `PlaybackException.errorCode` mapped to the C1 1..4 enum so existing `classifyAudioErrorType()` produces clean `error_type` values.
+  - JS shim provides 250 ms position polling via `getPosition(handle)` matching `NativeMediaPlayer._startPositionPoll` so `snapshotVoicePosition()` (`voice_snapshot` telemetry) keeps working unchanged.
+- **H1 (Round 21)** `AUDIO_BACKEND_ANDROID` flag in [player.js](www/app/assets/player.js) selects backend per-load: **default `'howler'` during initial rollout, flip to `'exoplayer'` once one clean field test validates G4**. `_backend` field threaded through `audio_uri_resolved` + `audio_loaderror` + `audio_playerror`. JS-level `SILENT_PLAYER` kept alongside the plugin's native silent player during rollout for parity safety; redundancy reconsidered after first clean field test.
+- **R21-supporting** `FlanerieCordova/www/apputils.js` now populates `LOCALAPP_PATH_NATIVE` + `LOCALMEDIA_PATH_NATIVE` on Android too (was iOS-only) so ExoPlayer can read parcours media via `FileDataSource` directly instead of through the embedded WebView HTTP server.
+- **R21-supporting** `releaseExoPlayerAll(source)` helper in [pages.js](www/app/pages.js) awaited (rearm A3) or fire-and-forget (walk-end A1) BEFORE `releaseAudiofocusSession` so the ExoPlayer FG service tears down ahead of AudioFocusService's. Telemetry: `exoplayer_release_all` / `exoplayer_release_all_error`.
 
 ### Phase 1B remainder (blocked on VILLEURBANNE data)
 - **B4 watchdog UI** — `#frozen-band` overlay with "Téléphone en veille — déverrouillez pour continuer". Need `real_callback_freshness` distribution to set threshold above NSTimer floor (~20 s).
@@ -207,8 +217,9 @@ R7.2 default-afterplay map gating, B1 past-step media unload, A6 parcours freshn
 
 ### Phase 3 — deferred, conditional
 - **B3 / BG-6** ✅ **Closed by v2.9.0 Architecture D** (Raw-primary parallel with Fused fallback). No OEM allowlist; fail-soft on no-GMS.
-- **C6b** Android `NativeMediaPlayer` migration — only if R4.1-class cold-load hangs recur after A8/A8b.
+- **C6b** Android `NativeMediaPlayer` migration — **superseded by Round 21 G4 ExoPlayer plugin**; no longer needed.
 - **P3.5 Plan B/C** native `getCurrentPosition()` during GPS tasks / native plugin save on lifecycle — only if `voice_snapshot` shows iOS position-staleness after Phase 1B.
+- **R21-followup Howler retirement** — remove the Howler branch from `PlayerSimple.load()` and drop `Howler.autoUnlock` / `Howler.autoSuspend` after the second clean field test on the ExoPlayer backend. Until then, both backends ship; default toggle via `AUDIO_BACKEND_ANDROID`.
 
 ### Conditional / accepted / low-priority
 - **P0.2** background validation UX (kept bypassed).
@@ -309,6 +320,7 @@ For the analytical context behind these rounds see `20260520-GIVORS-report.md`. 
 | 18 | 2026-05-27 | plugin | bg-geo v2.7.0 (F-G1 auth callback, F-G3 `bg_task_id`, F-G4 `is_keepalive`) |
 | 19 | 2026-05-27 | post-verification | A2 event renamed `audio_engine_reset`; A3 `releaseSession` promisified + awaited before reset; bg-geo v2.8.0 (BG-3 schema fix + P0.5 Fix 1e diagnostic counter + `getAlarmWakeStats`); power-opt v0.3.1 (PO-9 `IsAutoRevokeWhitelisted` / `RequestAutoRevokeWhitelist`); webapp `alarm_wake_stats` + `auto_revoke_whitelisted` wiring |
 | 20 | 2026-05-27 | plugin | bg-geo v2.9.0 — Architecture D: Raw-primary with Fused fallback. New `FusedLocationProviderHelper` (FLP, fail-soft on no-GMS); dedupe state machine in `RawLocationProvider` (`_lastRawFreshMs`, suppress Fused when Raw < 20 s, ignore Fused fixes > 60 s old); `BackgroundLocation` propagates `dispatch_source` (`raw` / `raw-keepalive` / `fused`) + `is_keepalive` to JS; `getLocationDispatchStats` CDV action; geoloc.js recognises `dispatch_source='fused'` as a distinct source. Closes B3 / BG-6 without conditional OEM allowlist. |
+| 21 | 2026-05-28 | plugin + JS | **NEW plugin `cordova-plugin-exoplayer-simple` v0.1.1** (AndroidX Media3 1.4.1, MediaSessionService FG ID 7375, persistent silent ExoPlayer for OEM trust, per-instance ExoPlayer with `handleAudioFocus=false` + `WAKE_MODE_LOCAL`, Howler-compatible JS shim with 250 ms position polling). **audiofocus v1.6.0 → v1.7.1** adds `ExtraFocusListener` static API + fan-out so the new plugin pauses ExoPlayer natively on AUDIOFOCUS_LOSS without a JS roundtrip. **webapp:** `AUDIO_BACKEND_ANDROID` flag (default `'howler'`, flip to `'exoplayer'` after first clean field test) + `_backend` field on `audio_uri_resolved` / `audio_*error`. **FlanerieCordova:** `apputils.js` populates `LOCALAPP_PATH_NATIVE` / `LOCALMEDIA_PATH_NATIVE` on Android (so Media3 reads via `FileDataSource`, bypassing the embedded WebView HTTP server). **Teardown:** `releaseExoPlayerAll(source)` awaited / fire-and-forget BEFORE `releaseAudiofocusSession` at rearm (A3) and walk-end (A1). **Workflow:** new sibling fork wired into `scripts/sync-workspace-plugins.mjs` + `scripts/validate-container.mjs`; new `plugin-upgrade` skill documents the four-fork sync flow. Structurally closes Howler M4/P9 cold-load race on the new backend. Awaiting `cordova build android` Gradle/Media3 resolution check + VILLEURBANNE side-by-side field validation. |
 
 ---
 

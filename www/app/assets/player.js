@@ -10,16 +10,15 @@ var IOS_NATIVE_FALLBACK_DETECTED = false
 
 // Android audio backend selector — 'howler' (legacy WebView-bound) or
 // 'exoplayer' (cordova-plugin-exoplayer-simple, AndroidX Media3, hosted in a
-// MediaSessionService for background-reliable playback). Default 'howler'
-// during initial rollout; flip to 'exoplayer' once one clean field test
-// validates the new backend. Per-session value is captured into session_diag
-// and into audio_uri_resolved / audio_*error events via `backend` field so
-// post-rollout analyze.mjs can bucket comparisons cleanly.
-//
-// Override at runtime via devmode or via window.AUDIO_BACKEND_ANDROID before
-// the first PlayerSimple is constructed (page load).
+// MediaSessionService for background-reliable playback). Default 'exoplayer'
+// from Round 21 (2026-05-28) so the field test exercises the new backend.
+// Set window.AUDIO_BACKEND_ANDROID = 'howler' before the first PlayerSimple
+// is constructed to fall back to the legacy backend if needed. Per-session
+// value is captured into session_diag and into audio_uri_resolved /
+// audio_*error events via the `backend` field so analyze.mjs can bucket
+// post-rollout comparisons cleanly.
 if (typeof AUDIO_BACKEND_ANDROID === 'undefined') {
-    var AUDIO_BACKEND_ANDROID = (typeof window !== 'undefined' && window.AUDIO_BACKEND_ANDROID) ? window.AUDIO_BACKEND_ANDROID : 'howler'
+    var AUDIO_BACKEND_ANDROID = (typeof window !== 'undefined' && window.AUDIO_BACKEND_ANDROID) ? window.AUDIO_BACKEND_ANDROID : 'exoplayer'
 }
 
 function showResumeOverlayIfNeeded(pausedCount) {

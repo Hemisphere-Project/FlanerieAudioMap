@@ -5,7 +5,7 @@
 **Field reports cross-referenced:** Mélanie (FP3 08:57), John (~16h loan phone), Justine (operator tent), unnamed teacher (iPhone 09h–09h30).
 **Expected visitors:** ~45–50 (15–20 on loaned phones).
 **Builds in fleet:** webapp hashes `fdf504c8` (~29 sessions) and `2f77776e` (~35 sessions), per-device PWA cache, interleaved through the day (see §11). Which hash is newer is unconfirmed.
-**Generated:** 2026-05-22, consolidated 2026-05-27.
+**Generated:** 2026-05-22, consolidated 2026-05-27, Round 21 follow-ups noted 2026-05-28.
 
 ---
 
@@ -27,12 +27,12 @@
 | Class | Ref | Description | Sessions | Fix path (status) |
 |---|---|---|---|---|
 | **SIGNIFICANT** | S1 | iOS 26.3.1 GPS multi-gap regression (8–14 min blackouts) — incomplete walks | 51nv, ibk6, mq3z | D1 warning shipped; D3/D4/D5 native reacquire shipped in bg-geo v2.6.0/2.7.0 |
-| **SIGNIFICANT** | S2 | Audio narration failures across many BLOC files — load failures + playback failures concentrated on large/late files and stressed devices | wjfo, vigi, rumx (+ mq3z, 0vvc) | C1 error classification + C2 integrity check + C4 retry shipped |
+| **SIGNIFICANT** | S2 | Audio narration failures across many BLOC files — load failures + playback failures concentrated on large/late files and stressed devices | wjfo, vigi, rumx (+ mq3z, 0vvc) | C1 error classification + C2 integrity check + C4 retry shipped. **Round 21:** Android `wjfo` / `0vvc` `audio_loaderror` cluster gets a second mitigation layer once `AUDIO_BACKEND_ANDROID='exoplayer'` flips — Media3's `DefaultExtractorsFactory` is far stricter about decode-error classification (`PlaybackException.errorCode` mapped to C1 enum natively in `ExoPlayerInstance.mapToHowlerCode`) so `error_type` distinguishes corrupt-download from decode-failure-on-this-device cleanly |
 | **MODERATE** | M1 | iOS 26.4.2 brief GPS gaps (2–5 min); walk stopped at step 15, step 16 never fired | 19dh, rumx | B4 forceReacquire watchdog shipped (iOS) |
 | **MODERATE** | M2 | step_resume_current stutter — 2 s audio jump-back; severe cases place phone just inside adjacent zone, premature `step_done`, wrong step audio | yapj, 19dh, 189t, 5kd4, c7qo, h6os, 5kkz, 2tqf | E1/E2/E3 zone gates pending field calibration |
 | **MODERATE** | M3 | Silent audio on loan-phone re-arm — walk page loads normally but audio does not start; navigating to root and back resolves | SM-A515F loan phones | A1 walk-end shutdown + A2 session-start engine reset + A3 rearm flow shipped |
-| **MODERATE** | M4 | Android Howler cold-load race — first-install phone enters walk page, GPS fires step 0 while BLOC_01 still loading; play() silently queued; ~70 s silence; visitor restarts | 5eb0→9qf4, 4ha8→aibf, 85iu→2tqf, ygi1→0vvc (4 restart-pairs, all Android, none SM-A515F) | A8 deferred-play + A8b SAS step 0 pre-warm shipped |
-| **MINOR** | m1 | Android OEM kill — app crashed and refired step, walk recovered. ~20 sessions had ≥1 `session_resume` | f743 (7), mqgf (4), wjfo (4), 2j5u/rumx (3), h6os/0vvc/5eb0 (2), 2d5g + ~14 more | B1 media unload + BG-5 AlarmManager Doze + B3 Fused (conditional) |
+| **MODERATE** | M4 | Android Howler cold-load race — first-install phone enters walk page, GPS fires step 0 while BLOC_01 still loading; play() silently queued; ~70 s silence; visitor restarts | 5eb0→9qf4, 4ha8→aibf, 85iu→2tqf, ygi1→0vvc (4 restart-pairs, all Android, none SM-A515F) | A8 deferred-play + A8b SAS step 0 pre-warm shipped. **Round 21:** structurally eliminated on the ExoPlayer backend — `setPlayWhenReady(true)` before `STATE_READY` is documented-safe in Media3, plays the moment the file is ready. A8 / A8b become dead code (kept as belt-and-suspenders) once `AUDIO_BACKEND_ANDROID='exoplayer'` is default |
+| **MINOR** | m1 | Android OEM kill — app crashed and refired step, walk recovered. ~20 sessions had ≥1 `session_resume` | f743 (7), mqgf (4), wjfo (4), 2j5u/rumx (3), h6os/0vvc/5eb0 (2), 2d5g + ~14 more | B1 media unload + BG-5 AlarmManager Doze + B3 Fused (conditional). **Round 21:** additional resilience layer once ExoPlayer backend is default — `MediaSessionService` FG service (ID 7375, distinct from AudioFocusService 7374) with persistent silent ExoPlayer keeps the process foregrounded across the entire walk, complementing the AudioFocusService FG. Two independent FG services in the same process = max OEM trust |
 | **MINOR** | m2 | iOS audiofocus fail flood — 4929 events fleet-wide, never walk-breaking. Not iOS-26-only: iOS 18 devices also hit it | c7qo, 4zq0, 4rma, 19dh, 7p2j, xuyx | C5 parsimony review (current path already conservative); G1 audiofocus_session_reset fix to "fail once stay poisoned" path shipped |
 | **MINOR** | m3 | No walk-end shutdown — GPS/audio kept running 1–2 h post-completion, telemetry not flushed | 7p2j, xuyx, 9hjo, mwbo | A1 walk_end_shutdown + telemetry flush + A7 generic copy shipped |
 | **TOOLING** | t1–t4 | No walk-start cache verify; audio error subtypes undiscriminated; no checksum; no loan-device flag | — | All shipped: C3=C2 walk-start verify, C1 error subtypes, A5 loan flag + UUID + `/devices` registry |
@@ -270,6 +270,7 @@ Four confirmed restart-pairs all share identical telemetry:
 **Status: shipped.**
 - **A8 (Round 15)** — `PlayerSimple.play()` registers `once('load', …)` when Howler state is `'loading'`. Audio fires the moment the file is ready.
 - **A8b (Round 17)** — `PAGES['sas']` entry calls `PARCOURS.spots.steps[0].prewarmForLockedStart('sas-entry')`. While visitor types 4321 (5–30 s), Howler loads BLOC_01 in background.
+- **Round 21 (structural close)** — `cordova-plugin-exoplayer-simple` v0.1.1 replaces the Howler underlying when `AUDIO_BACKEND_ANDROID='exoplayer'`. Media3 documents `setPlayWhenReady(true)` as safe before `STATE_READY` — there is no "play queue silently dropped while loading" failure mode to mitigate. A8 / A8b remain in tree as belt-and-suspenders but are dead code on the ExoPlayer path. Will become the canonical fix once the field-test rollout flips the default backend.
 
 ---
 
@@ -303,18 +304,18 @@ The full remediation plan (workstreams A–G, phase plan, file paths, telemetry 
 | GIVORS issue | Workstream coverage | Status |
 |---|---|---|
 | S1 iOS 26.3.1 GPS | D1 + D3 + D4 + D5 + B4 | Shipped (bg-geo v2.6.0/2.7.0 + Round 14 JS); validate at VILLEURBANNE |
-| S2 audio failures | C1 + C2 + C4 + B1 + A2 | Shipped |
+| S2 audio failures | C1 + C2 + C4 + B1 + A2 | Shipped. **Round 21:** additional layer when ExoPlayer backend is active — `PlaybackException.errorCode` mapped natively to C1 enum, distinguishes corrupt-file vs decode-failure-on-this-device more sharply than Howler's vague error strings |
 | M1 iOS 26.4.2 short gaps | B4 + D3 | Shipped |
 | M2 step_resume_current | E1/E2/E3 | **Pending VILLEURBANNE data** (`accuracy_near_border` distribution) |
-| M3 silent audio loan-rearm | A1 + A2 + A3 | Shipped |
-| M4 Howler cold-load | A8 + A8b | Shipped |
-| m1 Android OEM kill | B1 + BG-5 + Architecture D (B3) | All shipped. Architecture D in bg-geo v2.9.0 = Raw-primary parallel + Fused fallback with native-side dedupe, no OEM allowlist |
+| M3 silent audio loan-rearm | A1 + A2 + A3 | Shipped. **Round 21:** `releaseExoPlayerAll(source)` awaited before `releaseAudiofocusSession` at A3 rearm so the ExoPlayer FG service exits ahead of AudioFocusService's — same ordered teardown principle as A3's existing iOS race fix |
+| M4 Howler cold-load | A8 + A8b | Shipped. **Round 21:** structurally closed on ExoPlayer backend — `setPlayWhenReady(true)` before STATE_READY is documented-safe, no play-queue-silently-dropped failure mode |
+| m1 Android OEM kill | B1 + BG-5 + Architecture D (B3) | All shipped. Architecture D in bg-geo v2.9.0 = Raw-primary parallel + Fused fallback with native-side dedupe, no OEM allowlist. **Round 21:** additional resilience — second FG service (`ExoPlayerService` ID 7375) with persistent silent ExoPlayer keeps process foregrounded across the whole walk, complementing `AudioFocusService` ID 7374 |
 | m2 iOS audiofocus flood | G1 audiofocus_session_reset path | Shipped |
-| m3 no walk-end shutdown | A1 + A7 | Shipped |
+| m3 no walk-end shutdown | A1 + A7 | Shipped. **Round 21:** `exoplayer_release_all` telemetry event added to the A1 chain so analyze.mjs can confirm the ExoPlayer teardown ran end-to-end |
 | P4 operator rearm | A3 | Shipped |
 | P8 stale seek-position | A4 | Shipped |
 | t1 walk-start cache verify | C2 | Shipped |
-| t2 audio error subtypes | C1 | Shipped |
+| t2 audio error subtypes | C1 | Shipped. **Round 21:** `backend` field on `audio_uri_resolved` / `audio_loaderror` / `audio_playerror` lets analyze.mjs bucket errors by backend (`exoplayer` vs `howler` vs `howler-fallback` vs `native`) for the rollout side-by-side |
 | t3 checksum | C2 | Shipped |
 | t4 loan-device flag | A5 | Shipped (UUID + `/devices` registry + analyze.mjs filters) |
 | §11 build / parcours skew | A6 | Shipped |
@@ -337,3 +338,4 @@ Additional capability shipped in Round 19 + 20:
 2. E1/E2/E3 zone-overshoot gates — accuracy and sustain thresholds from `accuracy_near_border`.
 3. Architecture D field validation — `location_dispatch_stats` will quantify how often Fused saved the day. If `fusedDelivered` is consistently 0 across the fleet, Raw is doing its job and Architecture D is pure insurance; if it climbs on restrictive OEMs (Samsung A15-class), it confirms FLP is closing GIVORS-class blackouts.
 4. P0.5 Fix 1e behaviour layer — depends on whether `alarm_wake_stats` shows JS suspension despite alarm fires (still open even with Architecture D, since FLP and BG-5 alarms are independent mechanisms).
+5. **Round 21 ExoPlayer backend side-by-side** — flip `AUDIO_BACKEND_ANDROID='exoplayer'` on at least one loan SM-A515F (the M4/P9 cluster device class). Compare `audio_play_started.load_duration_ms`, `audio_play_stuck`, `audio_loaderror` rates against the Howler fleet — `backend` field on the events is the bucket key. Validates both the M4 structural close AND the m1 OEM-kill belt-and-suspenders (a Howler-side OEM kill should be paired with an ExoPlayer-side session that survived the same condition).
