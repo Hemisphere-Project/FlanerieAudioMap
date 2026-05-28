@@ -3,7 +3,7 @@ name: plugin-upgrade
 description: >-
   Release and sync sibling Cordova plugin forks (cordova-plugin-audiofocus,
   cordova-plugin-power-optimization, cordova-background-geolocation-plugin,
-  cordova-plugin-exoplayer-simple) into FlanerieCordova. Bumps fork versions,
+  cordova-plugin-audio-simple) into FlanerieCordova. Bumps fork versions,
   commits/pushes the dirty repos, reinstalls plugins from the workspace forks,
   and runs `cordova prepare`. Use when a fork has uncommitted native changes,
   when a fork is ahead of its remote, when FlanerieCordova's plugin install is
@@ -23,7 +23,7 @@ does dry-run by default and never mutates without `--apply`.
 | `cordova-plugin-audiofocus` | `../cordova-plugin-audiofocus` | `github:Maigre/cordova-plugin-audiofocus` |
 | `cordova-plugin-power-optimization` | `../cordova-plugin-power-optimization` | `github:Maigre/cordova-plugin-power-optimization` |
 | `cordova-background-geolocation-plugin` | `../cordova-background-geolocation-plugin` | `github:Maigre/cordova-background-geolocation-plugin#stable` |
-| `cordova-plugin-exoplayer-simple` | `../cordova-plugin-exoplayer-simple` | `github:Maigre/cordova-plugin-exoplayer-simple` |
+| `cordova-plugin-audio-simple` | `../cordova-plugin-audio-simple` | `github:Maigre/cordova-plugin-audio-simple` |
 
 To add a fifth fork later, see [§ Adding a new fork](#adding-a-new-fork).
 
@@ -102,7 +102,7 @@ Restrict to a subset with `--plugins`:
 
 ```bash
 node scripts/sync-workspace-plugins.mjs --apply \
-  --plugins cordova-plugin-audiofocus,cordova-plugin-exoplayer-simple
+  --plugins cordova-plugin-audiofocus,cordova-plugin-audio-simple
 ```
 
 Skip the Cordova reinstall + `cordova prepare` step (useful when you just want
@@ -167,7 +167,7 @@ subset listed.
 ## Adding a new fork
 
 When a brand-new sibling fork repo needs to be wired into the workspace
-(example: `cordova-plugin-exoplayer-simple` bootstrapped 2026-05-28):
+(example: `cordova-plugin-audio-simple` bootstrapped 2026-05-28 as `cordova-plugin-exoplayer-simple`, renamed in Round 24):
 
 1. **Clone the empty repo** as a sibling of FlanerieCordova:
    `/home/mgr/Bakery/Flanerie/cordova-plugin-<name>/`. It needs an `origin`

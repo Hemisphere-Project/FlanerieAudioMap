@@ -9,9 +9,10 @@ var AUDIOFOCUS_DUCK_FACTOR = 0.25
 var IOS_NATIVE_FALLBACK_DETECTED = false
 
 // Android audio backend selector — 'howler' (legacy WebView-bound) or
-// 'exoplayer' (cordova-plugin-exoplayer-simple, AndroidX Media3, hosted in a
-// MediaSessionService for background-reliable playback). Default 'exoplayer'
-// from Round 21 (2026-05-28) so the field test exercises the new backend.
+// 'exoplayer' (cordova-plugin-audio-simple, AndroidX Media3, hosted in a
+// MediaSessionService for background-reliable playback; this is what the
+// renamed plugin still uses on Android). Default 'exoplayer' from Round 21
+// (2026-05-28) so the field test exercises the new backend.
 // Set window.AUDIO_BACKEND_ANDROID = 'howler' before the first PlayerSimple
 // is constructed to fall back to the legacy backend if needed. Per-session
 // value is captured into session_diag and into audio_uri_resolved /
@@ -684,7 +685,7 @@ class PlayerSimple extends EventEmitter
             }
         } else if (AUDIO_BACKEND_ANDROID === 'exoplayer'
                    && typeof cordova !== 'undefined'
-                   && cordova.plugins && cordova.plugins.exoplayer) {
+                   && cordova.plugins && cordova.plugins.audio) {
             // Android Media3 (ExoPlayer) backend. Prefer a file:// URI so
             // Media3 reads directly via FileDataSource and bypasses the
             // embedded HTTP server. httpToNativePath() returns null when the
@@ -692,7 +693,7 @@ class PlayerSimple extends EventEmitter
             // ExoPlayer can still read http://localhost via DefaultHttpDataSource,
             // just slower — fall back rather than refusing to play.
             let nativeSrc = httpToNativePath(fullSrc) || fullSrc
-            this._player = new cordova.plugins.exoplayer.Player(nativeSrc, { loop: this._loop, volume: 1.0 })
+            this._player = new cordova.plugins.audio.Player(nativeSrc, { loop: this._loop, volume: 1.0 })
             this._backend = 'exoplayer'
         } else {
             this._player = new Howl({ src: fullSrc, loop: this._loop, autoplay: false, volume: 1, html5: false })

@@ -129,29 +129,30 @@ function resetAudioSessionForFreshParcoursStart()
     });
 }
 
-// Wrap cordova.plugins.exoplayer.releaseAll in a promise. Tears down every
-// ExoPlayer instance the plugin holds and stops the MediaSessionService FG
-// notification (ID 7375). Called BEFORE releaseAudiofocusSession at walk end
-// (A1) and rearm (A3) so the ExoPlayer-side FG service exits before its
-// AudioFocusService counterpart — see ordered teardown decision in
-// mobile-audit.md (Round 21).
+// Wrap cordova.plugins.audio.releaseAll in a promise. Tears down every
+// native player instance the plugin holds (ExoPlayer on Android,
+// AVAudioPlayer pool on iOS from Round 25). On Android also stops the
+// MediaSessionService FG notification (ID 7375). Called BEFORE
+// releaseAudiofocusSession at walk end (A1) and rearm (A3) so the
+// audio-plugin-side FG service exits before its AudioFocusService
+// counterpart — see ordered teardown decision in mobile-audit.md (Round 21).
 //
 // No-op when the plugin isn't installed or AUDIO_BACKEND_ANDROID === 'howler'
-// (Howler players have no native handles to tear down).
-function releaseExoPlayerAll(source)
+// on Android (Howler players have no native handles to tear down).
+function releaseAudioPluginAll(source)
 {
-    if (typeof cordova === 'undefined' || !cordova.plugins || !cordova.plugins.exoplayer ||
-        typeof cordova.plugins.exoplayer.releaseAll !== 'function') {
+    if (typeof cordova === 'undefined' || !cordova.plugins || !cordova.plugins.audio ||
+        typeof cordova.plugins.audio.releaseAll !== 'function') {
         return Promise.resolve(false);
     }
     return new Promise((resolve) => {
-        cordova.plugins.exoplayer.releaseAll(
+        cordova.plugins.audio.releaseAll(
             () => {
-                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('exoplayer_release_all', source ? {source: source} : {});
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_plugin_release_all', source ? {source: source} : {});
                 resolve(true);
             },
             (err) => {
-                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('exoplayer_release_all_error', source ? {source: source, error: String(err)} : {error: String(err)});
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_plugin_release_all_error', source ? {source: source, error: String(err)} : {error: String(err)});
                 resolve(false);
             }
         );
@@ -2532,7 +2533,7 @@ PAGES['end'] = () => {
     // FG service BEFORE releasing audiofocus, so ExoPlayer's FG notification
     // (ID 7375) exits ahead of AudioFocusService's (ID 7374). The ordering
     // mirrors the rearm path below.
-    releaseExoPlayerAll('walk_end');
+    releaseAudioPluginAll('walk_end');
 
     // G1/A1: fully release the session-scoped audiofocus state. stopKeepalive
     // alone tears down the foreground service, but it intentionally leaves some
@@ -2698,7 +2699,7 @@ $('#parcours-rearm').click(async () => {
     // ahead of AudioFocusService's. Awaited for symmetry with the audiofocus
     // release below — the new visitor's resetAudioSession must run against
     // a fully torn-down player layer.
-    await releaseExoPlayerAll('rearm');
+    await releaseAudioPluginAll('rearm');
 
     // A3/G1: release the full session-scoped audiofocus state (stopKeepalive
     // alone leaves iOS AVAudioSession active; releaseSession does the teardown).

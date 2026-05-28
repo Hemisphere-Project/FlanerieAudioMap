@@ -322,10 +322,10 @@ class DiagnosticRunner extends EventEmitter {
             && typeof AUDIO_BACKEND_ANDROID !== 'undefined'
             && AUDIO_BACKEND_ANDROID === 'exoplayer'
             && typeof cordova !== 'undefined'
-            && cordova.plugins && cordova.plugins.exoplayer) {
+            && cordova.plugins && cordova.plugins.audio) {
             let httpSrc = BASEURL + '/images/' + src
             let nativeSrc = (typeof httpToNativePath === 'function' && httpToNativePath(httpSrc)) || httpSrc
-            return this._trackPlayer(new cordova.plugins.exoplayer.Player(nativeSrc, { loop: !!loop, volume: 1.0 }))
+            return this._trackPlayer(new cordova.plugins.audio.Player(nativeSrc, { loop: !!loop, volume: 1.0 }))
         }
         return this._makeTestHowl(src, loop)
     }
