@@ -1899,11 +1899,19 @@ PAGES['checkaudio'] = () => {
     function failAudio(reason, html) {
         ok = false;
         fatalReason = reason;
+        if (playWatchdog) { clearTimeout(playWatchdog); playWatchdog = null; }
         $('#checkaudio-accept').hide();
         $('#checkaudio-help').show();
         $('#checkaudio-desc').html(html).css('color', 'red');
         if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('checkaudio_fail', {reason});
     }
+    // Hard-block: the accept button only unlocks after a real `play` event
+    // (or DEVMODE). A silent-start backend that never errors but also never
+    // plays would otherwise pass onboarding — exactly the failure mode that
+    // burns loan phones in the field. Timeout below paints the red gate so
+    // the operator can't move forward.
+    let playObserved = false;
+    let playWatchdog = null;
     testplayer.on('loaderror', (src, error) => {
         console.log('[AUDIO] loaderror', src, error);
         failAudio('loaderror', "Erreur de lecture audio. Votre appareil ne semble pas compatible...");
@@ -1912,7 +1920,16 @@ PAGES['checkaudio'] = () => {
         console.log('[AUDIO] playerror', src, error);
         failAudio('playerror', "Erreur de lecture audio. Votre appareil ne semble pas compatible...");
     })
-    testplayer.on('play', (src) => { console.log('[AUDIO] OK!', src); })
+    testplayer.on('play', (src) => {
+        console.log('[AUDIO] OK!', src);
+        playObserved = true;
+        if (playWatchdog) { clearTimeout(playWatchdog); playWatchdog = null; }
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('checkaudio_play_ok', {});
+        if (ok && !fatalReason) {
+            $('#checkaudio-accept').show();
+            $('#checkaudio-help').show();
+        }
+    })
 
     // Gate 1: AudioFocus plugin failed to initialize. Without it, Android can lose
     // audio routing silently mid-walk; on iOS the AVAudioSession category is also
@@ -1940,17 +1957,23 @@ PAGES['checkaudio'] = () => {
 
     testplayer.play(0)
 
+    // Watchdog: if neither `play` nor an error event fires within 8 s, hard-fail.
+    // Catches silent-start backends (e.g. iOS Howler fallback that the gates
+    // missed, or an Android backend whose FG service is wedged) that would
+    // otherwise just sit on the typewriter screen until the operator gives up.
+    if (!fatalReason) {
+        playWatchdog = setTimeout(() => {
+            if (playObserved || fatalReason) return;
+            failAudio('play_timeout', "Erreur de lecture audio. Votre appareil ne semble pas compatible...");
+        }, 8000);
+    }
+
     // Skip the typewriter animation when a fatal gate already painted the red
     // error — TYPEWRITE reads .text() (strips HTML) and would overwrite the error.
+    // The accept button is no longer shown here — it appears only after the
+    // `play` event fires (above) or in DEVMODE.
     if (!fatalReason) {
-        TYPEWRITE('checkaudio-desc')
-            .pauseFor(4000)
-            .callFunction(() => {
-                if (ok) {
-                    $('#checkaudio-accept').show()
-                    $('#checkaudio-help').show()
-                }
-            })
+        TYPEWRITE('checkaudio-desc').pauseFor(4000);
     }
 
     $('#checkaudio-accept').off().on('click', () => {

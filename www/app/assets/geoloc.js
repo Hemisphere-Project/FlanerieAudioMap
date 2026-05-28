@@ -1222,6 +1222,16 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
         if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_rail_wake', payload || {});
     });
 
+    // BG-11 (iOS): CLLocationManager rejected a rail region post-registration.
+    // gps_rail_configured.region_count is reported synchronously from native
+    // (count of regions submitted to startMonitoringForRegion:), but the OS
+    // can still reject individual regions asynchronously — exceeding the
+    // 20-region cap, entitlements revoked, etc. This event makes the
+    // configured-vs-rejected gap auditable in post-hoc analysis.
+    bgGeo.on('region_monitor_fail', function(payload) {
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_rail_monitor_fail', payload || {});
+    });
+
     // R26 / BG-12 (iOS, v2.11.0): CLVisit fired. iOS infers the user has
     // stopped at a place; we log it as gps_visit_event for telemetry only.
     // Decision 5 Option B (Workstream L in mobile-audit.md) — measuring whether visit

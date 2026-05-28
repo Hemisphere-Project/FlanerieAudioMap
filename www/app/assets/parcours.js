@@ -642,6 +642,11 @@ class Parcours extends EventEmitter {
                 return;
             }
             console.log('Restoring parcours from localStorage:', data);
+            // Capture the ACTUAL last-persistence stamp from the parsed payload
+            // before build() — build() ends with store() which rewrites
+            // state.lastUpdatedMs to Date.now(), and the native-snapshot
+            // freshness comparator would otherwise always lose.
+            let lsUpdatedAtRestore = (data.state && Number(data.state.lastUpdatedMs)) || 0;
             this.build(data);
             console.log('Parcours restored from localStorage !');
             // R21: cross-check the native NSUserDefaults snapshot. If iOS wrote
@@ -650,7 +655,7 @@ class Parcours extends EventEmitter {
             // native dual-write), override resumeStepVoicePos and emit a
             // resume_native_override event so post-hoc analysis can quantify
             // how often the native path saved us.
-            this._checkNativeResumeSnapshot();
+            this._checkNativeResumeSnapshot(lsUpdatedAtRestore);
         }
         catch (error) {
             console.warn('Error restoring parcours:', error);
@@ -664,7 +669,7 @@ class Parcours extends EventEmitter {
     // what we just restored from localStorage. Override only if pID + stepId
     // match AND native is meaningfully fresher (>1 s grace to avoid flapping
     // on near-simultaneous writes). Telemetry-only when no override happens.
-    _checkNativeResumeSnapshot() {
+    _checkNativeResumeSnapshot(lsUpdatedOverride) {
         if (typeof PLATFORM === 'undefined' || PLATFORM !== 'ios') return;
         if (typeof cordova === 'undefined' || !cordova.plugins
             || !cordova.plugins.audio
@@ -673,7 +678,12 @@ class Parcours extends EventEmitter {
         let lsStepId   = this.state.stepIndex;
         let lsSeekPos  = this.state.resumeStepVoicePos || 0;
         let lsPID      = this.pID;
-        let lsUpdated  = this.state.lastUpdatedMs || 0;
+        // Use the pre-build() snapshot of lastUpdatedMs when called from
+        // restore() — otherwise build()'s trailing store() would set this to
+        // ~now and the native snapshot could never look fresher.
+        let lsUpdated  = (typeof lsUpdatedOverride === 'number')
+            ? lsUpdatedOverride
+            : (this.state.lastUpdatedMs || 0);
 
         cordova.plugins.audio.getResumeSnapshot().then((snap) => {
             if (!snap || !snap.found) return;

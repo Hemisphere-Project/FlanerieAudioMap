@@ -72,7 +72,7 @@ Each onboarding gate hard-blocks until its check passes.
 |---|---|---|
 | `cordova-plugin-audiofocus` | 1.9.0 | ✅ pinned (Round 25 shrink: R21+R22 iOS surface migrated to audio-simple; MediaPlayer.framework dep dropped) |
 | `cordova-plugin-power-optimization` | 0.3.1 | ✅ pinned @ `3e89474` |
-| `cordova-background-geolocation-plugin` | 2.11.0 | ✅ pinned (Round 26: BG-12 iOS CLVisit monitoring for telemetry — visit events via legacy startMonitoringVisits) |
+| `cordova-background-geolocation-plugin` | 2.12.0 | ✅ pinned (BG-13: authoritative configureRail count + region_monitor_fail telemetry — audit fix) |
 | `cordova-plugin-audio-simple` | 0.3.0 | ✅ pinned (Round 25: iOS native engine — AVAudioPlayer pool + AVAudioSession + MPNowPlayingInfo + step-state cache migrated from audiofocus) |
 
 **Workstream coverage (post-GIVORS):**
@@ -211,7 +211,7 @@ R7.2 default-afterplay map gating, B1 past-step media unload, A6 parcours freshn
   - `setPlayWhenReady(true)` before STATE_READY is documented-safe → **structurally eliminates the Howler M4/P9 cold-load race** (A8 / A8b workarounds become dead code on the ExoPlayer path).
   - `PlaybackException.errorCode` mapped to the C1 1..4 enum so existing `classifyAudioErrorType()` produces clean `error_type` values.
   - JS shim provides 250 ms position polling via `getPosition(handle)` matching `NativeMediaPlayer._startPositionPoll` so `snapshotVoicePosition()` (`voice_snapshot` telemetry) keeps working unchanged.
-- **H1 (Round 21)** `AUDIO_BACKEND_ANDROID` flag in [player.js](www/app/assets/player.js) selects backend per-load: **default `'howler'` during initial rollout, flip to `'exoplayer'` once one clean field test validates G4**. `_backend` field threaded through `audio_uri_resolved` + `audio_loaderror` + `audio_playerror`. JS-level `SILENT_PLAYER` kept alongside the plugin's native silent player during rollout for parity safety; redundancy reconsidered after first clean field test.
+- **H1 (Round 21; default flipped post-R24)** `AUDIO_BACKEND_ANDROID` flag in [player.js](www/app/assets/player.js) selects backend per-load: **default is `'exoplayer'`** (canary-only `'howler'` available by setting `window.AUDIO_BACKEND_ANDROID = 'howler'` before the first PlayerSimple load). `_backend` field threaded through `audio_uri_resolved` + `audio_loaderror` + `audio_playerror`. JS-level `SILENT_PLAYER` kept alongside the plugin's native silent player for parity safety; redundancy reconsidered after second clean field test.
 - **R21-supporting** `FlanerieCordova/www/apputils.js` now populates `LOCALAPP_PATH_NATIVE` + `LOCALMEDIA_PATH_NATIVE` on Android too (was iOS-only) so ExoPlayer can read parcours media via `FileDataSource` directly instead of through the embedded WebView HTTP server.
 - **R21-supporting** `releaseExoPlayerAll(source)` helper in [pages.js](www/app/pages.js) awaited (rearm A3) or fire-and-forget (walk-end A1) BEFORE `releaseAudiofocusSession` so the ExoPlayer FG service tears down ahead of AudioFocusService's. Telemetry: `exoplayer_release_all` / `exoplayer_release_all_error`.
 
