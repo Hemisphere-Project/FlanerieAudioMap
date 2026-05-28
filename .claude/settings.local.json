@@ -82,7 +82,12 @@
       "Bash(adb logcat *)",
       "Bash(cordova run *)",
       "Bash(node scripts/sync-workspace-plugins.mjs --apply --plugins cordova-background-geolocation-plugin,cordova-plugin-exoplayer-simple)",
-      "Bash(adb push *)"
+      "Bash(adb push *)",
+      "Bash(awk '/data_app_anr/{found=1} found{print}')",
+      "Bash(grep -nA5 'id=\"startgeo\"' /home/mgr/Bakery/Flanerie/FlanerieAudioMap/www/app/app.html)",
+      "Bash(grep -nA20 \"^function PAGE\\\\b\\\\|^var PAGE \\\\|currentPage\" /home/mgr/Bakery/Flanerie/FlanerieAudioMap/www/app/pages.js)",
+      "Bash(grep -nA12 \"^PAGES\\\\['intro'\\\\]\" /home/mgr/Bakery/Flanerie/FlanerieAudioMap/www/app/pages.js)",
+      "Bash(grep -nB3 \"location_dispatch_stats\" /home/mgr/Bakery/Flanerie/FlanerieAudioMap/www/app/pages.js)"
     ],
     "additionalDirectories": [
       "/tmp"

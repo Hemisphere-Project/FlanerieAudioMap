@@ -158,6 +158,54 @@ function releaseExoPlayerAll(source)
     });
 }
 
+// Round 22 — GPS hardware pre-warm at intro page, gated by an existing
+// authorization. The point is to wake the GPS receiver during the
+// intro / checkdata / preload phase on second+ launches (when permission was
+// already granted in a previous session), so by the time bg-geo.start() runs
+// at confirmgeo the receiver already has fresh ephemeris and warm-start TTFF
+// drops from ~22 s to a few seconds.
+//
+// Hard-gated by bgGeo.checkStatus authorization: if the user has not yet
+// authorized, navigator.geolocation.getCurrentPosition would trigger the
+// system permission dialog — we MUST NOT show it on the intro page.
+// On first runs this helper is a no-op; bg-geo.start() at confirmgeo-accept
+// does the cold-start warmup instead.
+function maybePreWarmGpsHardware(reason)
+{
+    if (!navigator.geolocation) return;
+    let bgGeo = (typeof getBackgroundGeolocationPlugin === 'function') ? getBackgroundGeolocationPlugin() : null;
+    if (!bgGeo) return;  // browser path — navigator alone may prompt
+    try {
+        bgGeo.checkStatus((status) => {
+            let authed = status.authorization === bgGeo.AUTHORIZED ||
+                         status.authorization === bgGeo.AUTHORIZED_FOREGROUND;
+            if (!authed) return;                     // would trigger dialog — abort
+            if (!status.locationServicesEnabled) return;
+
+            let startedAt = Date.now();
+            navigator.geolocation.getCurrentPosition(
+                (pos) => {
+                    let acc = pos && pos.coords ? Math.round(pos.coords.accuracy) : null;
+                    let ms = Date.now() - startedAt;
+                    console.log('[GEO] hardware pre-warm', reason, 'ok, acc:', acc, 'ms:', ms);
+                    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_hardware_prewarm_ok', {
+                        reason: reason, ms: ms, acc: acc,
+                    });
+                },
+                (err) => {
+                    console.warn('[GEO] hardware pre-warm', reason, 'failed:', err && err.message);
+                    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_hardware_prewarm_failed', {
+                        reason: reason,
+                        code: err && err.code,
+                        message: err && err.message,
+                    });
+                },
+                {enableHighAccuracy: true, timeout: 30000, maximumAge: 0}
+            );
+        }, (err) => { /* checkStatus failed — abort silently */ });
+    } catch (e) { /* checkStatus threw — abort silently */ }
+}
+
 // Wrap audiofocus.releaseSession in a promise. Used at A3 rearm to ensure the
 // release (setActive:NO on iOS) completes before resetAudioSession's
 // setCategory + setActive:YES — otherwise the late deactivate callback can
@@ -293,6 +341,10 @@ PAGES['intro'] = () => {
     catch(e) {
         console.log('NoSleep not available');
     }
+
+    // Round 22 — wake the GPS receiver during onboarding on second+ launches.
+    // No-op when location permission isn't already granted (first launches).
+    maybePreWarmGpsHardware('intro');
 
     TYPEWRITE('intro')
         .pauseFor(2000)
@@ -1252,6 +1304,13 @@ PAGES['confirmgeo'] = () => {
             .then(() => {
                 console.log('GEO AUTHORIZED');
                 clearTimeout(recheck);
+                // Round 22 — hoist bgGeo.start() out of startgeo into here.
+                // Buys 10–30 s of GPS receiver warmup time during the
+                // checkbgloc / checknotifications / checkbatteryopt / rdv
+                // onboarding pages, instead of waiting until the user reaches
+                // startgeo. Idempotent at the bg-geo layer; the call in
+                // PAGES['startgeo'] below short-circuits when already running.
+                GEO.startGeoloc().catch((e) => console.warn('[GEO] confirmgeo prime failed:', e));
                 PAGE('startgeo')
             })
             .catch((e) => {
@@ -1273,23 +1332,55 @@ PAGES['confirmgeo'] = () => {
             alert('Vous devrez également autoriser les notifications pour que la localisation fonctionne en arrière plan !');
         }
         clearTimeout(recheck);
+        // Round 22 — user just granted permissions via system dialog. Prime
+        // GPS immediately rather than waiting for startgeo.
+        GEO.startGeoloc().catch((e) => console.warn('[GEO] confirmgeo-accept prime failed:', e));
         PAGE('startgeo')
     })
 }
 
 PAGES['startgeo'] = () => {
+    // Round 22 — startGeoloc() is now idempotent and was likely already invoked
+    // from confirmgeo's .then or accept handler. The call here covers the rare
+    // path where confirmgeo's prime was skipped (e.g. devmode jump-in). The
+    // warmup is fire-and-forget — there is no `#startgeo` page in app.html, so
+    // awaiting here would leave the WebView on a blank screen for up to 12 s.
+    // The rdv page's hasFreshFix loop will retry warmups if needed.
     GEO.startGeoloc()
-            .then(()=>{
-                // iOS: AUTHORIZED here already implies "Toujours" (startGeoloc rejects on partial auth),
-                // so the old confirmios reminder is redundant — go straight to motion check.
-                if (PLATFORM == 'ios') PAGE('checkmotion')
-                else if (PLATFORM == 'android') PAGE('checkbgloc')
-                else PAGE('rdv')
-            })
-            .catch((e)=>{
-                retryAuth++;
-                PAGE('confirmgeo')
-            })
+        .then(() => {
+            GEO.warmupPosition({timeout: 12000, source: 'startgeo-prime'})
+                .catch(() => { /* logged by _activeFix */ });
+
+            // Round 22 — one-shot Architecture D dispatch-stats snapshot 15 s
+            // after GPS start. The periodic emitter at line 3206 only runs on
+            // the parcours page, so cold-start FLP behaviour (whether Fused
+            // actually delivers during onboarding, or only Raw does once GPS
+            // hardware acquires) is invisible. This snapshot is the one signal
+            // that tells us whether bg-geo v2.9.0 Architecture D is doing its
+            // job at cold start.
+            if (PLATFORM === 'android') {
+                setTimeout(() => {
+                    var bg = (typeof BackgroundGeolocation !== 'undefined') ? BackgroundGeolocation : null;
+                    if (!bg || typeof bg.getLocationDispatchStats !== 'function') return;
+                    bg.getLocationDispatchStats().then((stats) => {
+                        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('location_dispatch_stats_coldstart', Object.assign({}, stats, {
+                            ms_since_startgeo: 15000,
+                            visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
+                        }));
+                    }).catch(() => { /* non-fatal */ });
+                }, 15000);
+            }
+
+            // iOS: AUTHORIZED here already implies "Toujours" (startGeoloc rejects on partial auth),
+            // so the old confirmios reminder is redundant — go straight to motion check.
+            if (PLATFORM == 'ios') PAGE('checkmotion')
+            else if (PLATFORM == 'android') PAGE('checkbgloc')
+            else PAGE('rdv')
+        })
+        .catch((e) => {
+            retryAuth++;
+            PAGE('confirmgeo')
+        })
 }
 
 //
@@ -1696,12 +1787,51 @@ PAGES['rdv'] = () => {
 
     $('#rdvdistance').hide()
 
+    var warmupPending = false
+    var warmupAttempts = 0
+    // Max ~40 s of actively pinging the receiver. After that we fall back to
+    // passive callbacks only — the receiver is either getting fixes or the
+    // walker is somewhere GPS can't reach (indoors), and continuing to
+    // hammer getCurrentLocation won't help either case.
+    const RDV_WARMUP_MAX_ATTEMPTS = 5
+    // Accuracy threshold for "fresh enough to compute walking distance".
+    // 60 m matches the bg-geo accuracy band that produces useful distance
+    // estimates; coarser fixes would show wildly wrong "Distance: N m" to
+    // the user.
+    const RDV_FRESH_ACC_MAX = 60
+    function hasFreshFix() {
+        if (!GEO.lastPosition || !GEO.lastTimeUpdate) return false
+        if ((Date.now() - GEO.lastTimeUpdate) > 12000) return false
+        if (!GEO.lastPosition.coords) return false
+        let acc = GEO.lastPosition.coords.accuracy
+        if (typeof acc !== 'number' || isNaN(acc)) return false
+        return acc <= RDV_FRESH_ACC_MAX
+    }
+    function requestWarmup() {
+        if (warmupPending || PLATFORM == 'browser') return
+        if (warmupAttempts >= RDV_WARMUP_MAX_ATTEMPTS) return
+        warmupPending = true
+        warmupAttempts++
+        GEO.warmupPosition({timeout: 8000, source: 'rdv-warmup'})
+            .catch(() => { /* logged by _activeFix */ })
+            .finally(() => { warmupPending = false })
+    }
+
     var checkpos = setInterval(() => {
-        if (PLATFORM != 'browser' && !GEO.ready()) return;
+        if (PLATFORM != 'browser' && (!GEO.ready() || !hasFreshFix())) {
+            requestWarmup()
+            // Distinguish "still trying" from "gave up, waiting passively" so the
+            // user gets honest feedback when GPS just isn't acquiring (indoors).
+            let label = warmupAttempts < RDV_WARMUP_MAX_ATTEMPTS
+                ? 'Initialisation de votre position...'
+                : 'En attente du GPS...'
+            $('#rdvdistance').show().text(label)
+            return;
+        }
         let d = PARCOURS.find('steps', 0).distanceToBorder(GEO.position())
         $('#rdvdistance').show().text('Distance: '+Math.round(d) + ' m');
         clearInterval(checkpos);
-        $('#rdv-accept').show() 
+        $('#rdv-accept').show()
         $('#rdvdistance').hide()
     }, 1000);
 

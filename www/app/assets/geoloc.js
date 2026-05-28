@@ -385,10 +385,11 @@ class GeoLoc extends EventEmitter {
     }
 
     // Active GPS recovery: when updates have stopped, try getCurrentLocation
-    // to nudge the OS into resuming GPS and feed a position back into the pipeline
+    // to nudge the OS into resuming GPS and feed a position back into the pipeline.
+    // Throttled to once per 15 s — must be larger than the inner timeout to avoid
+    // back-to-back requests.
     _heartbeat() {
         if (this._heartbeatInProgress) return;
-        // Throttle: must be larger than the getCurrentLocation timeout to avoid back-to-back requests
         if (Date.now() - this._lastHeartbeatTime < 15000) return;
         this._heartbeatInProgress = true;
         this._lastHeartbeatTime = Date.now();
@@ -396,42 +397,89 @@ class GeoLoc extends EventEmitter {
         console.log('[HEARTBEAT] GPS lost — requesting current location');
         if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_heartbeat', {visibility: APP_VISIBILITY});
 
-        let bgGeo = getBackgroundGeolocationPlugin()
-        if (!bgGeo) {
-            this._heartbeatInProgress = false;
-            return;
+        this._activeFix('heartbeat', {timeout: 5000})
+            .catch(() => {})
+            .finally(() => { this._heartbeatInProgress = false });
+    }
+
+    // Shared active-fix path used by:
+    //   - _heartbeat() (reactive: recover from stall, throttled, 5 s timeout)
+    //   - warmupPosition() (proactive: prime receiver from page transitions)
+    // Calls bg-geo getCurrentLocation (or navigator.geolocation in the no-bg-geo
+    // fallback path), normalizes the result, and pumps it through
+    // _callbackPosition so lastPosition / lastTimeUpdate / stateUpdate all
+    // update as if a passive fix had arrived.
+    //
+    // Emits gps_active_fix_ok / gps_active_fix_fail with a `reason` tag so
+    // analyze.mjs can attribute warmups to their call site (heartbeat,
+    // startgeo-prime, rdv-warmup, etc.) and measure TTFF distributions per
+    // call site.
+    _activeFix(reason, opts = {}) {
+        let timeout = typeof opts.timeout === 'number' ? opts.timeout : 10000
+        let maximumAge = typeof opts.maximumAge === 'number' ? opts.maximumAge : 0
+        let startedAt = Date.now()
+
+        let normalize = (location) => {
+            if (!location) return null
+            if (location.coords) return location  // already navigator-shape
+            return {
+                simulate: false,
+                timestamp: typeof location.time === 'number' ? location.time : Date.now(),
+                coords: {
+                    latitude: location.latitude,
+                    longitude: location.longitude,
+                    accuracy: location.accuracy,
+                    speed: location.speed,
+                }
+            }
         }
 
-        bgGeo.getCurrentLocation(
-            (location) => {
-                console.log('[HEARTBEAT] Got location:', location.latitude, location.longitude, 'acc:', location.accuracy);
-                var position = {
-                    simulate: false,
-                    timestamp: location.time,
-                    coords: {
-                        latitude: location.latitude,
-                        longitude: location.longitude,
-                        accuracy: location.accuracy,
-                        speed: location.speed,
-                    }
-                };
-                if (typeof TELEMETRY !== 'undefined') {
-                    TELEMETRY.log('gps_heartbeat_ok', {
-                        visibility: APP_VISIBILITY,
-                        acc: Math.round(location.accuracy),
-                        ageMs: typeof location.time === 'number' ? Math.max(0, Date.now() - location.time) : null
-                    });
-                }
-                this._callbackPosition(position, {source: 'heartbeat', visibility: APP_VISIBILITY});
-                this._heartbeatInProgress = false;
-            },
-            (error) => {
-                console.warn('[HEARTBEAT] getCurrentLocation failed:', error);
-                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_heartbeat_fail', {code: error.code, message: error.message});
-                this._heartbeatInProgress = false;
-            },
-            { enableHighAccuracy: true, timeout: 5000 }
-        );
+        let inject = (raw) => {
+            let position = normalize(raw)
+            if (position) this._callbackPosition(position, {source: reason, visibility: APP_VISIBILITY})
+            return position
+        }
+
+        let logOk = (position) => {
+            if (typeof TELEMETRY === 'undefined') return
+            TELEMETRY.log('gps_active_fix_ok', {
+                reason: reason,
+                ms: Date.now() - startedAt,
+                acc: position && position.coords ? Math.round(position.coords.accuracy) : null,
+                visibility: APP_VISIBILITY,
+            })
+        }
+
+        let logFail = (error) => {
+            if (typeof TELEMETRY === 'undefined') return
+            TELEMETRY.log('gps_active_fix_fail', {
+                reason: reason,
+                ms: Date.now() - startedAt,
+                code: error && typeof error.code !== 'undefined' ? error.code : null,
+                message: String(error && error.message || error),
+                visibility: APP_VISIBILITY,
+            })
+        }
+
+        let bgGeo = getBackgroundGeolocationPlugin()
+        if (bgGeo) {
+            return new Promise((resolve, reject) => {
+                bgGeo.getCurrentLocation(
+                    (location) => { let p = inject(location); logOk(p); resolve(p) },
+                    (error)    => { logFail(error); reject(error) },
+                    {enableHighAccuracy: true, timeout: timeout, maximumAge: maximumAge}
+                )
+            })
+        }
+
+        return new Promise((resolve, reject) => {
+            if (!navigator.geolocation) { reject('no navigator.geolocation'); return }
+            navigator.geolocation.getCurrentPosition(
+                (position) => { let p = inject(position); logOk(p); resolve(p) },
+                (error)    => { logFail(error); reject(error) },
+                {enableHighAccuracy: true, timeout: timeout, maximumAge: maximumAge}
+            )
+        })
     }
 
     _callbackPosition(position, telemetryMeta = {})
@@ -818,12 +866,20 @@ class GeoLoc extends EventEmitter {
         });
     }
 
-    // Start real geoloc
+    // Start real geoloc — idempotent. Safe to call from confirmgeo as soon as
+    // permissions are granted AND again from startgeo without re-initialising
+    // the state machine (which would clear lastTimeUpdate / lastPosition and
+    // briefly flip GEO.ready() back to false). backgroundGeoloc()'s checkStatus
+    // path already short-circuits when the native service is running, and the
+    // bg-geo plugin's listeners are guarded by backgroundGeolocSetup.
     startGeoloc() {
 
         return new Promise((resolve, reject) => {
-            this.init('gps');
-            
+            // Idempotency: only re-init the JS state machine when not already in
+            // 'gps' mode. Round 22 — hoist bgGeo.start() into confirmgeo to buy
+            // back the onboarding pages' worth of GPS warmup time on first runs.
+            if (this.runMode !== 'gps') this.init('gps');
+
             // test if BackgroundGeolocation is available
             if (getBackgroundGeolocationPlugin()) {
                 CALIBRATION_TIME = 1;
@@ -831,9 +887,12 @@ class GeoLoc extends EventEmitter {
                         .then(() => { resolve(); })
                         .catch(error => { reject(error); });
             }
-            
+
             // use classic navigator geolocation
             else {
+                // Idempotency in the navigator fallback path: an existing
+                // watchPosition is left alone so we don't double-register.
+                if (this.watchId) { resolve(); return }
                 console.warn('BackgroundGeolocation is not available, TESTING classic navigator geolocation');
                 return this.testGPS().then(() => {
                     console.log('classic GEO TEST OK, starting navigator geolocation');
@@ -878,6 +937,13 @@ class GeoLoc extends EventEmitter {
 
     checkPosition() {
         return checkBGPosition()
+    }
+
+    // Thin wrapper around _activeFix for the proactive call sites
+    // (startgeo-prime, rdv-warmup). Pass {source: '<call-site>'} to tag the
+    // gps_active_fix_ok / gps_active_fix_fail telemetry. Default timeout 10 s.
+    warmupPosition(options = {}) {
+        return this._activeFix(options.source || 'warmup', options)
     }
 
     position() {
@@ -1164,9 +1230,12 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
     return true;
 }
 
-function checkBGPosition() {
+function checkBGPosition(options = {}) {
     return new Promise((resolve, reject) => {
         let bgGeo = getBackgroundGeolocationPlugin()
+        let timeout = typeof options.timeout === 'number' ? options.timeout : 10000
+        let maximumAge = typeof options.maximumAge === 'number' ? options.maximumAge : 0
+        let enableHighAccuracy = options.enableHighAccuracy !== false
         if (!bgGeo) {
             console.warn('BackgroundGeolocation is not defined');
             resolve(GEO.lastPosition);
@@ -1181,7 +1250,7 @@ function checkBGPosition() {
               // If failed, still start tracking
               reject(error)
             },
-            { enableHighAccuracy: true, timeout: 10000 }
+            { enableHighAccuracy: enableHighAccuracy, timeout: timeout, maximumAge: maximumAge }
           );
     });
 }
