@@ -105,7 +105,11 @@ class Parcours extends EventEmitter {
             // should be. Persisted via store() so a kill-and-relaunch wakes
             // back up in LOST instead of silent.
             lost: false,
-            lostSince: null
+            lostSince: null,
+            // R21: stamp every successful store() so a cold relaunch can
+            // compare against the native NSUserDefaults snapshot and pick the
+            // fresher seek position. 0 means "never stored on this session".
+            lastUpdatedMs: 0
         };
         // Sustain timer is local-only — on relaunch the GPS picture is fresh
         // so we restart the accumulator rather than trusting a stale value.
@@ -593,6 +597,7 @@ class Parcours extends EventEmitter {
             return;
         }
         this.snapshotVoicePosition(triggerReason)
+        this.state.lastUpdatedMs = Date.now();
         try {
             localStorage.setItem('currentparcours', JSON.stringify(this.export(true)));
             if (triggerReason && typeof TELEMETRY !== 'undefined') TELEMETRY.log('parcours_store', {
@@ -603,12 +608,29 @@ class Parcours extends EventEmitter {
             })
         }
         catch (error) { console.error('Error storing parcours:', error); }
+
+        // R21: dual-write to NSUserDefaults (iOS only). Defensive backup of
+        // resumeStepVoicePos that survives a WKWebView cache wipe. Fire-and-
+        // forget — never block store() on the native bridge.
+        try {
+            if (typeof PLATFORM !== 'undefined' && PLATFORM === 'ios'
+                && typeof cordova !== 'undefined' && cordova.plugins
+                && cordova.plugins.audiofocus
+                && typeof cordova.plugins.audiofocus.setResumeSnapshot === 'function'
+                && this.state.stepIndex >= 0) {
+                cordova.plugins.audiofocus.setResumeSnapshot({
+                    stepId:     this.state.stepIndex,
+                    seekPosSec: this.state.resumeStepVoicePos || 0,
+                    pID:        this.pID || ''
+                });
+            }
+        } catch (e) { /* fire-and-forget */ }
     }
 
     // Restore parcours from localStorage
     restore() {
         let stored = localStorage.getItem('currentparcours');
-        try { 
+        try {
             let data = JSON.parse(stored);
             if (!data || !data.info || !data.pID || !data.spots || typeof data.spots !== 'object') {
                 console.warn('Stored parcours data is structurally invalid, clearing');
@@ -617,21 +639,96 @@ class Parcours extends EventEmitter {
                 return;
             }
             console.log('Restoring parcours from localStorage:', data);
-            this.build(data); 
-            console.log('Parcours restored from localStorage !'); 
-        } 
-        catch (error) { 
-            console.warn('Error restoring parcours:', error); 
-            this.clear(); 
-            this.clearStore();
-            return; 
+            this.build(data);
+            console.log('Parcours restored from localStorage !');
+            // R21: cross-check the native NSUserDefaults snapshot. If iOS wrote
+            // a fresher seek position than what just came out of localStorage
+            // (possible if a WKWebView cache eviction happened after the last
+            // native dual-write), override resumeStepVoicePos and emit a
+            // resume_native_override event so post-hoc analysis can quantify
+            // how often the native path saved us.
+            this._checkNativeResumeSnapshot();
         }
+        catch (error) {
+            console.warn('Error restoring parcours:', error);
+            this.clear();
+            this.clearStore();
+            return;
+        }
+    }
+
+    // R21: async cross-check the native NSUserDefaults resume snapshot against
+    // what we just restored from localStorage. Override only if pID + stepId
+    // match AND native is meaningfully fresher (>1 s grace to avoid flapping
+    // on near-simultaneous writes). Telemetry-only when no override happens.
+    _checkNativeResumeSnapshot() {
+        if (typeof PLATFORM === 'undefined' || PLATFORM !== 'ios') return;
+        if (typeof cordova === 'undefined' || !cordova.plugins
+            || !cordova.plugins.audiofocus
+            || typeof cordova.plugins.audiofocus.getResumeSnapshot !== 'function') return;
+
+        let lsStepId   = this.state.stepIndex;
+        let lsSeekPos  = this.state.resumeStepVoicePos || 0;
+        let lsPID      = this.pID;
+        let lsUpdated  = this.state.lastUpdatedMs || 0;
+
+        cordova.plugins.audiofocus.getResumeSnapshot().then((snap) => {
+            if (!snap || !snap.found) return;
+            let pidMatches  = (snap.pID === lsPID);
+            let stepMatches = (Number(snap.stepId) === Number(lsStepId));
+            let nativeMs    = Number(snap.savedAtMs) || 0;
+            let nativeIsFresher = nativeMs > 0 && nativeMs > (lsUpdated + 1000);
+
+            if (pidMatches && stepMatches && nativeIsFresher
+                && Math.abs(Number(snap.seekPosSec) - lsSeekPos) > 0.5) {
+                let prevSeek = lsSeekPos;
+                this.state.resumeStepVoicePos = Number(snap.seekPosSec);
+                this._logOrStash('resume_native_override', {
+                    stepIndex:    lsStepId,
+                    pID:          lsPID,
+                    prevSeekPos:  prevSeek,
+                    newSeekPos:   this.state.resumeStepVoicePos,
+                    lsUpdatedMs:  lsUpdated,
+                    nativeMs:     nativeMs,
+                    nativeAgeMs:  snap.ageMs,
+                    source:       'native'
+                });
+            } else if (pidMatches && stepMatches) {
+                this._logOrStash('resume_snapshot_check', {
+                    stepIndex:   lsStepId,
+                    pID:         lsPID,
+                    lsSeekPos:   lsSeekPos,
+                    nativeSeekPos: Number(snap.seekPosSec),
+                    lsUpdatedMs: lsUpdated,
+                    nativeMs:    nativeMs,
+                    source:      'localStorage'
+                });
+            } else {
+                this._logOrStash('resume_snapshot_mismatch', {
+                    lsPID:        lsPID,
+                    lsStepIndex:  lsStepId,
+                    nativePID:    snap.pID,
+                    nativeStepId: snap.stepId,
+                    reason:       !pidMatches ? 'pID' : 'stepId'
+                });
+            }
+        }).catch(() => { /* Android or pre-R21 build — silent */ });
     }
 
     // clear Store
     clearStore() {
-        try { localStorage.removeItem('currentparcours'); } 
+        try { localStorage.removeItem('currentparcours'); }
         catch (error) { console.error('Error clearing parcours store:', error); }
+        // R21: also clear the native NSUserDefaults snapshot so a rearmed
+        // loan phone does not resurrect the previous visitor's seek position.
+        try {
+            if (typeof PLATFORM !== 'undefined' && PLATFORM === 'ios'
+                && typeof cordova !== 'undefined' && cordova.plugins
+                && cordova.plugins.audiofocus
+                && typeof cordova.plugins.audiofocus.clearResumeSnapshot === 'function') {
+                cordova.plugins.audiofocus.clearResumeSnapshot();
+            }
+        } catch (e) { /* fire-and-forget */ }
     }
 
     // The ordered set of steps the walker may legitimately resume into right

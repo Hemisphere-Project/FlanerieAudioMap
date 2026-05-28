@@ -257,6 +257,19 @@ PAGES_CLEANUP['parcours']           = () => {
             (err) => { if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audiofocus_keepalive_error', {phase: 'stop', error: String(err)}); }
         );
     }
+
+    // R22 (iOS): tear down the lock-screen Now Playing tile + remote command
+    // handlers. Mirror of the setup at parcours entry so leaving the parcours
+    // page (page switch, walk end, or rearm flow) leaves no orphan media
+    // session presence in Control Center.
+    if (typeof PLATFORM !== 'undefined' && PLATFORM === 'ios'
+        && typeof cordova !== 'undefined' && cordova.plugins && cordova.plugins.audiofocus
+        && typeof cordova.plugins.audiofocus.clearNowPlaying === 'function') {
+        cordova.plugins.audiofocus.clearNowPlaying(
+            () => { if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('nowplaying_cleared', {}); },
+            (err) => { if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('nowplaying_error', { phase: 'clear', error: String(err) }); }
+        );
+    }
 };
 PAGES_CLEANUP['checknotifications'] = () => clearNotificationPermissionCheck();
 PAGES_CLEANUP['checkbatteryopt']    = () => clearBatteryOptCheck();
@@ -2056,7 +2069,24 @@ PAGES['parcours'] = async () => {
             (err) => { if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audiofocus_keepalive_error', {phase: 'start', error: String(err)}); }
         );
     }
-    
+
+    // R22 (iOS): present a "Now Playing" tile on the lock screen + Control
+    // Center with all remote-control commands disabled. Tells iOS the app is
+    // actively playing media (helps the background scheduler keep us alive)
+    // and gives the walker a visual confirmation that audio is bound — without
+    // exposing pause / skip controls that would let them break the walk.
+    if (typeof PLATFORM !== 'undefined' && PLATFORM === 'ios'
+        && typeof cordova !== 'undefined' && cordova.plugins && cordova.plugins.audiofocus
+        && typeof cordova.plugins.audiofocus.setupNowPlaying === 'function') {
+        let nowPlayingTitle = 'Flânerie';
+        try { if (PARCOURS && PARCOURS.info && PARCOURS.info.name) nowPlayingTitle = PARCOURS.info.name; } catch (e) {}
+        cordova.plugins.audiofocus.setupNowPlaying(
+            { title: nowPlayingTitle, artist: 'Marche guidée', albumTitle: '' },
+            () => { if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('nowplaying_setup', { title: nowPlayingTitle }); },
+            (err) => { if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('nowplaying_error', { phase: 'setup', error: String(err) }); }
+        );
+    }
+
     if (testplayer) {
         testplayer.stop();
         testplayer.clear();
