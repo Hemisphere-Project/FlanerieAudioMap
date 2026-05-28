@@ -247,6 +247,35 @@ function geo_distance(pos1, pos2) {
     }
 }
 
+// R23 / BG-11 (iOS, v2.10.0): build the GPS wake-up rail for a parcours.
+// One CLCircularRegion at the geographic midpoint between each pair of
+// consecutive step centroids, 100 m radius. The rail's sole purpose is to
+// wake the app when CLLocationManager standard updates stall — it does NOT
+// participate in step audio triggering. Bounded by the iOS region-monitor
+// limit (20 per app, app-wide); a 17-step parcours produces 16 rail
+// regions, well under the limit.
+function computeGpsRail(parcours) {
+    var steps = parcours && parcours.spots && parcours.spots.steps || [];
+    var ordered = steps.slice().sort(function(a, b) { return a._index - b._index; });
+    if (ordered.length < 2) return [];
+
+    var rail = [];
+    for (var i = 0; i < ordered.length - 1; i++) {
+        var a = ordered[i] && ordered[i]._spot;
+        var b = ordered[i+1] && ordered[i+1]._spot;
+        if (!a || !b) continue;
+        if (typeof a.lat !== 'number' || typeof b.lat !== 'number') continue;
+        if (typeof a.lon !== 'number' || typeof b.lon !== 'number') continue;
+        rail.push({
+            id:     'rail_' + ordered[i]._index + '_' + ordered[i+1]._index,
+            lat:    (a.lat + b.lat) / 2,
+            lon:    (a.lon + b.lon) / 2,
+            radius: 100  // metres — see ios-native-plan §1
+        });
+    }
+    return rail;
+}
+
 // Shortest distance in meters from a point to a segment,
 // where a segment is defined by two points.
 // pos is the point, segA and segB are the two points defining the segment.
@@ -1180,6 +1209,17 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
         GEO.motionIsStationary = (activity.type === 'STILL');
         if (typeof TELEMETRY !== 'undefined')
             TELEMETRY.log('motion_activity', {type: activity.type, confidence: activity.confidence});
+    });
+
+    // R23 / BG-11 (iOS, v2.10.0): rail of CLCircularRegion wake-ups. Pure
+    // telemetry — the native side already restarted CLLocationManager if it
+    // had stalled >30 s. Step-triggering remains owned by the fine-grained
+    // JS polygon check; this event never starts audio. The payload carries
+    // last_real_callback_age_ms + did_force_reacquire so post-hoc analysis
+    // can quantify how often the rail saved us during an iOS-26-class GPS
+    // blackout.
+    bgGeo.on('region_wake', function(payload) {
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_rail_wake', payload || {});
     });
 
     if (!backgroundGeolocSetup) {

@@ -22,7 +22,7 @@ Versions in the build today: `cordova-background-geolocation-plugin@2.9.0`, `cor
 
 ---
 
-## 1. **Workstream H — GPS rail of wake-up regions** *(major; decisions settled — ready to implement)*
+## 1. **Workstream H — GPS rail of wake-up regions** *(✅ shipped Round 23 / bg-geo v2.10.0; awaiting iOS device validation)*
 
 ### Idea (refined per your feedback)
 
@@ -277,11 +277,11 @@ Two places, both inside workstream H:
 
 Suggested sequencing (all decisions settled):
 
-1. **Workstream K (native step-state cache)** — small, no architectural dependency. Lands first as risk-reduction infrastructure.
-2. **Workstream J (MPNowPlayingInfo + locked controls)** — small, fits inside the current audiofocus plugin even before Decision 2.A is settled.
-3. **Workstream H (rail of wake-up regions)** — biggest user-visible win; lands in bg-geo as v2.10.0.
-4. **Workstream I (native audio engine)** — biggest rewrite; touches plugin layout per Decision 2.A. Bundle MPNowPlayingInfo migration if Option A is chosen.
-5. **Workstream L (CLMonitor)** — folded into workstream H's implementation choice. Not a separate round.
+1. **Workstream K (native step-state cache)** — ✅ Round 21/22 (audiofocus v1.8.0).
+2. **Workstream J (MPNowPlayingInfo + locked controls)** — ✅ Round 22 (audiofocus v1.8.0).
+3. **Workstream H (rail of wake-up regions)** — ✅ Round 23 (bg-geo v2.10.0).
+4. **Workstream I (native audio engine)** — biggest rewrite; touches plugin layout per Decision 2.A. Bundle MPNowPlayingInfo migration if Option A is chosen. **Next.**
+5. **Workstream L (CLMonitor)** — folded into workstream H's implementation choice. Currently shipped on legacy `startMonitoringForRegion:` (iOS 13+). CLMonitor upgrade (with visit events per Decision 5 Option B) deferred to a follow-up round on iOS 17+ devices.
 
 After each: bump fork version, commit dirty repos, re-install in FlanerieCordova, regenerate package-lock, ship a build for VILLEURBANNE.
 

@@ -270,6 +270,20 @@ PAGES_CLEANUP['parcours']           = () => {
             (err) => { if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('nowplaying_error', { phase: 'clear', error: String(err) }); }
         );
     }
+
+    // R23 / BG-11 (iOS, v2.10.0): tear down the GPS wake-up rail when
+    // leaving the parcours page. Mirror of configureRail at parcours entry;
+    // bg-geo's onStop also clears the rail as a defensive backup, but doing
+    // it here covers page-switch / rearm before any bgGeo.stop() runs.
+    if (typeof PLATFORM !== 'undefined' && PLATFORM === 'ios'
+        && typeof bgGeo !== 'undefined'
+        && typeof bgGeo.clearRail === 'function') {
+        bgGeo.clearRail().then(function() {
+            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_rail_cleared', {});
+        }, function(err) {
+            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_rail_clear_error', { error: String(err) });
+        });
+    }
 };
 PAGES_CLEANUP['checknotifications'] = () => clearNotificationPermissionCheck();
 PAGES_CLEANUP['checkbatteryopt']    = () => clearBatteryOptCheck();
@@ -2085,6 +2099,45 @@ PAGES['parcours'] = async () => {
             () => { if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('nowplaying_setup', { title: nowPlayingTitle }); },
             (err) => { if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('nowplaying_error', { phase: 'setup', error: String(err) }); }
         );
+    }
+
+    // R23 / BG-11 (iOS, v2.10.0): register the GPS rail of CLCircularRegion
+    // wake-up triggers. One 100 m region at each transition midpoint between
+    // consecutive step centroids. The rail is wakeup-only — fine-grained
+    // step audio still fires through the JS polygon zone-check on a fresh
+    // real CLLocationManager callback. On iOS-26 GPS blackouts the OS-level
+    // region monitor fires anyway, native code restarts standard updates
+    // (forceReacquire) if real callbacks have stalled >30 s, and the next
+    // real fix lands within the iOS wake window (~10 s + background-task).
+    if (typeof PLATFORM !== 'undefined' && PLATFORM === 'ios'
+        && typeof bgGeo !== 'undefined'
+        && typeof bgGeo.configureRail === 'function'
+        && typeof computeGpsRail === 'function') {
+        try {
+            let rail = computeGpsRail(PARCOURS);
+            if (rail.length === 0) {
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_rail_configure_skipped', { reason: 'no_steps' });
+            } else if (rail.length > 20) {
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_rail_configure_warn', {
+                    region_count: rail.length, limit: 20, action: 'truncated'
+                });
+                rail = rail.slice(0, 20);
+            }
+            if (rail.length > 0) {
+                bgGeo.configureRail(rail).then(function(count) {
+                    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_rail_configured', {
+                        region_count: count,
+                        rail_radius_m: 100,
+                        step_count: PARCOURS && PARCOURS.spots && PARCOURS.spots.steps ? PARCOURS.spots.steps.length : 0,
+                    });
+                }, function(err) {
+                    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_rail_configure_error', { error: String(err) });
+                });
+            }
+        } catch (e) {
+            console.warn('[R23] computeGpsRail failed:', e);
+            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_rail_configure_error', { error: String(e) });
+        }
     }
 
     if (testplayer) {
