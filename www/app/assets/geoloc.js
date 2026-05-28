@@ -270,7 +270,7 @@ function computeGpsRail(parcours) {
             id:     'rail_' + ordered[i]._index + '_' + ordered[i+1]._index,
             lat:    (a.lat + b.lat) / 2,
             lon:    (a.lon + b.lon) / 2,
-            radius: 100  // metres — see ios-native-plan §1
+            radius: 100  // metres — see Workstream H Decision 1.A in mobile-audit.md
         });
     }
     return rail;
@@ -1224,7 +1224,7 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
 
     // R26 / BG-12 (iOS, v2.11.0): CLVisit fired. iOS infers the user has
     // stopped at a place; we log it as gps_visit_event for telemetry only.
-    // Decision 5 Option B in ios-native-plan.md — measuring whether visit
+    // Decision 5 Option B (Workstream L in mobile-audit.md) — measuring whether visit
     // detection correlates with step dwell time before considering it as a
     // step-confirm signal. Pairs naturally with E1/E2/E3 zone-overshoot
     // calibration from VILLEURBANNE field data.

@@ -22,7 +22,7 @@ if (typeof AUDIO_BACKEND_ANDROID === 'undefined') {
     var AUDIO_BACKEND_ANDROID = (typeof window !== 'undefined' && window.AUDIO_BACKEND_ANDROID) ? window.AUDIO_BACKEND_ANDROID : 'exoplayer'
 }
 
-// iOS audio backend selector (R25, ios-native-plan §2 I.B) — 'audio-simple'
+// iOS audio backend selector (R25, Workstream I.B in mobile-audit.md) — 'audio-simple'
 // (cordova-plugin-audio-simple v0.3.0's AVAudioPlayer pool with single-owner
 // AVAudioSession) or 'native-media' (legacy cordova-plugin-media via
 // NativeMediaPlayer wrapper). Default 'audio-simple' from R25 so the field

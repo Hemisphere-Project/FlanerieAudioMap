@@ -87,10 +87,41 @@
       "Bash(grep -nA5 'id=\"startgeo\"' /home/mgr/Bakery/Flanerie/FlanerieAudioMap/www/app/app.html)",
       "Bash(grep -nA20 \"^function PAGE\\\\b\\\\|^var PAGE \\\\|currentPage\" /home/mgr/Bakery/Flanerie/FlanerieAudioMap/www/app/pages.js)",
       "Bash(grep -nA12 \"^PAGES\\\\['intro'\\\\]\" /home/mgr/Bakery/Flanerie/FlanerieAudioMap/www/app/pages.js)",
-      "Bash(grep -nB3 \"location_dispatch_stats\" /home/mgr/Bakery/Flanerie/FlanerieAudioMap/www/app/pages.js)"
+      "Bash(grep -nB3 \"location_dispatch_stats\" /home/mgr/Bakery/Flanerie/FlanerieAudioMap/www/app/pages.js)",
+      "Bash(git -C /home/mgr/Bakery/Flanerie/FlanerieAudioMap status --short)",
+      "Bash(node scripts/sync-workspace-plugins.mjs --plugins cordova-plugin-audiofocus)",
+      "Bash(git -C /home/mgr/Bakery/Flanerie/cordova-plugin-audiofocus log --oneline -5)",
+      "Bash(git -C /home/mgr/Bakery/Flanerie/cordova-plugin-audiofocus diff --stat)",
+      "Bash(node scripts/sync-workspace-plugins.mjs --apply --plugins cordova-plugin-audiofocus)",
+      "Bash(git -C /home/mgr/Bakery/Flanerie/FlanerieCordova status --short)",
+      "Bash(git -C /home/mgr/Bakery/Flanerie/FlanerieCordova add package-lock.json)",
+      "Bash(git -C /home/mgr/Bakery/Flanerie/FlanerieCordova commit -m ' *)",
+      "Bash(git -C /home/mgr/Bakery/Flanerie/FlanerieAudioMap diff --stat .claude/settings.local.json)",
+      "Bash(git -C /home/mgr/Bakery/Flanerie/FlanerieAudioMap log --oneline -3)",
+      "Bash(git -C /home/mgr/Bakery/Flanerie/FlanerieCordova log --oneline -3)",
+      "Bash(git -C /home/mgr/Bakery/Flanerie/cordova-background-geolocation-plugin log --oneline -3)",
+      "Bash(git -C /home/mgr/Bakery/Flanerie/cordova-background-geolocation-plugin status --short)",
+      "Bash(git -C /home/mgr/Bakery/Flanerie/cordova-background-geolocation-plugin diff --stat)",
+      "Bash(node scripts/sync-workspace-plugins.mjs --plugins cordova-background-geolocation-plugin)",
+      "Bash(node scripts/sync-workspace-plugins.mjs --apply --plugins cordova-background-geolocation-plugin)",
+      "Bash(git -C /home/mgr/Bakery/Flanerie/FlanerieCordova diff package-lock.json)",
+      "Bash(mv /home/mgr/Bakery/Flanerie/cordova-plugin-exoplayer-simple /home/mgr/Bakery/Flanerie/cordova-plugin-audio-simple && ls /home/mgr/Bakery/Flanerie/cordova-plugin-audio-simple/)",
+      "Bash(git -C /home/mgr/Bakery/Flanerie/cordova-plugin-audio-simple remote -v)",
+      "Bash(git -C /home/mgr/Bakery/Flanerie/cordova-plugin-audio-simple remote set-url origin git@github.com:Maigre/cordova-plugin-audio-simple.git)",
+      "Bash(git -C /home/mgr/Bakery/Flanerie/cordova-plugin-audio-simple ls-remote origin HEAD)",
+      "Bash(git -C /home/mgr/Bakery/Flanerie/cordova-plugin-audio-simple status --short)",
+      "Bash(git -C /home/mgr/Bakery/Flanerie/cordova-plugin-audio-simple fetch origin)",
+      "Bash(npx cordova *)",
+      "Bash(node scripts/sync-workspace-plugins.mjs --plugins cordova-plugin-audio-simple)",
+      "Bash(node scripts/sync-workspace-plugins.mjs --apply --plugins cordova-plugin-audio-simple)",
+      "Bash(git -C /home/mgr/Bakery/Flanerie/FlanerieCordova add package.json package-lock.json scripts/sync-workspace-plugins.mjs scripts/validate-container.mjs www/apputils.js)",
+      "Bash(node scripts/sync-workspace-plugins.mjs --plugins cordova-plugin-audio-simple,cordova-plugin-audiofocus)",
+      "Bash(node scripts/sync-workspace-plugins.mjs --apply --plugins cordova-plugin-audio-simple,cordova-plugin-audiofocus)",
+      "Bash(awk -F'|' '{print $2}')"
     ],
     "additionalDirectories": [
-      "/tmp"
+      "/tmp",
+      "/home/mgr/Bakery/Flanerie"
     ]
   }
 }
