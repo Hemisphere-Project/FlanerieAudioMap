@@ -73,7 +73,7 @@ Each onboarding gate hard-blocks until its check passes.
 | `cordova-plugin-audiofocus` | 1.9.0 | ✅ pinned (Round 25 shrink: R21+R22 iOS surface migrated to audio-simple; MediaPlayer.framework dep dropped) |
 | `cordova-plugin-power-optimization` | 0.3.1 | ✅ pinned @ `3e89474` |
 | `cordova-background-geolocation-plugin` | 2.12.0 | ✅ pinned (BG-13: authoritative configureRail count + region_monitor_fail telemetry — audit fix) |
-| `cordova-plugin-audio-simple` | 0.3.0 | ✅ pinned (Round 25: iOS native engine — AVAudioPlayer pool + AVAudioSession + MPNowPlayingInfo + step-state cache migrated from audiofocus) |
+| `cordova-plugin-audio-simple` | 0.3.1 | ✅ pinned (0.3.1: releaseAll waits for real ExoPlayer teardown; ping version string corrected) |
 
 **Workstream coverage (post-GIVORS):**
 | Workstream | Status |
