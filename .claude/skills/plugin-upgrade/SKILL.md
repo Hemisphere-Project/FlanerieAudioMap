@@ -37,6 +37,12 @@ For each plugin (or the subset passed via `--plugins`):
 2. **Release dirty forks**: if `git status` is dirty:
    - `package.json` version + `plugin.xml` `<plugin version>` are bumped (default
      `--bump patch`, accepts `minor` / `major`).
+   - Any `versionFiles` declared in the plugin's `pluginConfigs` entry are patched
+     in-place (regex replace), keeping runtime `ping()` version strings in sync
+     with `package.json`. Currently declared for `cordova-plugin-audio-simple`
+     (`src/android/AudioSimplePlugin.java` + `src/ios/AudioSimplePlugin.m`). Add
+     a `versionFiles` entry to `pluginConfigs` in the script when adding a new fork
+     that exposes a hardcoded version string in its native source.
    - `git add -A` + `git commit -m "chore: release <name> v<next>"`.
    - `git push origin <branch>`.
 3. **Push already-committed work**: forks that are `ahead > 0` get pushed even
