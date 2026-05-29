@@ -117,7 +117,11 @@
       "Bash(git -C /home/mgr/Bakery/Flanerie/FlanerieCordova add package.json package-lock.json scripts/sync-workspace-plugins.mjs scripts/validate-container.mjs www/apputils.js)",
       "Bash(node scripts/sync-workspace-plugins.mjs --plugins cordova-plugin-audio-simple,cordova-plugin-audiofocus)",
       "Bash(node scripts/sync-workspace-plugins.mjs --apply --plugins cordova-plugin-audio-simple,cordova-plugin-audiofocus)",
-      "Bash(awk -F'|' '{print $2}')"
+      "Bash(awk -F'|' '{print $2}')",
+      "Bash(git -C /home/mgr/Bakery/Flanerie/FlanerieAudioMap rm ios-native-plan.md)",
+      "Bash(git -C /home/mgr/Bakery/Flanerie/cordova-plugin-audiofocus status --short)",
+      "Bash(git -C /home/mgr/Bakery/Flanerie/cordova-plugin-audio-simple diff --stat src/android/AudioSimplePlugin.java)",
+      "Bash(git -C /home/mgr/Bakery/Flanerie/cordova-plugin-audio-simple diff src/android/AudioSimplePlugin.java)"
     ],
     "additionalDirectories": [
       "/tmp",

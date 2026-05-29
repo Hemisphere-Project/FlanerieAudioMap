@@ -1,9 +1,9 @@
 # Mobile Audit & Remediation Plan
 
 **Original:** 2026-04-27
-**Last updated:** 2026-05-28 (Round 21: cordova-plugin-exoplayer-simple v0.1.1 + audiofocus v1.7.1 cross-plugin focus listener)
+**Last updated:** 2026-05-29 (post-GIVORS archive; next-step priorities refreshed)
 **Scope:** Cordova launcher (FlanerieCordova) + downloaded local webapp (FlanerieAudioMap) + four forked native plugins
-**Field tests so far:** ELYSEE (multiple), FRAPPAZ, GUILLOTIÈRE (2024-12), GIVORS (2026-05-20). Next: VILLEURBANNE.
+**Field tests so far:** ELYSEE (multiple), FRAPPAZ, GUILLOTIÈRE (2024-12), GIVORS (2026-05-20, archived). Next: VILLEURBANNE.
 
 ## Field Safety Legend
 
@@ -95,6 +95,13 @@ Each onboarding gate hard-blocks until its check passes.
 - **R21 / R22 iOS validation** — on at least one iOS device at VILLEURBANNE: confirm `nowplaying_setup` fires at parcours entry, lock-screen tile shows title with disabled controls, `resume_snapshot_check` (or `resume_native_override`) emits at every `parcours_restore`. Cross-check `lastUpdatedMs` parity between localStorage and NSUserDefaults timestamps.
 - **R23 iOS rail validation** — on at least one iOS device at VILLEURBANNE: confirm `gps_rail_configured` fires once per parcours entry with `region_count` = (step_count − 1), `gps_rail_wake` events fire as the walker crosses transition midpoints, and `did_force_reacquire=true` correlates with actual standard-callback stalls (cross-check against `real_callback_freshness`). On an iOS 26.3.x device the rail should produce non-zero `gps_rail_wake.did_force_reacquire=true` events during the 8–14 min blackouts (S1 failure mode).
 - **R26 iOS visit validation** — `gps_visit_event` should fire during VILLEURBANNE walks, particularly during the FLANERIE_ELYSEE step 4 "choice step" lingering case and any natural pause spots. Cross-check the `arrival_date` / `departure_date` deltas against `voice_snapshot` step timing — if visit detection lines up with step dwell, the data may eventually feed E1/E2/E3 step-confirm gating as a stronger signal than the GPS-accuracy-only path.
+
+**Recommended next moves (post-GIVORS archive):**
+- **Do not open new native scope before VILLEURBANNE.** The remaining blockers are validation and threshold calibration, not missing implementation.
+- **Run one focused VILLEURBANNE validation pass with the minimum device set:** 1 iOS device (ideally 26.3.x or 26.4.x) and 1 loan-phone Android SM-A515F. Success criteria: B4 freshness histograms, E1/E2/E3 border-accuracy histograms, H1 ExoPlayer metrics, and R21-R26 iOS telemetry all present in one session set.
+- **Immediately after that data lands, ship one small threshold round:** calibrate B4 `gps_frozen` / `gps_unfrozen` thresholds and E1/E2/E3 accuracy + sustain gates. Avoid unrelated refactors in the same round.
+- **If H1 is clean, make ExoPlayer the canonical Android path and schedule Howler retirement.** Keep the override flag through one more clean production-like session, then remove the Howler branch / `Howler.autoUnlock` / `Howler.autoSuspend` under the existing R21-followup item.
+- **Only reopen Phase 3 items if telemetry still shows a real gap.** P3.5 Plan B/C and any visit-driven step-confirm work stay conditional on VILLEURBANNE evidence, not pre-emptive scope growth.
 
 ---
 
@@ -325,7 +332,7 @@ Numbered items are kept here for traceability between this doc and the GIVORS re
 - **P0.2** Background validation UX — bypassed by design; not a blocker.
 - **P0.3** Notification strategy — ✅ PARTIAL (chain disabled, foreground service handles keepalive).
 - **P0.4** Plugin guards — ✅ ROLLING (superseded by per-fork fixes).
-- **P0.5** Background-geolocation fork — ✅ now v2.7.0 (BG-2/3/4/5/7/10 + F-G1/G3/G4 shipped).
+- **P0.5** Background-geolocation fork — ✅ now v2.12.0 (BG-2..BG-13 + P0.5 Fix 1e diagnostic + Architecture D + iOS rail/visit telemetry shipped).
 
 ### P1 — Correctness and stability (all shipped)
 P1.5, P1.5b, P1.5c, P1.6, P1.8 (folded into P1.25), P1.10, P1.11, P1.11b, P1.12, P1.13, P1.14, P1.16, P1.17, P1.18, P1.19, P1.20, P1.21, P1.22, P1.23, P1.24, P1.25, P1.26, P1.27, P1.28, P1.29, P1.30, P1.32 (DEFERRED, low), P1.33 (Android GPS cold-start NETWORK_PROVIDER — ✅), P1.34 (closed by D3+B4+G3 v2.7.0).
@@ -351,7 +358,7 @@ P2.9, P2.10, P2.11, P2.12, P2.13, P2.14, P2.15 / P3.5b voice-snapshot lifecycle 
 - **C2** Platform/plugin upgrades — ✅ DONE.
 - **C3** Launcher cache-buster regex — low priority, accepted.
 - **C4** Container build checklist — ✅ DONE (full write-up still open as a deliverable).
-- **C5** Power optimization fork — ✅ v0.2.0 shipped. Open: `IsAutoRevokeWhitelisted` only.
+- **C5** Power optimization fork — ✅ v0.3.1 shipped. `IsAutoRevokeWhitelisted` / `RequestAutoRevokeWhitelist` landed in PO-9.
 - **C6** Audiofocus iOS interruption without ShouldResume — ✅ DONE (Round 5.3).
 - **C7** Server resilience — ✅ PARTIAL.
 
@@ -410,6 +417,32 @@ For the analytical context behind these rounds see `20260520-GIVORS-report.md`. 
 - Polygon overlaps BLOC_07→08, BLOC_08→09 are tight — verify no double-trigger.
 - "Je suis perdu.e !" map without tile cache (currently disabled).
 - `www/app/images/` MP3 fallbacks (`afterplay`, `resume`, `youlost`) ship as `_`-prefixed placeholders; operator renames to enable.
+
+---
+
+## Field test archive — GIVORS (2026-05-20)
+
+**Sessions:** 110 files · ~43 meaningful visitor sessions (16 clean completions, 21 completed with friction, 5 GPS-incomplete, 1 abandoned, ~51 excluded/operator).
+
+**Significant issues found and fixed (all shipped by Round 21):**
+- **S1** iOS 26.3.1 GPS multi-gap regression (8–14 min blackouts) — `51nv, ibk6, mq3z`. Fixed: D1 warning + D3/D4/D5 native reacquire + B4 watchdog + H GPS rail (bg-geo v2.6.0–v2.10.0).
+- **S2** Audio narration failures (load + playback errors, ≥14 distinct files) — `wjfo, vigi, rumx, mq3z, 0vvc`. Fixed: C1 error classification + C2 integrity check + C4 retry.
+- **M2** `step_resume_current` double-resume / zone-border overshoot — `yapj` ×4, `189t` ×3, `19dh` ×3, others. **E1/E2/E3 pending VILLEURBANNE `accuracy_near_border` data.**
+- **M3** Silent audio on loan-phone re-arm (SM-A515F). Fixed: A1/A2/A3.
+- **M4/P9** Howler cold-load race on first-install Android (4 restart-pairs). Fixed: A8/A8b; structurally closed by ExoPlayer backend (Round 21 G4).
+- **m1** Android OEM kill / resume (~20 sessions, heaviest `f743` ×7). Fixed: B1 + BG-5 AlarmManager + Architecture D (bg-geo v2.9.0) + ExoPlayer FG service (Round 21).
+- **m2** iOS audiofocus fail flood (4929 events fleet-wide, never walk-breaking). Fixed: G1 audiofocus_session_reset path.
+- **P8** Stale seek-position on iOS crash resume (`rumx`). Fixed: A4.
+- **§11** Build / parcours-config skew (two webapp hashes, 18-step vs 17-step stale cache). Fixed: A6 freshness gate.
+
+**Open items from this test (all require VILLEURBANNE data — no code pending):**
+- B4 UI freeze-band threshold (`real_callback_freshness` distribution)
+- E1/E2/E3 zone-overshoot gate thresholds (`accuracy_near_border` distribution)
+- Architecture D validation (`location_dispatch_stats` — confirm Fused saves the day on restrictive OEMs)
+- P0.5 Fix 1e JS-suspended-despite-alarm pattern (`alarm_wake_stats`)
+- ExoPlayer vs Howler side-by-side (`audio_play_stuck` / `audio_loaderror` rates; `backend` field is the bucket key)
+
+Full session tables, device breakdown, and issue analysis: [archive/20260520-GIVORS-report.md](archive/20260520-GIVORS-report.md).
 
 ---
 
