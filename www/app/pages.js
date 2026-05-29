@@ -1946,32 +1946,35 @@ PAGES['checkaudio'] = () => {
         );
     }
 
-    console.log('[AUDIO] testing via PlayerSimple, basepath:', BASEURL+'/images/');
-    testplayer.load(BASEURL+'/images/', {src: 'test.mp3', master: 1}, false)
-
-    // Gate 2 (iOS only): the test player fell back to Howler because httpToNativePath
-    // returned null — usually because LOCALMEDIA_PATH_NATIVE / LOCALAPP_PATH_NATIVE
-    // weren't captured. Howler cannot start playback from a background GPS callback
-    // on a locked iPhone, so the walk would die silently in the pocket.
-    if (ok && PLATFORM === 'ios' && (testplayer._isNativeFallback || IOS_NATIVE_FALLBACK_DETECTED)) {
-        failAudio('ios_native_fallback',
-            "Erreur de compatibilité audio (iOS).<br /><br />" +
-            "Demandez à un membre de l'équipe."
-        );
-    }
-
-    // Skip play and the typewriter animation if a gate already hard-failed.
-    // Guard play() too — without it an audiofocus-unavailable device still
-    // emits a real play event and checkaudio_play_ok, conflicting with the
-    // red gate the operator is looking at.
+    // All probe activity is guarded so a terminal Gate 1 failure prevents
+    // load() from firing — a subsequent loaderror/playerror on a partially
+    // loaded player would otherwise overwrite the specific gate message and
+    // telemetry reason with the generic fallback. Gate 2 must remain after
+    // load() because _isNativeFallback is set during the load call.
     if (!fatalReason) {
-        testplayer.play(0)
-        // Watchdog: if neither `play` nor an error event fires within 8 s, hard-fail.
-        playWatchdog = setTimeout(() => {
-            if (playObserved || fatalReason) return;
-            failAudio('play_timeout', "Erreur de lecture audio. Votre appareil ne semble pas compatible...");
-        }, 8000);
-        typewriterInstance = TYPEWRITE('checkaudio-desc').pauseFor(4000);
+        console.log('[AUDIO] testing via PlayerSimple, basepath:', BASEURL+'/images/');
+        testplayer.load(BASEURL+'/images/', {src: 'test.mp3', master: 1}, false)
+
+        // Gate 2 (iOS only): the test player fell back to Howler because httpToNativePath
+        // returned null — usually because LOCALMEDIA_PATH_NATIVE / LOCALAPP_PATH_NATIVE
+        // weren't captured. Howler cannot start playback from a background GPS callback
+        // on a locked iPhone, so the walk would die silently in the pocket.
+        if (ok && PLATFORM === 'ios' && (testplayer._isNativeFallback || IOS_NATIVE_FALLBACK_DETECTED)) {
+            failAudio('ios_native_fallback',
+                "Erreur de compatibilité audio (iOS).<br /><br />" +
+                "Demandez à un membre de l'équipe."
+            );
+        }
+
+        if (!fatalReason) {
+            testplayer.play(0)
+            // Watchdog: if neither `play` nor an error event fires within 8 s, hard-fail.
+            playWatchdog = setTimeout(() => {
+                if (playObserved || fatalReason) return;
+                failAudio('play_timeout', "Erreur de lecture audio. Votre appareil ne semble pas compatible...");
+            }, 8000);
+            typewriterInstance = TYPEWRITE('checkaudio-desc').pauseFor(4000);
+        }
     }
 
     $('#checkaudio-accept').off().on('click', () => {
