@@ -60,10 +60,14 @@ const stepMax = inferParcoursStepMax(all);
 const pre = cutoff ? all.filter(s => s.localNum < cutoff) : [];
 const afterCutoff = all.filter(s => !pre.includes(s));
 const operator = opts.operator ? afterCutoff.filter(s => s.deviceModel === opts.operator) : [];
-const main = afterCutoff.filter(s => !operator.includes(s));
+// Onboarding-only sessions (parcoursId 'onb:<pID>') cover the permission gauntlet
+// and never reach the walk; counting them as walks would dilute completion stats,
+// so they get their own bucket (mainly useful for the iOS Motion-auth hang).
+const onboarding = afterCutoff.filter(s => String(s.parcoursId || '').indexOf('onb:') === 0);
+const main = afterCutoff.filter(s => !operator.includes(s) && !onboarding.includes(s));
 
 if (opts.json) {
-  console.log(JSON.stringify({ stepMax, pre, operator, main }, null, 2));
+  console.log(JSON.stringify({ stepMax, pre, operator, onboarding, main }, null, 2));
   process.exit(0);
 }
 
@@ -76,6 +80,7 @@ P(`Telemetry analysis — ${opts.date || 'all dates'}   dir: ${opts.dir}`);
 P(`Sessions: ${all.length} total`
   + (pre.length ? `  |  ${pre.length} pre-opening (before ${opts.cutoff})` : '')
   + (operator.length ? `  |  ${operator.length} operator phone (${opts.operator})` : '')
+  + (onboarding.length ? `  |  ${onboarding.length} onboarding` : '')
   + `  |  ${main.length} visitor sessions`);
 // Parcours config skew: a different parcoursName among the visitor wave usually
 // means a stale cached config — list the minority groups' session ids so they
@@ -108,6 +113,24 @@ if (operator.length) {
     ['Start', 'Id', 'Dur', 'MaxStep', 'Done?'],
     operator.map(s => [s.localClock, s.shortId, fmtDuration(s.durationMs),
                        s.maxStep ?? '-', isCompleted(s, stepMax) ? 'YES' : 'no'])));
+}
+
+if (onboarding.length) {
+  // Raw events aren't on the summary object; correlate back to loaded[].json by id.
+  const rawById = new Map(loaded.map(l => [l.json.sessionId, l.json.events || []]));
+  P('\n## Onboarding sessions (permission gauntlet — excluded from completion stats)');
+  P('   geo → motion → notifications → battery, flushed live so the iOS Motion-auth hang is visible even when the walk never opens.');
+  P(renderTable(
+    ['Start', 'Id', 'Device', 'OS', 'Plat', 'Dur', 'Motion', 'Prompts', 'Events'],
+    onboarding.map(s => {
+      const evs = rawById.get(s.sessionId) || [];
+      const mc = evs.filter(e => e.type === 'motion_check');
+      const last = mc.length ? mc[mc.length - 1] : null;
+      const motion = last ? (last.data && last.data.granted ? 'granted' : 'NO') : '-';
+      const prompts = evs.filter(e => e.type === 'motion_prompt').length || '-';
+      return [s.localClock, s.shortId, s.deviceModel, s.osVersion, s.platform,
+              fmtDuration(s.durationMs), motion, prompts, s.eventCount];
+    })));
 }
 
 // --- per-session table -----------------------------------------------------

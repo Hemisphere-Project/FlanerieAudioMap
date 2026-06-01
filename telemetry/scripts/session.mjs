@@ -60,6 +60,38 @@ if (s.diag) {
 }
 if (s.powerState) console.log(`  power      ${JSON.stringify(s.powerState)}`);
 
+// --- onboarding ------------------------------------------------------------
+// Permission-gauntlet flow (geo / motion / notifications / battery). Captured in
+// its own 'onb:<pID>' session so the iOS Motion-auth hang — which blocks before
+// the walk session would ever open — is observable. parcoursId 'onb:' prefix marks
+// an onboarding-only session.
+const onbTypes = new Set([
+  'onboarding_page', 'media_startup_check', 'parcours_freshness_check',
+  'gps_hardware_prewarm_ok', 'gps_hardware_prewarm_failed', 'ios_version_warning',
+  'ios_always_gate', 'confirmgeo_settings_tapped', 'confirmgeo_settings_returned',
+  'bg_location', 'motion_prompt', 'motion_check', 'notif_permission',
+  'background_restricted', 'power_save_mode', 'battery_opt',
+]);
+const onbEvents = ev.filter(e => onbTypes.has(e.type));
+const isOnboardingSession = String(json.parcoursId || '').indexOf('onb:') === 0;
+if (onbEvents.length) {
+  console.log(`\n## Onboarding flow${isOnboardingSession ? '   <- ONBOARDING SESSION (permission gauntlet; the walk is a separate session)' : ''}`);
+  for (const e of onbEvents) {
+    const d = e.data || {};
+    let extra = '';
+    if (e.type === 'onboarding_page')             extra = `page=${d.page}${d.retry_auth ? ' retryAuth=' + d.retry_auth : ''}${d.os_version ? ' iOS=' + d.os_version : ''}${d.apk_version ? ' apk=' + d.apk_version : ''}`;
+    else if (e.type === 'motion_prompt')          extra = `attempt=${d.attempt} elapsed=${d.elapsed_ms}ms visible=${d.visible}`;
+    else if (e.type === 'motion_check')           extra = `granted=${d.granted}${d.resumed ? ' (resumed)' : ''} waited=${d.waited_ms}ms`;
+    else if (e.type === 'media_startup_check')    extra = `ok=${d.ok} missing=${d.missing} online=${d.online}${d.missing_files && d.missing_files.length ? ' [' + d.missing_files.join(',') + ']' : ''}`;
+    else if (e.type === 'ios_always_gate')        extra = `reason=${d.reason}`;
+    else if (e.type === 'bg_location')            extra = `granted=${d.granted}${d.attempts != null ? ' attempts=' + d.attempts : ''}`;
+    else if (e.type === 'notif_permission')       extra = `granted=${d.granted}${d.reason ? ' reason=' + d.reason : ''}`;
+    else if (e.type === 'battery_opt')            extra = JSON.stringify(d);
+    else                                          extra = JSON.stringify(d);
+    console.log(`  ${min(e.t).padStart(8)}  ${e.type.padEnd(28)} ${extra}`);
+  }
+}
+
 // --- completion ------------------------------------------------------------
 console.log('\n## Completion');
 console.log(`  steps fired:  [${s.stepsFired.join(', ')}]${s.stepsContiguous ? '' : '   <- NON-CONTIGUOUS (steps skipped)'}`);

@@ -15,9 +15,15 @@ var TELEMETRY = (function() {
     var sessionMeta = null;
     var gpsSummary = null;
 
+    // Events logged before any session exists (cold-start onboarding, before the
+    // onboarding/walk session is opened). Stashed here rather than dropped, then
+    // replayed into the live buffer on the next start(). See _log / _drainPre.
+    var preSessionBuffer = [];
+
     var GPS_INTERVAL = 5000;    // min 5s between GPS logs
     var FLUSH_INTERVAL = 30000; // flush every 30s
     var BUFFER_CAP = 500;
+    var PRE_BUFFER_CAP = 120;   // cap for pre-session stash (onboarding burst)
     var STORAGE_KEY = 'telemetry_session';
     var RESUME_MAX_AGE = 4 * 60 * 60 * 1000;
     var SCHEMA_VERSION = 2;
@@ -290,6 +296,7 @@ var TELEMETRY = (function() {
                 sessionHasFlushed = !!stored.hasFlushed;
                 sessionMeta = _buildSessionMeta();
                 buffer = [];
+                _drainPre();
                 gpsSummary = _resetGpsSummary();
                 lastGpsTime = 0;
                 _writeStored();
@@ -311,6 +318,7 @@ var TELEMETRY = (function() {
             sessionHasFlushed = false;
             sessionMeta = _buildSessionMeta();
             buffer = [];
+            _drainPre();
             gpsSummary = _resetGpsSummary();
             lastGpsTime = 0;
             _writeStored();
@@ -346,13 +354,65 @@ var TELEMETRY = (function() {
         } catch(e) { console.warn('[TELEMETRY] restart error', e); }
     }
 
+    // Onboarding sessions — opened at the top of the permission gauntlet (checkgeo)
+    // so the geo / motion / notification / battery flow is captured and FLUSHED LIVE
+    // even when the visitor never reaches the walk page (the iOS Motion-auth hang is
+    // exactly that: blocked before the walk session would ever open). Kept as its own
+    // session, namespaced 'onb:<pID>', so the walk session stays a clean session_start
+    // with the resume_step_index extras the analyzer keys on (common.mjs line 139).
+    // endOnboarding() closes it right before the walk session starts.
+    function startOnboarding(pId, pName) {
+        try {
+            pId = pId || '';
+            // Don't clobber a resumable WALK session (mid-walk crash resume for this
+            // same parcours): the walk page must still be able to resume it. A stored
+            // walk session only exists when a walk was interrupted within RESUME_MAX_AGE
+            // (end() clears storage on clean finish).
+            var stored = _readStored();
+            if (stored && stored.parcoursId === pId) {
+                var storedStartedAt = stored.startedAt || _parseSessionTime(stored.sessionId);
+                if (storedStartedAt && (Date.now() - storedStartedAt) <= RESUME_MAX_AGE) return;
+            }
+            // Don't clobber a live in-memory walk session either.
+            if (sessionId && parcoursId && parcoursId.indexOf('onb:') !== 0) return;
+            start('onb:' + pId, pName || pId || '', { extra: { phase: 'onboarding' } });
+        } catch(e) { console.warn('[TELEMETRY] startOnboarding error', e); }
+    }
+
+    // Close the onboarding session (final flush via end()) just before the walk
+    // session opens. No-op unless the live session is an onboarding one, so calling
+    // it on a mid-walk resume path (where no onboarding session was opened) is safe.
+    function endOnboarding() {
+        try {
+            if (!sessionId) return;
+            if (parcoursId && parcoursId.indexOf('onb:') === 0) {
+                end({ skipIdleStamp: true, data: { phase: 'onboarding' } });
+            }
+        } catch(e) { console.warn('[TELEMETRY] endOnboarding error', e); }
+    }
+
     function _startFlushTimer() {
         if (flushTimer) clearInterval(flushTimer);
         flushTimer = setInterval(flush, FLUSH_INTERVAL);
     }
 
+    // Replay any pre-session events captured before this session existed. Their
+    // original timestamps are preserved, and they are drained ahead of the
+    // session_start event so the analyzer sees the onboarding lead-in in order.
+    function _drainPre() {
+        if (!preSessionBuffer.length) return;
+        var pre = preSessionBuffer;
+        preSessionBuffer = [];
+        for (var i = 0; i < pre.length; i++) buffer.push(pre[i]);
+    }
+
     function _log(type, data) {
-        if (!sessionId) { console.warn('[TELEMETRY] _log skipped, no sessionId'); return; }
+        if (!sessionId) {
+            // No session yet — stash (capped) for replay on the next start().
+            if (preSessionBuffer.length >= PRE_BUFFER_CAP) preSessionBuffer.shift();
+            preSessionBuffer.push({ t: Date.now(), type: type, data: data || {} });
+            return;
+        }
         if (buffer.length >= BUFFER_CAP) {
             buffer = buffer.slice(Math.floor(BUFFER_CAP * 0.1));
         }
@@ -441,18 +501,23 @@ var TELEMETRY = (function() {
         }
     }
 
-    function end() {
+    function end(opts) {
         try {
+            opts = opts || {};
             _flushGpsSummary('end');
-            _log('session_end', {});
+            _log('session_end', opts.data || {});
             if (flushTimer) { clearInterval(flushTimer); flushTimer = null; }
             localStorage.removeItem(STORAGE_KEY);
             // F-R1 — stamp when this session ended so the next session_start can
             // log inter_session_idle_ms. Lets analyze.mjs correlate P7 (silent
             // audio on loan-phone re-arm) with time-since-last-walk: if the
             // failure rate scales with idle minutes, the engine staleness is
-            // time-decay rather than state-decay.
-            try { localStorage.setItem('last_session_end_ts', String(Date.now())); } catch (e) {}
+            // time-decay rather than state-decay. Skipped when closing an
+            // onboarding session so the idle clock measures walk-to-walk gaps,
+            // not the few seconds between onboarding end and walk start.
+            if (!opts.skipIdleStamp) {
+                try { localStorage.setItem('last_session_end_ts', String(Date.now())); } catch (e) {}
+            }
             // Flush synchronously via sendBeacon if available, else async
             _flushFinal();
             console.log('[TELEMETRY] Ended session', sessionId);
@@ -495,6 +560,8 @@ var TELEMETRY = (function() {
 
     return {
         start: start,
+        startOnboarding: startOnboarding,
+        endOnboarding: endOnboarding,
         restart: restart,
         log: log,
         gps: gps,

@@ -1,7 +1,7 @@
 # Mobile Audit & Remediation Plan
 
 **Original:** 2026-04-27
-**Last updated:** 2026-06-01 (onboarding-flow hardening + iOS rail fix shipped; bg-geo v2.14.1 released)
+**Last updated:** 2026-06-01 (onboarding telemetry closes the observability gap; onboarding-flow hardening + iOS rail fix shipped; bg-geo v2.14.1 released)
 **Scope:** Cordova launcher (FlanerieCordova) + downloaded local webapp (FlanerieAudioMap) + four forked native plugins
 **Field tests so far:** ELYSEE (multiple), FRAPPAZ, GUILLOTIÈRE (2024-12), GIVORS (2026-05-20, archived). Next: VILLEURBANNE.
 
@@ -155,7 +155,19 @@ This round is mostly **webapp (FlanerieAudioMap, dynamically loaded — live wit
 
 - **Build-18 field validation (session `jtcv`, iPhone SE 3 / iOS 26.4.2).** Thread fix confirmed live: `shared_manager_created_on_main_thread: true` (`creation_thread: "main"`). GPS healthy — `real_location_count: 184`, `keepalive_count: 0`, `force_reacquire_count: 0`, 0 gaps ≥ 90 s, avg 8.4 m, freshness 1 s; auth = `AuthorizedAlways`; steps 0–3 contiguous; 0 audio errors; resumes 0. A short on-screen staff test, **not** a long pocketed background walk — does not yet stress background GPS or the (now-fixed) rail.
 
-- **Observability gap.** `TELEMETRY.start()` opens on the **parcours page**, so the entire onboarding flow (Toujours enforcement, motion/permission prompts, prewarm, `ios_always_gate`, `gps_rail_configured`) emits *before* the session file exists and is **not captured**. Field evidence for the onboarding fixes requires buffering pre-`TELEMETRY.start` events and flushing them once the session opens — open task.
+- **Observability gap — CLOSED (see addendum (3)).** `TELEMETRY.start()` opens on the **parcours page**, so the entire onboarding flow (Toujours enforcement, motion/permission prompts, prewarm, `ios_always_gate`, `gps_rail_configured`) used to emit *before* the session file existed and was **not captured**. Now covered by a dedicated onboarding session opened at `checkgeo` and flushed live.
+
+---
+
+## 2026-06-01 addendum (3) — onboarding telemetry (closes the observability gap)
+
+Pure **webapp** + **analysis-tooling** change (no native, no container rebuild). Motivated by two failed blind attempts at the iOS Motion-auth hang (bug 2): onboarding events fired before any session existed and were dropped, so the prompt saga was never on the wire.
+
+- **Universal pre-session buffer (`telemetry.js`).** `_log()` with no live session now stashes into a capped (`PRE_BUFFER_CAP = 120`) `preSessionBuffer` instead of dropping; `start()` drains it (timestamps preserved, ahead of `session_start`) into the live buffer. Catches the earliest events (e.g. `media_startup_check` at `checkdata`) regardless of which session opens next.
+- **First-class onboarding session (`telemetry.js`).** `TELEMETRY.startOnboarding(pID, name)` opens a session namespaced **`onb:<pID>`** at the top of `checkgeo` (the permission gauntlet entry); `endOnboarding()` closes it (final flush) right before the walk `TELEMETRY.start()`. Because it flushes **live** (30 s timer + `visibilitychange`-hidden), the geo/motion/notification/battery flow is captured **even when the walk never opens** — which is exactly the Motion hang (blocked before the walk page). Kept separate from the walk session so the walk stays a clean `session_start` with the `resume_step_index` extras `analyze.mjs` keys on (`common.mjs:139`). Guard: `startOnboarding` refuses to clobber a **resumable walk session** for the same pID (mid-walk crash resume within `RESUME_MAX_AGE`), so crash-resume telemetry is untouched. `endOnboarding` passes `skipIdleStamp` so the onboarding→walk gap doesn't pollute `inter_session_idle_ms`.
+- **New onboarding events (`pages.js`).** `onboarding_page` (checkgeo/confirmgeo/checkmotion — carries platform, apk_version, webapp_hash, os_version, retry_auth); `confirmgeo_settings_tapped` / `confirmgeo_settings_returned` (the iOS "Toujours" Settings round-trip); `motion_prompt` (per re-issue — attempt #, elapsed, `visible`). Existing `motion_check`, `ios_always_gate`, `bg_location`, `notif_permission`, `battery_opt`, `media_startup_check` now land in the onboarding session instead of the void.
+- **Analysis tooling.** `session.mjs` prints an **`## Onboarding flow`** timeline; `analyze.mjs` buckets `onb:` sessions into **`## Onboarding sessions`** (Motion grant + prompt-attempt count per session) and **excludes them from completion stats** so they don't read as aborted walks. Verified against a synthetic iOS-26.3.1 fixture (motion never granted, 3 prompt attempts all `visible=true`) and smoke-tested against the live 210-session corpus (no regression; 0 `onb:` sessions pre-deploy).
+- **Status: unverified on device** — needs the deployed webapp + one iOS onboarding pass to produce the first `onb:` session. The motion saga (`confirmgeo_settings_returned` → N× `motion_prompt` → `motion_check granted=?`) is the signal that will finally show whether the v2.14.3 native re-prompt fix lands.
 
 ---
 

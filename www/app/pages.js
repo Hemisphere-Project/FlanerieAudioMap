@@ -1290,6 +1290,23 @@ PAGES['checkgeo'] = () => {
     confirmgeoSettingsTapped = false;
     confirmgeoSettingsReturned = false;
 
+    // Open an onboarding telemetry session for the permission gauntlet (geo →
+    // motion → notifications → battery). Flushed live, so the iOS Motion-auth hang
+    // — which blocks before the walk session would ever open — is now observable.
+    // Safe on the mid-walk resume path: it won't clobber a resumable walk session.
+    if (typeof TELEMETRY !== 'undefined' && typeof TELEMETRY.startOnboarding === 'function') {
+        TELEMETRY.startOnboarding(PARCOURS.pID, PARCOURS.info && PARCOURS.info.name);
+        // Build identifiers up front: an onboarding-only session (e.g. the iOS Motion
+        // hang) never reaches the walk-page session_diag, and the recurring webapp/apk
+        // drift means we always want to know which build produced the events.
+        TELEMETRY.log('onboarding_page', {
+            page: 'checkgeo', platform: PLATFORM,
+            apk_version: (typeof document !== 'undefined' && document.APPVERSION) || null,
+            webapp_hash: localStorage.getItem('APPHASH') || null,
+            os_version: (typeof device !== 'undefined' && device.version) || null,
+        });
+    }
+
     $('#checkgeo-select').hide();
     $('#checkgeo-settings').hide().off().on('click', () => GEO.showLocationSettings())
 
@@ -1354,7 +1371,13 @@ var confirmgeoSettingsReturned = false;
         // the user has even opened Settings. The Cordova 'resume' event is
         // foreground-only so it needs no guard.
         if (e && e.type === 'visibilitychange' && document.visibilityState !== 'visible') return;
-        if (confirmgeoSettingsTapped) confirmgeoSettingsReturned = true;
+        if (confirmgeoSettingsTapped) {
+            var wasReturned = confirmgeoSettingsReturned;
+            confirmgeoSettingsReturned = true;
+            if (!wasReturned && typeof TELEMETRY !== 'undefined') {
+                TELEMETRY.log('confirmgeo_settings_returned', { via: e ? e.type : 'unknown', page: currentPage });
+            }
+        }
     }
     document.addEventListener('resume', onResume, false);
     document.addEventListener('visibilitychange', onResume, false);
@@ -1363,8 +1386,16 @@ PAGES['confirmgeo'] = () => {
     // Settings round-trip tracking (iOS "force Toujours" — see note below). Module
     // scope so memory survives a confirmgeo → startgeo → confirmgeo bounce: once the
     // user has been to Settings and back during this session, we don't re-demand it.
+    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('onboarding_page', {
+        page: 'confirmgeo', platform: PLATFORM,
+        retry_auth: retryAuth,
+        settings_tapped: confirmgeoSettingsTapped,
+        settings_returned: confirmgeoSettingsReturned,
+    });
+
     $('#confirmgeo-settings').hide().off().on('click', () => {
         confirmgeoSettingsTapped = true;
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('confirmgeo_settings_tapped', {});
         GEO.showAppSettings();
     })
 
@@ -1625,10 +1656,26 @@ PAGES['checkmotion'] = () => {
     var start = Date.now();
     var warningShown = false;
     var lastPromptAt = 0;
+    var promptAttempts = 0;
+
+    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('onboarding_page', {
+        page: 'checkmotion', platform: PLATFORM,
+        already_authorized: !!GEO.motionAuthorized,
+        is_resume: !!(PARCOURS.valid() && PARCOURS.currentStep() >= 0),
+    });
 
     function triggerMotionPrompt() {
         if (currentPage !== 'checkmotion' || GEO.motionAuthorized) return;
         lastPromptAt = Date.now();
+        promptAttempts++;
+        // Each (re-)issue of the Motion prompt request — iOS may silently drop the
+        // first ones during the post-Settings transition, so attempt count + elapsed
+        // is the signature of the "prompt won't fire until a couple restarts" hang.
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('motion_prompt', {
+            attempt: promptAttempts,
+            elapsed_ms: Date.now() - start,
+            visible: (typeof document !== 'undefined' && document.visibilityState === 'visible'),
+        });
         GEO.startMotionUpdates();
     }
 
@@ -2595,6 +2642,11 @@ PAGES['parcours'] = async () => {
     // Key the telemetry session on the stable pID (the parcours file id), not
     // info.name — info carries only {name,status,coords,cutoff}, so file/id are
     // always undefined and sessions would otherwise group by human name.
+    // Close the onboarding session (final flush) before opening the walk session,
+    // so onboarding events don't leak into the walk buffer and the walk session
+    // stays a clean session_start with the resume extras the analyzer keys on.
+    if (typeof TELEMETRY.endOnboarding === 'function') TELEMETRY.endOnboarding();
+
     // Pass restored state via options.extra so the session_start / session_resume
     // event itself carries the resume position — field test 2026-05-18 showed the
     // resume_seek_pos field was absent from every session_resume payload, which
