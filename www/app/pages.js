@@ -1391,19 +1391,19 @@ PAGES['confirmgeo'] = () => {
                 // to While-Using after iOS's deferred re-prompt, killing background
                 // GPS mid-walk). Real, durable "Always" can only be set from Settings.
                 // So we don't trust an AUTHORIZED status until the user has actually
-                // done a Settings round-trip — unless they confirmed it on a previous
-                // launch (persisted), to avoid sending returning users to Settings
-                // every time. The downgrade case is caught by the reject branch below,
-                // which clears the persisted flag.
-                if (PLATFORM === 'ios' &&
-                    !confirmgeoSettingsReturned &&
-                    localStorage.getItem('iosAlwaysConfirmed') !== '1') {
+                // done a Settings round-trip during THIS onboarding. We deliberately
+                // do NOT persist this across launches: confirmgeo is only reached on a
+                // fresh onboarding (a mid-walk relaunch resumes straight to the
+                // parcours), so persistence bought nothing and silently masked the
+                // enforcement. The in-session confirmgeoSettingsReturned flag still
+                // prevents a double-ask during the confirmgeo -> startgeo -> confirmgeo
+                // bounce within one onboarding pass.
+                if (PLATFORM === 'ios' && !confirmgeoSettingsReturned) {
                     showAlwaysGuidance(false);
                     if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('ios_always_gate', {reason: 'awaiting_settings_roundtrip'});
                     recheck = setTimeout(() => checkAuth(), 1000);
                     return;
                 }
-                if (PLATFORM === 'ios') localStorage.setItem('iosAlwaysConfirmed', '1');
                 clearTimeout(recheck);
                 // Round 22 — hoist bgGeo.start() out of startgeo into here.
                 // Buys 10–30 s of GPS receiver warmup time during the
@@ -1418,9 +1418,8 @@ PAGES['confirmgeo'] = () => {
                 console.log('GEO NOT AUTHORIZED', e);
                 if (e === 'gps-error-authorization' && PLATFORM === 'ios') {
                     // User picked "While Using App" (or iOS downgraded a provisional
-                    // Always). Both the persisted flag and any prior round-trip memory
-                    // are now stale — clear them so a fresh Settings visit is required.
-                    localStorage.removeItem('iosAlwaysConfirmed');
+                    // Always). Any prior round-trip memory is now stale — clear it so a
+                    // fresh Settings visit is required.
                     confirmgeoSettingsTapped = false;
                     confirmgeoSettingsReturned = false;
                     showAlwaysGuidance(true);
