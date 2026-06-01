@@ -339,6 +339,10 @@ class GeoLoc extends EventEmitter {
         // single missing signal needed to surface S1/P1.34 (iOS) and P1.31
         // (Android Doze) blackouts. Phase 1A: diagnostic only.
         this.lastRealCallbackTime = null;
+        // User-facing GPS liveness follows the timestamp of the freshest fix,
+        // not merely the arrival of a callback. This prevents stale keepalive
+        // replays from masking GPS-lost.
+        this.lastUsableFixTime = null;
 
         this.follow = false;
         this.map = null;
@@ -350,9 +354,10 @@ class GeoLoc extends EventEmitter {
         this.lastAccuracyBucket = null;
 
         this.stateUpdateTimer = setInterval(() => {
+            let freshnessTime = this.lastUsableFixTime != null ? this.lastUsableFixTime : this.lastTimeUpdate;
             let nextStep = this.stateUpdate;
-            if (this.lastTimeUpdate == null) nextStep = 'off';
-            else if ( (this.lastTimeUpdate + this.stateUpdateTimeout) < Date.now()) nextStep = 'lost';
+            if (freshnessTime == null) nextStep = 'off';
+            else if ( (freshnessTime + this.stateUpdateTimeout) < Date.now()) nextStep = 'lost';
             else nextStep = 'ok';
 
             if (this.stateUpdate != nextStep) {
@@ -363,11 +368,12 @@ class GeoLoc extends EventEmitter {
 
             // Proactive heartbeat: approaching timeout but not yet lost.
             // On iOS, stationary periods suppress CLLocation delegate callbacks but
-            // CLLocationManager.location (cached) remains valid. Refreshing lastTimeUpdate
-            // from cache before the timeout fires prevents false GPS-lost declarations.
+            // CLLocationManager.location (cached) may still be available. Probe it
+            // before the freshness timeout fully expires so active fixes can recover
+            // the stream without stale keepalive callbacks keeping GPS falsely alive.
             if (this.stateUpdate === 'ok' &&
-                this.lastTimeUpdate !== null &&
-                (Date.now() - this.lastTimeUpdate) > this.stateUpdateTimeout * 0.6 &&
+                freshnessTime !== null &&
+                (Date.now() - freshnessTime) > this.stateUpdateTimeout * 0.6 &&
                 this.runMode === 'gps' &&
                 getBackgroundGeolocationPlugin()) {
                 this._heartbeat();
@@ -523,6 +529,7 @@ class GeoLoc extends EventEmitter {
         position._jsReceivedAt = now
         let callbackGapMs = this.lastTimeUpdate == null ? null : now - this.lastTimeUpdate
         let positionAgeMs = typeof position.timestamp === 'number' ? Math.max(0, now - position.timestamp) : null
+        let usableFixTime = typeof position.timestamp === 'number' ? Math.min(now, position.timestamp) : now
         let accuracy = position && position.coords ? Math.round(position.coords.accuracy) : null
         let visibility = telemetryMeta.visibility || APP_VISIBILITY
         let source = telemetryMeta.source || (position.simulate ? 'simulate' : 'unknown')
@@ -626,7 +633,8 @@ class GeoLoc extends EventEmitter {
                         motionStationary: motionStationary
                     });
                 }
-                // Still update lastPosition/lastTimeUpdate so GPS-lost detection doesn't fire
+                // Still update lastPosition/lastTimeUpdate so callback telemetry
+                // and the visible map position reflect the incoming stream.
             } else {
                 this.emit('position', position);
             }
@@ -635,14 +643,17 @@ class GeoLoc extends EventEmitter {
         // next measure
         this.lastPosition = position;
         this.lastTimeUpdate = Date.now();
+        this.lastUsableFixTime = this.lastUsableFixTime == null
+            ? usableFixTime
+            : Math.max(this.lastUsableFixTime, usableFixTime);
         // B4 diagnostic half — only count this as a "real" callback if the
         // source isn't heartbeat / simulate / keepalive. The 'unknown' default
         // (bg-geo native callbacks that don't tag a source) IS real.
         if (source !== 'heartbeat' && source !== 'simulate' && source !== 'keepalive') {
             this.lastRealCallbackTime = Date.now();
         }
-        // Immediately reflect 'ok' without waiting for the next timer tick
-        if (this.stateUpdate !== 'ok') {
+        // Immediately reflect 'ok' only when the underlying fix itself is fresh.
+        if ((now - this.lastUsableFixTime) < this.stateUpdateTimeout && this.stateUpdate !== 'ok') {
             this.stateUpdate = 'ok';
             this.emit('stateUpdate', 'ok');
             if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_state', {state: 'ok'});
@@ -755,6 +766,10 @@ class GeoLoc extends EventEmitter {
         this.initialPosition = null;
         this.lastPosition = null;
         this.initializing = true;
+        this.lastTimeUpdate = null;
+        this.lastRealCallbackTime = null;
+        this.lastUsableFixTime = null;
+        this.stateUpdate = 'off';
         this.lastAccuracyBucket = null;
 
         this.runMode = mode;
@@ -769,8 +784,9 @@ class GeoLoc extends EventEmitter {
     }
 
     alive(timeout=5000) {
-        if (!this.lastTimeUpdate) return false;
-        return (Date.now() - this.lastTimeUpdate) < timeout;
+        let freshnessTime = this.lastUsableFixTime != null ? this.lastUsableFixTime : this.lastTimeUpdate;
+        if (!freshnessTime) return false;
+        return (Date.now() - freshnessTime) < timeout;
     }
 
     // Start simulated geoloc

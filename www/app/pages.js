@@ -1992,8 +1992,9 @@ PAGES['rdv'] = () => {
     // the user.
     const RDV_FRESH_ACC_MAX = 60
     function hasFreshFix() {
-        if (!GEO.lastPosition || !GEO.lastTimeUpdate) return false
-        if ((Date.now() - GEO.lastTimeUpdate) > 12000) return false
+        let fixTime = GEO.lastUsableFixTime != null ? GEO.lastUsableFixTime : GEO.lastTimeUpdate
+        if (!GEO.lastPosition || !fixTime) return false
+        if ((Date.now() - fixTime) > 12000) return false
         if (!GEO.lastPosition.coords) return false
         let acc = GEO.lastPosition.coords.accuracy
         if (typeof acc !== 'number' || isNaN(acc)) return false
