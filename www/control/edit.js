@@ -57,7 +57,7 @@ function formatBytes(bytes) {
 }
 
 // current file from url
-var parcoursID = window.location.pathname.split('/').pop()
+var parcoursID = window.location.pathname.split('/').filter(Boolean).pop()
 
 // FILL Spots
 //
