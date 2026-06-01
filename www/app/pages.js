@@ -1,3 +1,4 @@
+// Global constants
 var DISTANCE_RDV = 20; // 20m (to validate RDV)
 
 var COLOR_DONE    = 'grey';
