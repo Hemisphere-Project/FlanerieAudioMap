@@ -1314,7 +1314,16 @@ var retryAuth = 0;
 var confirmgeoSettingsTapped = false;
 var confirmgeoSettingsReturned = false;
 (function bindConfirmgeoResume() {
-    function onResume() { if (confirmgeoSettingsTapped) confirmgeoSettingsReturned = true; }
+    function onResume(e) {
+        // visibilitychange fires on BOTH hide and show. We must only count the
+        // return, not the departure — otherwise setting confirmgeoSettingsTapped
+        // immediately before showAppSettings() backgrounds the app and the
+        // hide-event fires, falsely marking the round-trip as complete before
+        // the user has even opened Settings. The Cordova 'resume' event is
+        // foreground-only so it needs no guard.
+        if (e && e.type === 'visibilitychange' && document.visibilityState !== 'visible') return;
+        if (confirmgeoSettingsTapped) confirmgeoSettingsReturned = true;
+    }
     document.addEventListener('resume', onResume, false);
     document.addEventListener('visibilitychange', onResume, false);
 })();
