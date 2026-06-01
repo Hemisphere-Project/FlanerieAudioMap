@@ -1402,11 +1402,25 @@ function backgroundGeoloc(positionCallback, errorCallback) {
                 _geolocRequestPermissionThenStart(status);
             }
             else {
-                console.log('[INFO] BackgroundGeolocation already running — listeners updated, resolving');
-                if (backgroundGeolocResolve) {
-                    backgroundGeolocResolve();
-                    backgroundGeolocResolve = null;
-                    backgroundGeolocReject = null;
+                // Service is running — still verify auth level. AUTHORIZED_FOREGROUND
+                // means background GPS dies when the screen locks; we must block just
+                // as we do in the on('start') handler. Without this check a pending
+                // checkStatus() callback that fires after bgGeo.start() can race the
+                // 200 ms reject timer and resolve with only foreground permission.
+                if (status.authorization !== bgGeo.AUTHORIZED) {
+                    console.warn('[INFO] BackgroundGeolocation running with partial auth:', status.authorization);
+                    if (backgroundGeolocReject) {
+                        backgroundGeolocReject('gps-error-authorization');
+                        backgroundGeolocReject = null;
+                        backgroundGeolocResolve = null;
+                    }
+                } else {
+                    console.log('[INFO] BackgroundGeolocation already running — listeners updated, resolving');
+                    if (backgroundGeolocResolve) {
+                        backgroundGeolocResolve();
+                        backgroundGeolocResolve = null;
+                        backgroundGeolocReject = null;
+                    }
                 }
             }
         });
