@@ -2015,7 +2015,7 @@ PAGES['rdv'] = () => {
     }
     function startupWarmupLabel(passive) {
         let status = typeof GEO.startupStatus === 'function' ? GEO.startupStatus() : null
-        let maxAcc = status && status.maxAccuracyM ? status.maxAccuracyM : 10
+        let maxAcc = status && status.maxAccuracyM ? status.maxAccuracyM : 15
         let fixCount = status && typeof status.fixCount === 'number' ? status.fixCount : 0
         let requiredFixCount = status && typeof status.requiredFixCount === 'number' ? status.requiredFixCount : 2
 
