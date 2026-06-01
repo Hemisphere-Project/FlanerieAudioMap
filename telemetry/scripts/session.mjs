@@ -82,8 +82,9 @@ if (onbEvents.length) {
     if (e.type === 'onboarding_page')             extra = `page=${d.page}${d.retry_auth ? ' retryAuth=' + d.retry_auth : ''}${d.os_version ? ' iOS=' + d.os_version : ''}${d.apk_version ? ' apk=' + d.apk_version : ''}`;
     else if (e.type === 'motion_prompt')          extra = `attempt=${d.attempt} elapsed=${d.elapsed_ms}ms visible=${d.visible}`
                                                           + (d.auth_status != null ? ` auth=${['NotDet','Restr','DENIED','Authorized'][d.auth_status] ?? d.auth_status}` : '')
-                                                          + (d.app_state != null ? ` app=${['active','inactive','bg'][d.app_state] ?? d.app_state}` : '');
-    else if (e.type === 'motion_check')           extra = `granted=${d.granted}${d.resumed ? ' (resumed)' : ''} waited=${d.waited_ms}ms`;
+                                                          + (d.app_state != null ? ` app=${['active','inactive','bg'][d.app_state] ?? d.app_state}` : '')
+                                                          + (d.activity_available === false ? '  <- MOTION HW UNAVAILABLE (simulator / no coprocessor)' : '');
+    else if (e.type === 'motion_check')           extra = `granted=${d.granted}${d.resumed ? ' (resumed)' : ''}${d.reason ? ' reason=' + d.reason : ''} waited=${d.waited_ms}ms`;
     else if (e.type === 'media_startup_check')    extra = `ok=${d.ok} missing=${d.missing} online=${d.online}${d.missing_files && d.missing_files.length ? ' [' + d.missing_files.join(',') + ']' : ''}`;
     else if (e.type === 'ios_always_gate')        extra = `reason=${d.reason}`;
     else if (e.type === 'bg_location')            extra = `granted=${d.granted}${d.attempts != null ? ' attempts=' + d.attempts : ''}`;

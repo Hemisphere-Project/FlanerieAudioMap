@@ -1686,6 +1686,19 @@ PAGES['checkmotion'] = () => {
                 activity_available: info ? info.activityAvailable : null,
                 pending_until_active: info ? info.pendingUntilActive : null,
             });
+            // Motion hardware absent — iOS Simulator (ojl2: isVirtual, activity_available
+            // false), or a real device with no motion coprocessor. isActivityAvailable is
+            // false, so the M&F prompt can NEVER be presented and auth stays NotDetermined
+            // forever. Don't hang onboarding on a sensor that doesn't exist; proceed with
+            // motion disabled. (Only fires on v2.14.5+, which reports activityAvailable;
+            // older builds resolve {} → undefined → no short-circuit.)
+            if (info && info.activityAvailable === false &&
+                currentPage === 'checkmotion' && !GEO.motionAuthorized) {
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('motion_check',
+                    {granted: false, reason: 'unavailable', waited_ms: Date.now() - start});
+                clearMotionCheck();
+                PAGE('rdv');
+            }
         });
     }
 

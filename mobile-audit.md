@@ -185,6 +185,9 @@ The onboarding telemetry paid off immediately. **Session `l5bi`** (iPhone 14-cla
 
 - **Ships in the next TestFlight build** (bump `config.xml` from 21). Pair with a webapp redeploy (the enriched `motion_prompt` logging + `geoloc.js` change are webapp). **Unverified on device.**
 
+- **First v2.14.5 run — `ojl2` (apk 22, iOS 26.4.1, SIMULATOR).** Same hang, but the diagnostic explained it: `motion_prompt` carried **`activity_available=false`, `auth=NotDet`, `app=active`** on all 36 attempts, and client `isVirtualDevice=true`. **The iOS Simulator has no motion coprocessor — `CMMotionActivityManager isActivityAvailable` returns NO, so the M&F prompt can never be presented and the native code returns at its first line.** This is expected simulator behaviour and **not a valid test of the v2.14.5 fix** (which targets reused-instance poisoning on a *real* device, where `isActivityAvailable` is true). **v2.14.5 must be validated on a physical iPhone.**
+  - **Robustness fix shipped (webapp).** `checkmotion` now short-circuits to `rdv` when the native call reports `activity_available === false` (logs `motion_check {granted:false, reason:'unavailable'}`), so the simulator — and any real device lacking a motion coprocessor — no longer hangs forever on a sensor that doesn't exist. `session.mjs` flags `activity_available=false` inline as "MOTION HW UNAVAILABLE".
+
 ---
 
 ## Telemetry events (current code)
