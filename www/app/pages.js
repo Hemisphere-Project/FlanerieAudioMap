@@ -1668,15 +1668,25 @@ PAGES['checkmotion'] = () => {
         if (currentPage !== 'checkmotion' || GEO.motionAuthorized) return;
         lastPromptAt = Date.now();
         promptAttempts++;
-        // Each (re-)issue of the Motion prompt request — iOS may silently drop the
-        // first ones during the post-Settings transition, so attempt count + elapsed
-        // is the signature of the "prompt won't fire until a couple restarts" hang.
-        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('motion_prompt', {
-            attempt: promptAttempts,
-            elapsed_ms: Date.now() - start,
-            visible: (typeof document !== 'undefined' && document.visibilityState === 'visible'),
+        var attempt = promptAttempts;
+        var visible = (typeof document !== 'undefined' && document.visibilityState === 'visible');
+        // Each (re-)issue of the Motion prompt request. Logged WITH the native truth
+        // the call returns (v2.14.5+): auth_status (0=NotDetermined 1=Restricted
+        // 2=Denied 3=Authorized) + app_state (0=Active 1=Inactive 2=Background). This
+        // is what finally distinguishes an implicit Denied from a NotDetermined whose
+        // prompt opportunity was consumed during the post-Settings settling window —
+        // the l5bi signature of the "prompt won't fire until a couple restarts" hang.
+        Promise.resolve(GEO.startMotionUpdates()).then(function(info) {
+            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('motion_prompt', {
+                attempt: attempt,
+                elapsed_ms: Date.now() - start,
+                visible: visible,
+                auth_status: info ? info.authStatus : null,
+                app_state: info ? info.appState : null,
+                activity_available: info ? info.activityAvailable : null,
+                pending_until_active: info ? info.pendingUntilActive : null,
+            });
         });
-        GEO.startMotionUpdates();
     }
 
     $('#checkmotion-retry').hide().off().on('click', () => {

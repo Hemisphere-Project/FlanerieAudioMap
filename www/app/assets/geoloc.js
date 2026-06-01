@@ -1246,9 +1246,12 @@ class GeoLoc extends EventEmitter {
     // iOS or when the plugin build predates the startMotionUpdates bridge method.
     startMotionUpdates() {
         let bgGeo = getBackgroundGeolocationPlugin()
-        if (!bgGeo || typeof bgGeo.startMotionUpdates !== 'function') return Promise.resolve(false)
+        if (!bgGeo || typeof bgGeo.startMotionUpdates !== 'function') return Promise.resolve(null)
+        // Resolves with the native diagnostic dict {authStatus, appState,
+        // activityAvailable, pendingUntilActive} (v2.14.5+) or null on older builds /
+        // failure. checkmotion logs it so the Motion-auth hang is observable.
         return new Promise((resolve) => {
-            bgGeo.startMotionUpdates(() => resolve(true), () => resolve(false))
+            bgGeo.startMotionUpdates((info) => resolve(info || {}), () => resolve(null))
         })
     }
 
