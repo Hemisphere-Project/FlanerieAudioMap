@@ -1,7 +1,7 @@
 # Mobile Audit & Remediation Plan
 
 **Original:** 2026-04-27
-**Last updated:** 2026-06-01 (onboarding telemetry closes the observability gap; onboarding-flow hardening + iOS rail fix shipped; bg-geo v2.14.1 released)
+**Last updated:** 2026-06-01 (Motion hang diagnosed from `l5bi` telemetry → bg-geo v2.14.5 fix+instrumentation; onboarding telemetry closes the observability gap; iOS rail fix shipped)
 **Scope:** Cordova launcher (FlanerieCordova) + downloaded local webapp (FlanerieAudioMap) + four forked native plugins
 **Field tests so far:** ELYSEE (multiple), FRAPPAZ, GUILLOTIÈRE (2024-12), GIVORS (2026-05-20, archived). Next: VILLEURBANNE.
 
@@ -168,6 +168,22 @@ Pure **webapp** + **analysis-tooling** change (no native, no container rebuild).
 - **New onboarding events (`pages.js`).** `onboarding_page` (checkgeo/confirmgeo/checkmotion — carries platform, apk_version, webapp_hash, os_version, retry_auth); `confirmgeo_settings_tapped` / `confirmgeo_settings_returned` (the iOS "Toujours" Settings round-trip); `motion_prompt` (per re-issue — attempt #, elapsed, `visible`). Existing `motion_check`, `ios_always_gate`, `bg_location`, `notif_permission`, `battery_opt`, `media_startup_check` now land in the onboarding session instead of the void.
 - **Analysis tooling.** `session.mjs` prints an **`## Onboarding flow`** timeline; `analyze.mjs` buckets `onb:` sessions into **`## Onboarding sessions`** (Motion grant + prompt-attempt count per session) and **excludes them from completion stats** so they don't read as aborted walks. Verified against a synthetic iOS-26.3.1 fixture (motion never granted, 3 prompt attempts all `visible=true`) and smoke-tested against the live 210-session corpus (no regression; 0 `onb:` sessions pre-deploy).
 - **Status: unverified on device** — needs the deployed webapp + one iOS onboarding pass to produce the first `onb:` session. The motion saga (`confirmgeo_settings_returned` → N× `motion_prompt` → `motion_check granted=?`) is the signal that will finally show whether the v2.14.3 native re-prompt fix lands.
+
+---
+
+## 2026-06-01 addendum (4) — Motion hang diagnosed from telemetry; bg-geo v2.14.5
+
+The onboarding telemetry paid off immediately. **Session `l5bi`** (iPhone 14-class, **iOS 26.4.2, apk 21 / bg-geo v2.14.4**) captured the Motion-auth hang in full for the first time:
+
+- `confirmgeo_settings_returned` (Always round-trip OK) → `checkmotion` → **41 `motion_prompt` attempts** over ~76 s, spaced ~2 s, **every one `visible=true`**, and `motion_check granted=false` throughout. **Zero native activity callbacks.** Only a full app relaunch (the `session_resume` mid-file) let the user retry. → **The JS retry layer is provably correct; the bug is entirely native/iOS.** apk 21 already carried the v2.14.3 re-prompt fix *and* the v2.14.4 app-active gate, and still hung.
+
+- **Root cause (best-supported):** the prompt-capable call was re-issued 41× **on the same reused `CMMotionActivityManager` instance**. A reused instance whose first prompt request lands during the post-Settings settling window stops re-presenting the M&F prompt; only a fresh instance (i.e. a relaunch) recovers — which matches "a couple restarts fixes it" exactly. Could not be distinguished from an implicit `Denied` because **nothing surfaced the native `authorizationStatus`**.
+
+- **bg-geo v2.14.5** (`0886512`, branch `stable`) — two native changes in [`MAURRawLocationProvider.m`](../cordova-background-geolocation-plugin/ios/common/BackgroundGeolocation/MAURRawLocationProvider.m) + [`CDVBackgroundGeolocation.m`](../cordova-background-geolocation-plugin/ios/CDVBackgroundGeolocation/CDVBackgroundGeolocation.m):
+  1. **Fix** — while authorization is `NotDetermined`, **recreate the `CMMotionActivityManager` on every retry** (throttled to once / ~4 s so a freshly presented prompt isn't torn down before the user taps), the in-process equivalent of the relaunch that works; and issue **`queryActivityStartingFromDate` unconditionally** (not only when already Authorized) — the historically more reliable M&F prompt trigger, whose handler error also surfaces a real denial.
+  2. **Diagnostic** — the `startMotionUpdates` bridge now returns `{authStatus (0 NotDet / 1 Restr / 2 Denied / 3 Auth), appState (0 active / 1 inactive / 2 bg), activityAvailable, pendingUntilActive}`; `GEO.startMotionUpdates()` resolves it and `checkmotion` logs it on every `motion_prompt`. `session.mjs` renders `auth=…` / `app=…` inline. Next failure (if any) will say *exactly* whether status is stuck NotDetermined or flipped to Denied.
+
+- **Ships in the next TestFlight build** (bump `config.xml` from 21). Pair with a webapp redeploy (the enriched `motion_prompt` logging + `geoloc.js` change are webapp). **Unverified on device.**
 
 ---
 
