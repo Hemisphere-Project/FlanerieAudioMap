@@ -48,7 +48,9 @@ const BATTOPT_MAX_ATTEMPTS = 10;
 var BGLOC_TIMER = null;
 const BGLOC_POLL_MS = 1500;
 var MOTION_TIMER = null;
+var MOTION_RESUME = null;
 const MOTION_WAIT_MS = 8000;
+const MOTION_PROMPT_RETRY_MS = 1200;
 var PARCOURS_BOOT_TOKEN = 0;
 // On a resume (kill+relaunch mid-walk) motion was already validated before the
 // walk started; GEO.motionAuthorized just resets to undefined on every reload.
@@ -114,6 +116,11 @@ function clearMotionCheck()
     if (MOTION_TIMER) {
         clearTimeout(MOTION_TIMER);
         MOTION_TIMER = null;
+    }
+    if (MOTION_RESUME) {
+        document.removeEventListener('resume', MOTION_RESUME, false);
+        document.removeEventListener('visibilitychange', MOTION_RESUME, false);
+        MOTION_RESUME = null;
     }
 }
 
@@ -1614,7 +1621,24 @@ PAGES['checkmotion'] = () => {
     clearMotionCheck();
     $('#checkmotion-desc').text('Vérification du capteur de mouvement...');
     $('#checkmotion-settings').hide().off().on('click', () => GEO.showAppSettings());
-    $('#checkmotion-retry').hide().off().on('click', () => { clearMotionCheck(); start = Date.now(); GEO.startMotionUpdates(); poll(); });
+    var start = Date.now();
+    var warningShown = false;
+    var promptRetried = false;
+
+    function triggerMotionPrompt() {
+        if (currentPage !== 'checkmotion' || GEO.motionAuthorized) return;
+        GEO.startMotionUpdates();
+    }
+
+    $('#checkmotion-retry').hide().off().on('click', () => {
+        clearMotionCheck();
+        start = Date.now();
+        warningShown = false;
+        promptRetried = false;
+        triggerMotionPrompt();
+        bindMotionResume();
+        poll();
+    });
 
     // Already received a motion event from a previous startGeoloc cycle? skip.
     if (GEO.motionAuthorized) {
@@ -1625,19 +1649,33 @@ PAGES['checkmotion'] = () => {
     // Trigger the Motion & Fitness prompt now (deferred out of bgGeo.start()).
     // Fire-and-forget — the result arrives as an 'activity' event that sets
     // GEO.motionAuthorized, which the poll below watches for.
-    GEO.startMotionUpdates();
+    triggerMotionPrompt();
+
+    function bindMotionResume() {
+        if (MOTION_RESUME) return;
+        MOTION_RESUME = function(e) {
+            if (e && e.type === 'visibilitychange' && document.visibilityState !== 'visible') return;
+            triggerMotionPrompt();
+        };
+        document.addEventListener('resume', MOTION_RESUME, false);
+        document.addEventListener('visibilitychange', MOTION_RESUME, false);
+    }
+
+    bindMotionResume();
 
     // Resume path: don't hard-block — short grace then proceed (see MOTION_RESUME_GRACE_MS).
     var isResume = PARCOURS.valid() && PARCOURS.currentStep() >= 0;
 
-    var start = Date.now();
-    var warningShown = false;
     function poll() {
         MOTION_TIMER = null;
         if (currentPage !== 'checkmotion') return;
         if (GEO.motionAuthorized) {
             if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('motion_check', {granted: true, waited_ms: Date.now() - start});
             return PAGE('rdv');
+        }
+        if (!promptRetried && Date.now() - start >= MOTION_PROMPT_RETRY_MS) {
+            promptRetried = true;
+            triggerMotionPrompt();
         }
         if (isResume && Date.now() - start >= MOTION_RESUME_GRACE_MS) {
             if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('motion_check', {granted: false, resumed: true, waited_ms: Date.now() - start});
