@@ -36,10 +36,12 @@ var currentPage = '';
 var NOTIF_TIMER = null;
 var NOTIF_PERMISSION_TIMER = null;
 var NOTIF_PERMISSION_ATTEMPTS = 0;
+var NOTIF_PERMISSION_RESUME = null;
 const NOTIF_PERMISSION_POLL_MS = 1000;
 const NOTIF_PERMISSION_MAX_ATTEMPTS = 15;
 var BATTOPT_TIMER = null;
 var BATTOPT_ATTEMPTS = 0;
+var BATTOPT_RESUME = null;
 const BATTOPT_POLL_MS = 1500;
 const BATTOPT_MAX_ATTEMPTS = 10;
 var BGLOC_TIMER = null;
@@ -77,6 +79,11 @@ function clearNotificationPermissionCheck()
         NOTIF_PERMISSION_TIMER = null;
     }
     NOTIF_PERMISSION_ATTEMPTS = 0;
+    if (NOTIF_PERMISSION_RESUME) {
+        document.removeEventListener('resume', NOTIF_PERMISSION_RESUME, false);
+        document.removeEventListener('visibilitychange', NOTIF_PERMISSION_RESUME, false);
+        NOTIF_PERMISSION_RESUME = null;
+    }
 }
 
 function clearBatteryOptCheck()
@@ -86,6 +93,11 @@ function clearBatteryOptCheck()
         BATTOPT_TIMER = null;
     }
     BATTOPT_ATTEMPTS = 0;
+    if (BATTOPT_RESUME) {
+        document.removeEventListener('resume', BATTOPT_RESUME, false);
+        document.removeEventListener('visibilitychange', BATTOPT_RESUME, false);
+        BATTOPT_RESUME = null;
+    }
 }
 
 function clearBgLocCheck()
@@ -1283,8 +1295,25 @@ PAGES['checkgeo'] = () => {
 }
 
 var retryAuth = 0;
+// iOS "force Toujours" Settings round-trip — confirmgeoSettingsTapped is set when the
+// user taps the Réglages button; confirmgeoSettingsReturned flips once they come back
+// to the app. A single listener registered at module load (confirmgeo can be entered
+// multiple times, so per-invocation listeners would leak and reset the memory).
+var confirmgeoSettingsTapped = false;
+var confirmgeoSettingsReturned = false;
+(function bindConfirmgeoResume() {
+    function onResume() { if (confirmgeoSettingsTapped) confirmgeoSettingsReturned = true; }
+    document.addEventListener('resume', onResume, false);
+    document.addEventListener('visibilitychange', onResume, false);
+})();
 PAGES['confirmgeo'] = () => {
-    $('#confirmgeo-settings').hide().off().on('click', () => GEO.showAppSettings())
+    // Settings round-trip tracking (iOS "force Toujours" — see note below). Module
+    // scope so memory survives a confirmgeo → startgeo → confirmgeo bounce: once the
+    // user has been to Settings and back during this session, we don't re-demand it.
+    $('#confirmgeo-settings').hide().off().on('click', () => {
+        confirmgeoSettingsTapped = true;
+        GEO.showAppSettings();
+    })
 
     // D1 — iOS 26.0–26.3.x background-GPS regression (GIVORS 2026-05-20 §S1 / P1.34):
     // three iPhones on iOS 26.3.1 had 8–14-min background-GPS blackouts mid-walk.
@@ -1313,25 +1342,46 @@ PAGES['confirmgeo'] = () => {
     // if (PLATFORM == 'android')
         // $('#confirmgeo-desc').text('Vous devrez autoriser l\'application et');
 
-    if (retryAuth > 0) {
+    function showAlwaysGuidance(foregroundOnly) {
         if (PLATFORM == 'ios') {
-            $('#confirmgeo-desc').html(`Vous devez régler l'autorisation de Localisation sur <u>"Toujours"</u> dans les réglages de votre appareil !
-                <br><br>Réglages > Confidentialité > Services de localisation > Flanerie > "Toujours"`);
-            $('#confirmgeo-settings').show().text('Réglages')
+            $('#confirmgeo-desc').html(foregroundOnly
+                ? `Vous avez autorisé la localisation <u>"Pendant l'utilisation"</u>. Pour fonctionner lorsque le téléphone est en poche écran éteint, l'application a besoin de l'autorisation <u>"Toujours"</u>.<br><br>Réglages > Confidentialité > Services de localisation > Flanerie > <u>"Toujours"</u>`
+                : `Pour fonctionner lorsque le téléphone est en poche écran éteint, réglez la Localisation sur <u>"Toujours"</u> dans les réglages :<br><br>Réglages > Confidentialité > Services de localisation > Flanerie > <u>"Toujours"</u>`);
+            $('#confirmgeo-settings').show().text('Réglages');
         }
         else if (PLATFORM == 'android') {
             $('#confirmgeo-desc').html(`Vous devez donnez les permissions "Localisation" et "Notifications" à l'application Flanerie dans les paramètres de votre appareil !
                 <br><br>Réglages > Applications > Flanerie > Permissions > "Localisation" et "Notifications"`);
-            $('#confirmgeo-settings').show().text('Paramètres')
+            $('#confirmgeo-settings').show().text('Paramètres');
         }
-        $('#confirmgeo-accept').hide()
+        $('#confirmgeo-accept').hide();
     }
-    
+
+    if (retryAuth > 0) showAlwaysGuidance(false);
+
     var recheck = null;
     function checkAuth() {
         GEO.checkAuthorized()
             .then(() => {
                 console.log('GEO AUTHORIZED');
+                // iOS — the in-app permission dialog can only grant *provisional*
+                // "Always" (iOS reports it as AUTHORIZED, but it silently downgrades
+                // to While-Using after iOS's deferred re-prompt, killing background
+                // GPS mid-walk). Real, durable "Always" can only be set from Settings.
+                // So we don't trust an AUTHORIZED status until the user has actually
+                // done a Settings round-trip — unless they confirmed it on a previous
+                // launch (persisted), to avoid sending returning users to Settings
+                // every time. The downgrade case is caught by the reject branch below,
+                // which clears the persisted flag.
+                if (PLATFORM === 'ios' &&
+                    !confirmgeoSettingsReturned &&
+                    localStorage.getItem('iosAlwaysConfirmed') !== '1') {
+                    showAlwaysGuidance(false);
+                    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('ios_always_gate', {reason: 'awaiting_settings_roundtrip'});
+                    recheck = setTimeout(() => checkAuth(), 1000);
+                    return;
+                }
+                if (PLATFORM === 'ios') localStorage.setItem('iosAlwaysConfirmed', '1');
                 clearTimeout(recheck);
                 // Round 22 — hoist bgGeo.start() out of startgeo into here.
                 // Buys 10–30 s of GPS receiver warmup time during the
@@ -1345,11 +1395,13 @@ PAGES['confirmgeo'] = () => {
             .catch((e) => {
                 console.log('GEO NOT AUTHORIZED', e);
                 if (e === 'gps-error-authorization' && PLATFORM === 'ios') {
-                    // User picked "While Using App" — iOS initial dialog has no "Always" option.
-                    // Show guidance immediately instead of silently polling.
-                    $('#confirmgeo-desc').html(`Vous avez autorisé la localisation <u>"Pendant l'utilisation"</u>. Pour fonctionner lorsque le téléphone est en poche écran éteint, l'application a besoin de l'autorisation <u>"Toujours"</u>.<br><br>Réglages > Confidentialité > Services de localisation > Flanerie > <u>"Toujours"</u>`);
-                    $('#confirmgeo-settings').show().text('Réglages');
-                    $('#confirmgeo-accept').hide();
+                    // User picked "While Using App" (or iOS downgraded a provisional
+                    // Always). Both the persisted flag and any prior round-trip memory
+                    // are now stale — clear them so a fresh Settings visit is required.
+                    localStorage.removeItem('iosAlwaysConfirmed');
+                    confirmgeoSettingsTapped = false;
+                    confirmgeoSettingsReturned = false;
+                    showAlwaysGuidance(true);
                 }
                 recheck = setTimeout(() => checkAuth(), 1000);
             })
@@ -1555,12 +1607,13 @@ PAGES['checknotifications'] = () => {
         permissions.checkPermission(permissions.POST_NOTIFICATIONS, function(status) {
             console.log('Notification permission status:', status.hasPermission);
             if (status.hasPermission) {
-                if (APP_VISIBILITY == 'foreground') {
-                    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('notif_permission', {granted: true, elapsed: Date.now() - notifStartTime});
-                    PAGE('checkbatteryopt');
-                } else {
-                    queueCheck();
-                }
+                // Auto-advance the moment the permission is granted. The old code
+                // gated this on APP_VISIBILITY=='foreground', which hung when the
+                // resume event lagged behind the dialog dismissal — the poll then
+                // exhausted and forced the user to tap "J'ai autorisé". A granted
+                // permission is unambiguous; navigate regardless of visibility.
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('notif_permission', {granted: true, elapsed: Date.now() - notifStartTime});
+                PAGE('checkbatteryopt'); // PAGES_CLEANUP tears down the poll + resume listener
                 return;
             }
 
@@ -1570,7 +1623,10 @@ PAGES['checknotifications'] = () => {
             if (NOTIF_PERMISSION_ATTEMPTS >= NOTIF_PERMISSION_MAX_ATTEMPTS) {
                 $('#checknotifications-desc').html(timeoutMessage);
                 $('#checknotifications-retry').show().off().on('click', () => {
-                    clearNotificationPermissionCheck();
+                    // Inline reset (not clearNotificationPermissionCheck — that would
+                    // also tear down the resume listener we still need on this page).
+                    if (NOTIF_PERMISSION_TIMER) { clearTimeout(NOTIF_PERMISSION_TIMER); NOTIF_PERMISSION_TIMER = null; }
+                    NOTIF_PERMISSION_ATTEMPTS = 0;
                     $('#checknotifications-desc').html(defaultMessage);
                     $('#checknotifications-retry').hide();
                     checkNotif();
@@ -1582,9 +1638,27 @@ PAGES['checknotifications'] = () => {
         }, function(e) {
             console.error('Error checking notification permission', e);
             if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('notif_permission', {granted: false, reason: 'error', error: String(e)});
-            return PAGE('rdv');
+            return PAGE('rdv'); // PAGES_CLEANUP tears down the poll + resume listener
         });
     }
+
+    // Re-check the moment the user returns from the system dialog / Settings. The
+    // poll caps at MAX_ATTEMPTS (~15 s) to avoid spinning forever, but a Settings
+    // round-trip can take longer — without this, the user lands back on a stalled
+    // page. On resume we reset the attempt counter and restart the poll so a grant
+    // made while away advances automatically.
+    NOTIF_PERMISSION_RESUME = function(e) {
+        if (e && e.type === 'visibilitychange' && document.visibilityState !== 'visible') return;
+        if (currentPage !== 'checknotifications') return;
+        if (NOTIF_PERMISSION_TIMER) { clearTimeout(NOTIF_PERMISSION_TIMER); NOTIF_PERMISSION_TIMER = null; }
+        NOTIF_PERMISSION_ATTEMPTS = 0;
+        $('#checknotifications-desc').html(defaultMessage);
+        $('#checknotifications-retry').hide();
+        checkNotif();
+    };
+    document.addEventListener('resume', NOTIF_PERMISSION_RESUME, false);
+    document.addEventListener('visibilitychange', NOTIF_PERMISSION_RESUME, false);
+
     checkNotif();
 }
 
@@ -1686,7 +1760,13 @@ PAGES['checkbatteryopt'] = () => {
         // If none (modern OEMs that no longer expose intents), fall back to app settings.
         plugin.ProtectedAppCheck(true).catch(() => GEO.showAppSettings());
     });
-    $('#checkbatteryopt-retry').hide().off().on('click', () => { clearBatteryOptCheck(); check(); });
+    $('#checkbatteryopt-retry').hide().off().on('click', () => {
+        // Inline reset (not clearBatteryOptCheck — that would tear down the resume
+        // listener we still need on this page).
+        if (BATTOPT_TIMER) { clearTimeout(BATTOPT_TIMER); BATTOPT_TIMER = null; }
+        BATTOPT_ATTEMPTS = 0;
+        check();
+    });
     $('#checkbatteryopt-oem').hide();
 
     // Render manufacturer-tailored copy up front, before the user can fail.
@@ -1772,7 +1852,7 @@ PAGES['checkbatteryopt'] = () => {
         plugin.IsIgnoringBatteryOptimizations()
             .then(isIgnoring => {
                 if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('battery_opt', { ignoring: isIgnoring, manufacturer: device.manufacturer, family, os_version: osVersion });
-                if (isIgnoring) { PAGE('rdv'); return; }
+                if (isIgnoring) { PAGE('rdv'); return; } // PAGES_CLEANUP tears down the poll + resume listener
 
                 // First failure: trigger native dialog (ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
                 if (!dialogShown) {
@@ -1793,9 +1873,25 @@ PAGES['checkbatteryopt'] = () => {
             .catch(error => {
                 console.error('[BATTOPT] check error:', error);
                 if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('battery_opt', { error: String(error) });
-                PAGE('rdv');
+                PAGE('rdv'); // PAGES_CLEANUP tears down the poll + resume listener
             });
     }
+
+    // Re-check on return from the battery dialog / OEM Settings. The poll caps at
+    // MAX_ATTEMPTS (~15 s) so it doesn't spin forever, but whitelisting via OEM
+    // settings routinely takes longer — without this the user comes back to a
+    // stalled page and must tap "J'ai désactivé". On resume we reset attempts and
+    // restart the poll so a change made while away advances automatically.
+    BATTOPT_RESUME = function(e) {
+        if (e && e.type === 'visibilitychange' && document.visibilityState !== 'visible') return;
+        if (currentPage !== 'checkbatteryopt') return;
+        if (BATTOPT_TIMER) { clearTimeout(BATTOPT_TIMER); BATTOPT_TIMER = null; }
+        BATTOPT_ATTEMPTS = 0;
+        $('#checkbatteryopt-retry').hide();
+        check();
+    };
+    document.addEventListener('resume', BATTOPT_RESUME, false);
+    document.addEventListener('visibilitychange', BATTOPT_RESUME, false);
 
     check();
 }

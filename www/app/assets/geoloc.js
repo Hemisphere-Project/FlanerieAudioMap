@@ -1145,23 +1145,47 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
         console.log('[INFO] BackgroundGeolocation service has been started');
         if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('bg_geo_start', {});
 
-        bgGeo.checkStatus(function(status) {
-            if (status.authorization !== bgGeo.AUTHORIZED) {
-                setTimeout(function() {
+        // iOS sends the 'start' event the instant requestAlwaysAuthorization() is
+        // *called* (CDVBackgroundGeolocation.m), i.e. BEFORE the user taps the
+        // permission dialog — so checkStatus here reports NOT_DETERMINED. The old
+        // code fired a blind 200 ms reject, which bounced the WebView back to
+        // confirmgeo behind the still-visible dialog (the "flash" of the Always
+        // screen) and made the user's actual choice irrelevant. Instead, poll
+        // checkStatus until the authorization is definitive (the user has tapped),
+        // then settle the startGeoloc promise on the real decision.
+        var tries = 0;
+        var MAX_TRIES = 60; // ~30 s at 500 ms — generous time to read + tap
+        (function settleAuth() {
+            bgGeo.checkStatus(function(status) {
+                if (status.authorization === bgGeo.AUTHORIZED) {
+                    if (backgroundGeolocResolve) {
+                        console.log('[INFO] BackgroundGeolocation service is running (authorized)');
+                        backgroundGeolocResolve();
+                        backgroundGeolocResolve = null;
+                        backgroundGeolocReject = null;
+                    }
+                }
+                else if (status.authorization === bgGeo.AUTHORIZED_FOREGROUND ||
+                         status.authorization === bgGeo.NOT_AUTHORIZED) {
+                    // Definitive non-Always decision (While-Using or Denied).
                     if (backgroundGeolocReject) {
                         backgroundGeolocReject('gps-error-authorization');
                         backgroundGeolocReject = null;
                         backgroundGeolocResolve = null;
                     }
-                }, 200);
-            }
-            else if (backgroundGeolocResolve) {
-                console.log('[INFO] BackgroundGeolocation service is running');
-                backgroundGeolocResolve();
-                backgroundGeolocResolve = null;
-                backgroundGeolocReject = null;
-            }
-        })
+                }
+                else {
+                    // NOT_DETERMINED — user still deciding. Keep polling.
+                    if (++tries < MAX_TRIES) {
+                        setTimeout(settleAuth, 500);
+                    } else if (backgroundGeolocReject) {
+                        backgroundGeolocReject('gps-error-authorization');
+                        backgroundGeolocReject = null;
+                        backgroundGeolocResolve = null;
+                    }
+                }
+            });
+        })();
     });
 
     bgGeo.on('authorization', function(status) {
