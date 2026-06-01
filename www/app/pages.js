@@ -1614,7 +1614,7 @@ PAGES['checkmotion'] = () => {
     clearMotionCheck();
     $('#checkmotion-desc').text('Vérification du capteur de mouvement...');
     $('#checkmotion-settings').hide().off().on('click', () => GEO.showAppSettings());
-    $('#checkmotion-retry').hide().off().on('click', () => { clearMotionCheck(); start = Date.now(); poll(); });
+    $('#checkmotion-retry').hide().off().on('click', () => { clearMotionCheck(); start = Date.now(); GEO.startMotionUpdates(); poll(); });
 
     // Already received a motion event from a previous startGeoloc cycle? skip.
     if (GEO.motionAuthorized) {
