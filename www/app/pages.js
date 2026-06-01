@@ -1624,10 +1624,11 @@ PAGES['checkmotion'] = () => {
     $('#checkmotion-settings').hide().off().on('click', () => GEO.showAppSettings());
     var start = Date.now();
     var warningShown = false;
-    var promptRetried = false;
+    var lastPromptAt = 0;
 
     function triggerMotionPrompt() {
         if (currentPage !== 'checkmotion' || GEO.motionAuthorized) return;
+        lastPromptAt = Date.now();
         GEO.startMotionUpdates();
     }
 
@@ -1635,7 +1636,6 @@ PAGES['checkmotion'] = () => {
         clearMotionCheck();
         start = Date.now();
         warningShown = false;
-        promptRetried = false;
         triggerMotionPrompt();
         bindMotionResume();
         poll();
@@ -1674,8 +1674,12 @@ PAGES['checkmotion'] = () => {
             if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('motion_check', {granted: true, waited_ms: Date.now() - start});
             return PAGE('rdv');
         }
-        if (!promptRetried && Date.now() - start >= MOTION_PROMPT_RETRY_MS) {
-            promptRetried = true;
+        // Re-issue the prompt request repeatedly (not just once): iOS silently drops
+        // a Motion prompt requested while the app is still settling from the Location
+        // Settings round-trip, so we keep re-issuing every MOTION_PROMPT_RETRY_MS until
+        // it lands once the app is fully foreground-active. The native side re-presents
+        // the prompt on each call while authorization is still undetermined.
+        if (Date.now() - lastPromptAt >= MOTION_PROMPT_RETRY_MS) {
             triggerMotionPrompt();
         }
         if (isResume && Date.now() - start >= MOTION_RESUME_GRACE_MS) {
