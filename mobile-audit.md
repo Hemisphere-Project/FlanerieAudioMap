@@ -1,7 +1,7 @@
 # Mobile Audit & Remediation Plan
 
 **Original:** 2026-04-27
-**Last updated:** 2026-05-29 (post-GIVORS archive; next-step priorities refreshed)
+**Last updated:** 2026-06-01 (iOS GPS hardening shipped; bg-geo v2.14.0 released)
 **Scope:** Cordova launcher (FlanerieCordova) + downloaded local webapp (FlanerieAudioMap) + four forked native plugins
 **Field tests so far:** ELYSEE (multiple), FRAPPAZ, GUILLOTIÈRE (2024-12), GIVORS (2026-05-20, archived). Next: VILLEURBANNE.
 
@@ -72,34 +72,35 @@ Each onboarding gate hard-blocks until its check passes.
 |---|---|---|
 | `cordova-plugin-audiofocus` | 1.9.0 | ✅ pinned (Round 25 shrink: R21+R22 iOS surface migrated to audio-simple; MediaPlayer.framework dep dropped) |
 | `cordova-plugin-power-optimization` | 0.3.1 | ✅ pinned @ `3e89474` |
-| `cordova-background-geolocation-plugin` | 2.12.0 | ✅ pinned (BG-13: authoritative configureRail count + region_monitor_fail telemetry — audit fix) |
+| `cordova-background-geolocation-plugin` | 2.14.0 | ✅ pinned @ `bc8fb7d` (includes the main-thread `CLLocationManager` singleton fix, iOS stream-health snapshot, and the June 1 foreground-GPS hardening round) |
 | `cordova-plugin-audio-simple` | 0.3.3 | ✅ pinned (0.3.3: versionFiles mechanism ensures ping() strings auto-sync on every release) |
 
 **Workstream coverage (post-GIVORS):**
 | Workstream | Status |
 |---|---|
 | A — Walk-session lifecycle hygiene (A1–A8b) | All shipped. A1 keeps state in localStorage by design (only the title-page 5-tap-bottom clears it — used to rearm loan phones). A2 awaits engine reset before first play. A3 (rearm) awaits `releaseSession` before `resetAudioSession` to prevent the iOS deactivate/activate race |
-| B — Android resilience (B1, B2, B3, B4) | B1 shipped. B2 closed by BG-5 native AlarmManager. B3 closed by **Architecture D in bg-geo v2.9.0** — Raw-primary parallel with Fused fallback, dedupe in native plugin (no OEM allowlist, fail-soft on no-GMS, JS sees a single source-tagged stream). B4 diagnostic + iOS `forceReacquire` shipped; UI freeze-band still blocks on field threshold calibration. P0.5 Fix 1e (Android JS-suspended-despite-alarm diagnostic) shipped in v2.8.0 — telemetry-only via `alarm_wake_stats` |
+| B — Android resilience (B1, B2, B3, B4) | B1 shipped. B2 closed by BG-5 native AlarmManager. B3 closed by **Architecture D in bg-geo v2.9.0** — Raw-primary parallel with Fused fallback, dedupe in native plugin (no OEM allowlist, fail-soft on no-GMS, JS sees a single source-tagged stream). B4 now includes shipped stalled-signal handling in the webapp: onboarding blocks until two fresh fixes pass the startup gate, and runtime signal state surfaces `acquiring` / `frozen` / `lost` instead of treating keepalive freshness as healthy. P0.5 Fix 1e (Android JS-suspended-despite-alarm diagnostic) shipped in v2.8.0 — telemetry-only via `alarm_wake_stats`; final thresholds still need field tuning. |
 | C — Audio reliability (C1–C5) | C1, C2, C4, R7.2 shipped. C3 covered by C2. C4 runs on both platforms intentionally (Android playerrors can also be caused by audiofocus loss). C5 — `IsAutoRevokeWhitelisted` shipped in power-opt v0.3.1. C6 deferred |
-| D — iOS GPS native (D1–D6) | D1 warning shipped. D3 (`forceReacquire`), D4 (flag re-assertion), D5 (SLC auto-reacquire) all closed by plugin work. D6 covered by B4. D7 = dedicated iOS field test still TBD |
+| D — iOS GPS native (D1–D6) | D1 warning shipped. D3 (`forceReacquire`), D4 (flag re-assertion), D5 (SLC auto-reacquire) all closed by plugin work. D6 is now backed by the June 1 round: main-thread `CLLocationManager` singleton creation (`v2.12.2`), native `ios_stream_health` counters (`v2.13.0`, released in `v2.14.0`), and webapp freshness/state handling that no longer lets keepalive callbacks mask a dead real stream. D7 = focused iOS field validation still TBD |
 | E — Step lifecycle correctness (E1/E2/E3) | Not shipped — blocks on `accuracy_near_border` field data |
-| F — Telemetry & diagnostics (F-K1..F-N3) | All Phase 1A JS items shipped. F-A4 silence detection dropped (covered by `voice_snapshot` heuristics) |
-| G — Plugin extensions (G1–G4) | G1 (audiofocus v1.7.1 — incl. Round 21 `ExtraFocusListener`), G2 (power-opt v0.3.1), G3 (bg-geo v2.9.0), **G4 (cordova-plugin-exoplayer-simple v0.1.1 — NEW Android Media3 backend, Round 21)** all shipped |
+| F — Telemetry & diagnostics (F-K1..F-N3) | All Phase 1A JS items shipped. The June 1 round added `gps_state`, `gps_startup_fix` / `gps_startup_ready` / `gps_startup_rejected`, `ios_stream_health`, freshness buckets in `gps_quality_summary`, and offline analyzer support for keepalive-only sessions, masked freshness, and signal-state reasons. F-A4 silence detection dropped (covered by `voice_snapshot` heuristics) |
+| G — Plugin extensions (G1–G4) | G1 (audiofocus v1.7.1 — incl. Round 21 `ExtraFocusListener`), G2 (power-opt v0.3.1), G3 (bg-geo v2.14.0 — Architecture D + rail/visit telemetry + main-thread singleton fix + iOS stream-health bridge), **G4 (cordova-plugin-exoplayer-simple v0.1.1 — NEW Android Media3 backend, Round 21)** all shipped |
 | H — Android audio backend (H1) | H1 (audio-simple plugin + `AUDIO_BACKEND_ANDROID` flag + `_backend` telemetry field) shipped — **default is now `'exoplayer'`** (canary bucket retired in Round 24 plugin rename; set `window.AUDIO_BACKEND_ANDROID = 'howler'` pre-load to opt back). Full Howler retirement still pending second clean field test. |
 | iOS native plan (H/I/J/K/L) | See §[iOS native plan (R22–R26) — settled design decisions](#ios-native-plan-r22r26--settled-design-decisions) below. All five workstreams shipped between R22 and R26. **L (CLMonitor iOS 17+)** scope reduced to visit events only via legacy `startMonitoringVisits` (CLMonitor proper deferred indefinitely). |
 
 **Open items requiring next field test data:**
-- **B4 UI freeze-band** — need `real_callback_freshness` distribution to fix threshold above the ~20 s NSTimer/Handler floor.
+- **B4 / R27 startup + stalled-signal calibration** — implementation shipped. Need one iOS + one Android session set to tune the `gps_state` cutovers above the ~20 s NSTimer/Handler floor and confirm that the 2-fix / <=10 m / <=12 s startup gate is comfortable in real use.
 - **E1/E2/E3 zone-overshoot gates** — need `accuracy_near_border` distribution to set accuracy and sustain thresholds.
 - **H1 ExoPlayer backend validation** — flag `AUDIO_BACKEND_ANDROID='exoplayer'` on at least one loan SM-A515F at VILLEURBANNE. Compare `audio_play_started.load_duration_ms`, `audio_play_stuck`, `audio_loaderror` rates vs the Howler fleet (`backend` field on `audio_uri_resolved` / `audio_*error` is the bucket key).
 - **R21 / R22 iOS validation** — on at least one iOS device at VILLEURBANNE: confirm `nowplaying_setup` fires at parcours entry, lock-screen tile shows title with disabled controls, `resume_snapshot_check` (or `resume_native_override`) emits at every `parcours_restore`. Cross-check `lastUpdatedMs` parity between localStorage and NSUserDefaults timestamps.
+- **R27 iOS foreground-stream validation** — on at least one iOS device at VILLEURBANNE: confirm `ios_stream_health` appears every 30 s beside `cl_state`, `shared_manager_created_on_main_thread=true`, `real_location_count` rises during foreground walking, and `gps_state` transitions (`acquiring` / `ok` / `frozen` / `lost`) line up with actual callback freshness.
 - **R23 iOS rail validation** — on at least one iOS device at VILLEURBANNE: confirm `gps_rail_configured` fires once per parcours entry with `region_count` = (step_count − 1), `gps_rail_wake` events fire as the walker crosses transition midpoints, and `did_force_reacquire=true` correlates with actual standard-callback stalls (cross-check against `real_callback_freshness`). On an iOS 26.3.x device the rail should produce non-zero `gps_rail_wake.did_force_reacquire=true` events during the 8–14 min blackouts (S1 failure mode).
 - **R26 iOS visit validation** — `gps_visit_event` should fire during VILLEURBANNE walks, particularly during the FLANERIE_ELYSEE step 4 "choice step" lingering case and any natural pause spots. Cross-check the `arrival_date` / `departure_date` deltas against `voice_snapshot` step timing — if visit detection lines up with step dwell, the data may eventually feed E1/E2/E3 step-confirm gating as a stronger signal than the GPS-accuracy-only path.
 
 **Recommended next moves (post-GIVORS archive):**
-- **Do not open new native scope before VILLEURBANNE.** The remaining blockers are validation and threshold calibration, not missing implementation.
-- **Run one focused VILLEURBANNE validation pass with the minimum device set:** 1 iOS device (ideally 26.3.x or 26.4.x) and 1 loan-phone Android SM-A515F. Success criteria: B4 freshness histograms, E1/E2/E3 border-accuracy histograms, H1 ExoPlayer metrics, and R21-R26 iOS telemetry all present in one session set.
-- **Immediately after that data lands, ship one small threshold round:** calibrate B4 `gps_frozen` / `gps_unfrozen` thresholds and E1/E2/E3 accuracy + sustain gates. Avoid unrelated refactors in the same round.
+- **Do not open new native scope before VILLEURBANNE.** The June 1 iOS GPS scope is now implemented; remaining blockers are build validation and threshold calibration, not missing code.
+- **Run one focused VILLEURBANNE validation pass with the minimum device set:** 1 iOS device (ideally 26.3.x or 26.4.x) and 1 loan-phone Android SM-A515F. Success criteria: startup-gate behaviour, B4/R27 `gps_state` histograms, E1/E2/E3 border-accuracy histograms, H1 ExoPlayer metrics, and `ios_stream_health` + `cl_state` present in one session set.
+- **Immediately after that data lands, ship one small threshold round:** calibrate B4/R27 `gps_state` cutovers (`acquiring` / `frozen` / `lost`) and E1/E2/E3 accuracy + sustain gates. Avoid unrelated refactors in the same round.
 - **If H1 is clean, make ExoPlayer the canonical Android path and schedule Howler retirement.** Keep the override flag through one more clean production-like session, then remove the Howler branch / `Howler.autoUnlock` / `Howler.autoSuspend` under the existing R21-followup item.
 - **Only reopen Phase 3 items if telemetry still shows a real gap.** P3.5 Plan B/C and any visit-driven step-confirm work stay conditional on VILLEURBANNE evidence, not pre-emptive scope growth.
 
@@ -125,12 +126,19 @@ Cross-check of every "✅ shipped" claim against actual source. Items below are 
 **Genuinely shipped and correct** (verified line-by-line, through Round 21):
 A4, A5, A6, A8, A8b, B1, B4 (diagnostic + iOS `forceReacquire`), C1, C2, D1, R7.2, F-G1, F-G1b, F-G2, F-G3, F-G4, F-K3, F-N3, F-R1, F-R2, F-Z1, F-Z3, all plugin rounds (audiofocus v1.7.1 AF-1..AF-8, power-opt v0.3.1 PO-1..PO-9, bg-geo v2.5.0..v2.9.0 BG-2..BG-10 + P0.5 Fix 1e diagnostic + Architecture D), and **Round 21 G4/H1: ExoPlayer plugin v0.1.1 + AUDIO_BACKEND_ANDROID flag + apputils.js native paths + releaseExoPlayerAll teardown wiring** (verified in source; Gradle build + on-device smoke test still pending).
 
+## 2026-06-01 addendum — iOS GPS hardening
+
+- The webapp now blocks RDV/startup on `GEO.startupReady()`: two distinct fresh fixes, max 10 m accuracy, max 12 s age. Warmup copy explains whether the app is waiting on precision, freshness, or the second confirming fix.
+- Signal liveness now follows actual usable-fix freshness instead of any callback freshness. The app emits `gps_state` and distinguishes `off`, `acquiring`, `ok`, `frozen`, and `lost`, so keepalive-only traffic no longer looks healthy.
+- iOS foreground observability now includes `ios_stream_health` beside `cl_state`. The native snapshot exposes counts and ages for real fixes, keepalive replays, SLC, rail wakes, visits, force-reacquires, and shared `CLLocationManager` creation metadata.
+- Offline analyzers now surface keepalive-only sessions, masked freshness, signal-state reasons, startup-gate counters, and iOS native snapshot counts, making the June 1 regression class directly visible in post-hoc telemetry.
+
 ---
 
 ## Telemetry events (current code)
 
 ### GPS / lifecycle
-`session_start`, `session_resume`, `session_restart_click`, `session_end`, `session_diag`, `parcours_restore`, `parcours_freshness_check`, `parcours_update_chosen`, `bg_geo_authorization`, `app_visibility`, `gps_lost`, `gps_recovered`, `gps_callback_gap`, `real_callback_freshness` (30 s, includes `cl_state` on iOS + `alarm_wake_stats` + `location_dispatch_stats` on Android), `ios_power_state` (60 s iOS), `bg_restrictions_recheck` (5 min Android, includes `memory_info` + `standby_bucket`), `power_state_at_parcours` (now includes `auto_revoke_whitelisted` on Android), `gps_frozen` / `gps_unfrozen` (UI band deferred), `alarm_wake_stats` (30 s Android, bg-geo v2.8.0 P0.5 Fix 1e diagnostic), `location_dispatch_stats` (30 s Android, bg-geo v2.9.0 Architecture D: `{fusedAvailable, rawDelivered, rawKeepalive, fusedDelivered, fusedSuppressed, fusedStaleIgnored, lastDeliveredSource}`). Each `bg-geo` location event now carries `dispatch_source` ∈ `{raw, raw-keepalive, fused}` and `is_keepalive` on Android (`is_keepalive` already on iOS via F-G4).
+`session_start`, `session_resume`, `session_restart_click`, `session_end`, `session_diag`, `parcours_restore`, `parcours_freshness_check`, `parcours_update_chosen`, `bg_geo_authorization`, `app_visibility`, `gps_lost`, `gps_recovered`, `gps_callback_gap`, `gps_state`, `gps_startup_fix`, `gps_startup_ready`, `gps_startup_rejected`, `real_callback_freshness` (30 s, includes `cl_state` + `ios_stream_health` on iOS and `alarm_wake_stats` + `location_dispatch_stats` on Android), `ios_power_state` (60 s iOS), `bg_restrictions_recheck` (5 min Android, includes `memory_info` + `standby_bucket`), `power_state_at_parcours` (now includes `auto_revoke_whitelisted` on Android), `alarm_wake_stats` (30 s Android, bg-geo v2.8.0 P0.5 Fix 1e diagnostic), `location_dispatch_stats` (30 s Android, bg-geo v2.9.0 Architecture D: `{fusedAvailable, rawDelivered, rawKeepalive, fusedDelivered, fusedSuppressed, fusedStaleIgnored, lastDeliveredSource}`), `gps_quality_summary` (flush summary including `freshSamples`, `staleSamples`, `startupGradeSamples`). Each `bg-geo` location event now carries `dispatch_source` ∈ `{raw, raw-keepalive, fused}` and `is_keepalive` on Android (`is_keepalive` already on iOS via F-G4).
 
 ### Step / parcours
 `step_fire`, `step_done`, `step_skip_done`, `step_implicit_done`, `step_audio_trigger` (carries `accuracy`, `consecutive_inside_samples`, `time_since_first_inside_ms`, `neighbor_distances`, `step_fire_latency_ms`), `step_resume_current`, `step_past_unload`, `step_voice_failed`, `step_afterplay_fallback`, `step_prewarm_next`, `parcours_store`, `accuracy_near_border` (when within 20 m), `voice_snapshot`, `voice_snapshot_skipped`, `user_lost`, `user_recovered`.
@@ -184,6 +192,7 @@ Persistent fields in `session_diag`: `deviceUuid`, `isLoanDevice`, plugin-presen
 - Reload mid-parcours → resume from correct step.
 - Touch server parcours JSON mtime → app shows A6 update gate at `checkdata`.
 - Rename one media file on the device → `media_integrity_check` reports `failed: 1`.
+- RDV stays blocked until startup gate sees two distinct fresh fixes (`<=10 m`, `<=12 s`); warmup text should explain whether it is waiting on precision, freshness, or the second fix.
 - iOS 26.3.x → D1 onboarding warning visible.
 
 ### Loan phones
@@ -195,6 +204,7 @@ Persistent fields in `session_diag`: `deviceUuid`, `isLoanDevice`, plugin-presen
 ### Plugin / platform-specific
 - Android 14+: FG service starts, type `mediaPlayback` declared.
 - iOS: diagnostic suite T4/T8/T9 pass with NativeMediaPlayer.
+- iOS foreground validation: `ios_stream_health` emitted beside `cl_state`, `shared_manager_created_on_main_thread=true`, and `real_location_count` increases while walking in foreground.
 - iOS full locked-screen walk: voice triggers reliably from pocket, voice→afterplay seamless.
 
 ---
@@ -222,8 +232,8 @@ R7.2 default-afterplay map gating, B1 past-step media unload, A6 parcours freshn
 - **R21-supporting** `FlanerieCordova/www/apputils.js` now populates `LOCALAPP_PATH_NATIVE` + `LOCALMEDIA_PATH_NATIVE` on Android too (was iOS-only) so ExoPlayer can read parcours media via `FileDataSource` directly instead of through the embedded WebView HTTP server.
 - **R21-supporting** `releaseExoPlayerAll(source)` helper in [pages.js](www/app/pages.js) awaited (rearm A3) or fire-and-forget (walk-end A1) BEFORE `releaseAudiofocusSession` so the ExoPlayer FG service tears down ahead of AudioFocusService's. Telemetry: `exoplayer_release_all` / `exoplayer_release_all_error`.
 
-### Phase 1B remainder (blocked on VILLEURBANNE data)
-- **B4 watchdog UI** — `#frozen-band` overlay with "Téléphone en veille — déverrouillez pour continuer". Need `real_callback_freshness` distribution to set threshold above NSTimer floor (~20 s).
+### Phase 1B remainder (threshold tuning blocked on VILLEURBANNE data)
+- **B4 / R27 startup + stalled-signal tuning** — startup gate and signal-state UI are shipped (`acquiring` / `frozen` / `lost`). Need `real_callback_freshness` distribution to tune the thresholds above the NSTimer floor (~20 s) and validate the <=10 m onboarding gate in the field.
 - **E1/E2/E3 zone-overshoot gates** — accuracy-gated step entry. Need `accuracy_near_border` distribution.
 
 ### Phase 3 — deferred, conditional
