@@ -371,6 +371,14 @@ class Parcours extends EventEmitter {
 
                 this.state.mediaPack = Object.keys(data);
 
+                // Cache each file's expected size so quickMediaCheck() can verify the
+                // pack on disk at every startup WITHOUT a network round-trip (the
+                // /update/media list can come back empty on a flaky connection — see
+                // the 2026-06-01 03o0 session where it returned total:0 and the
+                // integrity check passed vacuously while two files were missing).
+                this.state.mediaPackInfo = {};
+                this.state.mediaPack.forEach(f => { this.state.mediaPackInfo[f] = { size: data[f].size }; });
+
                 // mediaPackSize sum of all media files size
                 this.state.mediaPackSize = this.state.mediaPack.reduce((sum, file) => sum + data[file].size, 0);
                 this.state.mediaPackLoaded = 0;
@@ -461,6 +469,43 @@ class Parcours extends EventEmitter {
                     }));
                 })
                 .catch(() => resolve({ total: 0, ok: 0, failed: 0, failed_files: [], skipped: true, error: 'media_list_unreachable' }));
+        });
+    }
+
+    // Fast on-disk presence + size check, run at EVERY startup (checkdata) before
+    // a cached "valid" parcours is reused for a walk. `medialoaded` alone is a
+    // persisted flag that survives file eviction / a hung re-download, so the walk
+    // could start with missing media (2026-06-01 03o0: two voice files gone, walk
+    // ran anyway). This verifies the actual files against the per-file sizes cached
+    // at load time — local-only (no network, works offline) and no hashing, so it
+    // stays sub-second even on a mid-walk resume. Returns Promise<{ok, missing, checked, reason}>.
+    quickMediaCheck() {
+        return new Promise((resolve) => {
+            if (!this.pID || !document.WEBAPP_URL || typeof media_download !== 'function') {
+                // WEB mode / no local FS — nothing to verify, don't block.
+                resolve({ ok: true, missing: [], checked: 0, reason: 'no_fs' });
+                return;
+            }
+            let info = this.state.mediaPackInfo || {};
+            let files = Object.keys(info);
+            if (files.length === 0) {
+                // Legacy install loaded before sizes were cached — we can't verify
+                // locally and won't make a (possibly offline) network call here, so
+                // don't block. The pack is re-stamped with sizes on its next load.
+                resolve({ ok: true, missing: [], checked: 0, reason: 'no_cached_sizes' });
+                return;
+            }
+            let missing = [];
+            let chain = Promise.resolve();
+            files.forEach(file => {
+                let path = this.pID + '/' + file;
+                // size-only (no hash) → media_download dryrun resolves on a size match,
+                // rejects 'DRYRUN' when the file is missing or the wrong size.
+                chain = chain.then(() => media_download(path, { size: info[file].size }, true))
+                    .then(() => {})
+                    .catch(() => { missing.push(file); });
+            });
+            chain.then(() => resolve({ ok: missing.length === 0, missing: missing, checked: files.length }));
         });
     }
 

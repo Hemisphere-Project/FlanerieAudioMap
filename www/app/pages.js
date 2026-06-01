@@ -404,30 +404,53 @@ PAGES['intro'] = () => {
 //
 PAGES['checkdata'] = () =>
 {
-    // PARCOURS resume — A6: opportunistic freshness check against the server
-    // before reusing the cached parcours. If offline, fall through to the
-    // cached version (the walk must work without data once preloaded).
+    // PARCOURS resume. Two gates before reusing a cached parcours:
+    //  1. media integrity — the cached pack must actually be on disk (medialoaded is
+    //     a stale flag that survives eviction / a hung re-download; 03o0 walked with
+    //     two voice files missing). Verified LOCALLY against cached sizes, so it's
+    //     fast even on a mid-walk resume and works offline.
+    //  2. A6 freshness — opportunistic parcours-version check against the server.
+    // Run the media check (local) and the /list fetch (network) together so a
+    // complete pack costs no extra latency.
     if (PARCOURS.valid()) {
-        get('/list')
-            .then(parcours => {
+        Promise.all([
+            PARCOURS.quickMediaCheck(),
+            get('/list').then(l => l).catch(() => null)   // null = offline
+        ]).then(([media, list]) => {
+            var match = list ? list.find(p => p.file === PARCOURS.pID) : null;
+            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('media_startup_check', {
+                ok: media.ok, missing: media.missing.length, checked: media.checked,
+                reason: media.reason || null, online: !!list,
+                missing_files: media.missing.slice(0, 20),
+            });
+
+            // 1. Media incomplete on disk → must re-download before any walk.
+            if (!media.ok) {
+                if (match) return PAGE('preload', match);   // re-download the pack
+                return PAGE('nomedia');                     // offline / unknown id → can't fix here
+            }
+
+            // 2. Media OK → opportunistic version freshness (online only).
+            if (list && match) {
                 try {
-                    var match = parcours.find(p => p.file === PARCOURS.pID);
-                    var serverTime = match ? new Date(match.time).getTime() : null;
+                    var serverTime = new Date(match.time).getTime();
                     var cachedTime = parseInt(localStorage.getItem('parcoursMTime_' + PARCOURS.pID) || '0', 10);
                     if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('parcours_freshness_check', {
                         pID: PARCOURS.pID,
                         server_time: serverTime,
                         cached_time: cachedTime || null,
-                        match_found: !!match,
+                        match_found: true,
                         stale: !!(serverTime && cachedTime && serverTime > cachedTime),
                     });
                     if (serverTime && cachedTime && serverTime > cachedTime) {
                         return PAGE('parcoursupdate', { match: match, serverTime: serverTime, cachedTime: cachedTime });
                     }
                 } catch (e) { console.warn('Freshness check failed:', e); }
-                PAGE('checkgeo');
-            })
-            .catch(() => PAGE('checkgeo'));  // offline → use cached
+            }
+
+            // 3. Complete + up to date (or offline with a complete cache) → proceed.
+            PAGE('checkgeo');
+        });
         return;
     }
 
