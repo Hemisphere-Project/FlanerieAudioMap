@@ -786,6 +786,8 @@ class DiagnosticRunner extends EventEmitter {
         m.ctx_state_on_unlock = null
         m.heartbeat_count = 0
         m.gps_lost_events = 0
+        m.gps_frozen_events = 0
+        m.gps_acquiring_events = 0
         m.positions = 0
         m.bg_positions = 0
         m.is_background = false
@@ -845,6 +847,8 @@ class DiagnosticRunner extends EventEmitter {
 
         let onState = (state) => {
             if (state === 'lost') m.gps_lost_events++
+            if (state === 'frozen') m.gps_frozen_events++
+            if (state === 'acquiring') m.gps_acquiring_events++
             this.emit('metrics', m)
         }
         this._trackListener('stateUpdate', onState)

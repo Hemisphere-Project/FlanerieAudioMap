@@ -97,6 +97,17 @@ console.log(`\n## GPS  (${fixCount} fixes, ${gaps.length} gap(s) >= ${opts.gap}s
 for (const g of gaps) {
   console.log(`  GAP ${String(Math.round(g.ms / 1000)).padStart(5)}s   ${min(g.fromT)} -> ${min(g.toT)}`);
 }
+console.log(`  state transitions: acquiring=${s.gpsAcquiringTransitions} frozen=${s.gpsFrozenTransitions} lost=${s.gpsLost} recovered=${s.gpsRecovered}`);
+console.log(`  delivery mix: real=${s.gpsRealSamples} keepalive=${s.gpsKeepaliveSamples} heartbeat=${s.gpsHeartbeatSamples}`
+  + (s.keepaliveOnlySession ? '   <- KEEPALIVE-ONLY SESSION' : '')
+  + (s.activeFixOnlySession ? '   <- ACTIVE-FIX-ONLY SESSION' : ''));
+console.log(`  freshness max: real=${fmtAge(s.maxRealCallbackAgeMs)} any=${fmtAge(s.maxAnyCallbackAgeMs)} masked=${s.maskedFreshnessSamples}`);
+console.log(`  startup gate: fixes=${s.gpsStartupFix} ready=${s.gpsStartupReady} rejected=${s.gpsStartupRejected}`);
+console.log(`  rail/visit: configured=${s.gpsRailConfigured} wake=${s.gpsRailWake} monitorFail=${s.gpsRailMonitorFail} visit=${s.gpsVisitEvent}`);
+console.log(`  native snapshots: clState=${s.clStateSamples} iosStreamHealth=${s.iosStreamHealthSamples}`);
+if (Object.keys(s.gpsStateReasons).length) {
+  console.log(`  gps_state reasons: ${JSON.stringify(s.gpsStateReasons)}`);
+}
 console.log('  route progression (route_probe currentStep changes):');
 let last = null;
 for (const e of ev) {
@@ -139,7 +150,7 @@ console.log(`  afterplayFallback=${s.afterplayFallback} (no_src=${s.afterplayFal
 console.log(`  audiofocus: requestFail=${s.audiofocusRequestFail} requestOk=${s.audiofocusRequestOk} loss=${s.audiofocusLoss}`);
 console.log(`  map_opened sources: ${JSON.stringify(countBy(s.mapOpened))}`);
 console.log(`  gps: triggerRejected=${s.gpsTriggerRejected} stale=${s.gpsStale} `
-  + `sleepSuspect=${s.gpsSleepSuspect} revoked=${s.gpsRevoked}  avgAcc=${s.gpsAvgAcc ? s.gpsAvgAcc.toFixed(1) : '-'}`);
+  + `sleepSuspect=${s.gpsSleepSuspect} revoked=${s.gpsRevoked} frozen=${s.gpsFrozen}  avgAcc=${s.gpsAvgAcc ? s.gpsAvgAcc.toFixed(1) : '-'}`);
 
 if (opts.types) {
   console.log('\n## Event-type histogram');
@@ -152,4 +163,9 @@ function countBy(arr) {
   const o = {};
   for (const x of arr) o[x] = (o[x] || 0) + 1;
   return o;
+}
+
+function fmtAge(ms) {
+  if (typeof ms !== 'number' || !Number.isFinite(ms)) return '-';
+  return `${Math.round(ms / 1000)}s`;
 }

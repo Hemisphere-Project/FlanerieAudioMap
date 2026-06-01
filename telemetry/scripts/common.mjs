@@ -147,8 +147,30 @@ export function summarize(session) {
   for (const e of audioErrEvents) audioErrByKind[classifyAudioSrc(e.data && e.data.src)]++;
 
   const { fixCount, gaps } = gpsGaps(ev);
-  const gpsAcc = ev.filter(e => e.type === 'gps' && e.data && typeof e.data.acc === 'number')
-    .map(e => e.data.acc);
+  const gpsEvents = ev.filter(e => e.type === 'gps' && e.data && typeof e.data.lat === 'number');
+  const gpsAcc = gpsEvents.filter(e => typeof e.data.acc === 'number').map(e => e.data.acc);
+  const gpsSources = gpsEvents.map(e => (e.data && e.data.source) || 'unknown');
+  const gpsKeepaliveSamples = gpsSources.filter(s => s === 'keepalive').length;
+  const gpsHeartbeatSamples = gpsSources.filter(s => s === 'heartbeat').length;
+  const gpsRealSamples = gpsSources.filter(s => s !== 'keepalive' && s !== 'heartbeat').length;
+  const keepaliveOnlySession = gpsEvents.length > 0 && gpsKeepaliveSamples > 0 && gpsRealSamples === 0 && gpsHeartbeatSamples === 0;
+  const activeFixOnlySession = gpsEvents.length > 0 && gpsHeartbeatSamples > 0 && gpsRealSamples === 0 && gpsKeepaliveSamples === 0;
+  const gpsStateEvents = ev.filter(e => e.type === 'gps_state' && e.data);
+  const gpsStateReasons = gpsStateEvents.reduce((acc, e) => {
+    const reason = e.data && e.data.reason;
+    if (reason) acc[reason] = (acc[reason] || 0) + 1;
+    return acc;
+  }, {});
+  const freshnessEvents = ev.filter(e => e.type === 'real_callback_freshness' && e.data);
+  const realCallbackAges = freshnessEvents.map(e => e.data.real_age_ms).filter(v => typeof v === 'number');
+  const anyCallbackAges = freshnessEvents.map(e => e.data.any_age_ms).filter(v => typeof v === 'number');
+  const maxRealCallbackAgeMs = realCallbackAges.length ? Math.max(...realCallbackAges) : null;
+  const maxAnyCallbackAgeMs = anyCallbackAges.length ? Math.max(...anyCallbackAges) : null;
+  const maskedFreshnessSamples = freshnessEvents.filter(e => {
+    const d = e.data || {};
+    return typeof d.real_age_ms === 'number' && typeof d.any_age_ms === 'number'
+      && d.real_age_ms >= 30000 && d.any_age_ms < 30000;
+  }).length;
 
   // Resume positions from session_resume events — the step and seek-pos a crash
   // recovery restored to. Used to detect the stale seek-pos bug (report P8).
@@ -237,10 +259,34 @@ export function summarize(session) {
     gpsGapMaxMs: gaps.length ? Math.max(...gaps.map(g => g.ms)) : 0,
     gpsGapTotalMs: gaps.reduce((s, g) => s + g.ms, 0),
     gpsAvgAcc: average(gpsAcc),
+    gpsLost: types['gps_lost'] || 0,
+    gpsFrozen: types['gps_frozen'] || 0,
+    gpsAcquiring: types['gps_acquiring'] || 0,
+    gpsRecovered: types['gps_recovered'] || 0,
     gpsRevoked: types['gps_revoked'] || 0,
     gpsTriggerRejected: types['gps_trigger_rejected'] || 0,
     gpsStale: types['gps_stale_callback'] || 0,
     gpsSleepSuspect: types['gps_sleep_suspect'] || 0,
+    gpsStartupFix: types['gps_startup_fix'] || 0,
+    gpsStartupReady: types['gps_startup_ready'] || 0,
+    gpsStartupRejected: types['gps_startup_rejected'] || 0,
+    gpsRailConfigured: types['gps_rail_configured'] || 0,
+    gpsRailWake: types['gps_rail_wake'] || 0,
+    gpsRailMonitorFail: types['gps_rail_monitor_fail'] || 0,
+    gpsVisitEvent: types['gps_visit_event'] || 0,
+    gpsKeepaliveSamples,
+    gpsHeartbeatSamples,
+    gpsRealSamples,
+    keepaliveOnlySession,
+    activeFixOnlySession,
+    gpsFrozenTransitions: gpsStateEvents.filter(e => e.data && e.data.state === 'frozen').length,
+    gpsAcquiringTransitions: gpsStateEvents.filter(e => e.data && e.data.state === 'acquiring').length,
+    gpsStateReasons,
+    maxRealCallbackAgeMs,
+    maxAnyCallbackAgeMs,
+    maskedFreshnessSamples,
+    clStateSamples: types['cl_state'] || 0,
+    iosStreamHealthSamples: types['ios_stream_health'] || 0,
 
     bgStopRepeated: types['bg_stop_repeated'] || 0,
     batteryKill: types['battery_kill_overlay'] || 0,

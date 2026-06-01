@@ -1986,19 +1986,36 @@ PAGES['rdv'] = () => {
     // walker is somewhere GPS can't reach (indoors), and continuing to
     // hammer getCurrentLocation won't help either case.
     const RDV_WARMUP_MAX_ATTEMPTS = 5
-    // Accuracy threshold for "fresh enough to compute walking distance".
-    // 60 m matches the bg-geo accuracy band that produces useful distance
-    // estimates; coarser fixes would show wildly wrong "Distance: N m" to
-    // the user.
-    const RDV_FRESH_ACC_MAX = 60
     function hasFreshFix() {
-        let fixTime = GEO.lastUsableFixTime != null ? GEO.lastUsableFixTime : GEO.lastTimeUpdate
-        if (!GEO.lastPosition || !fixTime) return false
-        if ((Date.now() - fixTime) > 12000) return false
-        if (!GEO.lastPosition.coords) return false
-        let acc = GEO.lastPosition.coords.accuracy
-        if (typeof acc !== 'number' || isNaN(acc)) return false
-        return acc <= RDV_FRESH_ACC_MAX
+        return typeof GEO.startupReady === 'function' ? GEO.startupReady() : false
+    }
+    function startupWarmupLabel(passive) {
+        let status = typeof GEO.startupStatus === 'function' ? GEO.startupStatus() : null
+        let maxAcc = status && status.maxAccuracyM ? status.maxAccuracyM : 10
+        let fixCount = status && typeof status.fixCount === 'number' ? status.fixCount : 0
+        let requiredFixCount = status && typeof status.requiredFixCount === 'number' ? status.requiredFixCount : 2
+
+        if (!status) return passive ? 'En attente du GPS...' : 'Initialisation de votre position...'
+
+        switch (status.lastReason) {
+        case 'accuracy':
+            return passive
+                ? 'En attente d\'un GPS precis a ' + maxAcc + ' m max...'
+                : 'GPS trop imprecis, en attente d\'une position a ' + maxAcc + ' m max...'
+        case 'stale':
+            return passive
+                ? 'En attente d\'une position GPS recente...'
+                : 'Position GPS trop ancienne, nouvelle mesure en cours...'
+        case 'waiting_second_fix':
+            return 'Validation du signal GPS (' + fixCount + '/' + requiredFixCount + ')...'
+        case 'fixes_too_similar':
+            return 'Confirmation du signal GPS en cours...'
+        case 'no_accuracy':
+        case 'unknown_age':
+        case 'waiting_first_fix':
+        default:
+            return passive ? 'En attente du GPS...' : 'Initialisation de votre position...'
+        }
     }
     function requestWarmup() {
         if (warmupPending || PLATFORM == 'browser') return
@@ -2013,15 +2030,12 @@ PAGES['rdv'] = () => {
     var checkpos = setInterval(() => {
         if (PLATFORM != 'browser' && (!GEO.ready() || !hasFreshFix())) {
             requestWarmup()
-            // Distinguish "still trying" from "gave up, waiting passively" so the
-            // user gets honest feedback when GPS just isn't acquiring (indoors).
-            let label = warmupAttempts < RDV_WARMUP_MAX_ATTEMPTS
-                ? 'Initialisation de votre position...'
-                : 'En attente du GPS...'
+            let passive = warmupAttempts >= RDV_WARMUP_MAX_ATTEMPTS
+            let label = startupWarmupLabel(passive)
             $('#rdvdistance').show().text(label)
             return;
         }
-        let d = PARCOURS.find('steps', 0).distanceToBorder(GEO.position())
+        let d = PARCOURS.find('steps', 0).distanceToBorder(GEO.usablePosition())
         $('#rdvdistance').show().text('Distance: '+Math.round(d) + ' m');
         clearInterval(checkpos);
         $('#rdv-accept').show()
@@ -2992,6 +3006,7 @@ LOST_PLAYER.load(BASEURL+'/images/', {src: 'youlost.mp3', master: 1}, false);
 // gated on this — GPS-lost takes priority and suppresses the LOST band while
 // the bg-geo plugin reports no usable fix.
 var GPSSIGNAL_OK = true;
+var GPSSIGNAL_STATE = 'ok';
 
 // LOST state UI helpers — split out so the resume path can repaint the band
 // on a kill-and-relaunch without duplicating the entry handler's audio gates.
@@ -3230,6 +3245,8 @@ GEO.stateUpdateTimeout = 30 * 1000; // 30s on all platforms — must exceed the 
 
 // Default GPS-lost copy (reset whenever we re-show the overlay for a transient signal loss).
 const GPSLOST_TEXT_DEFAULT = 'Signal GPS perdu.<br/><br/>Déplacez-vous vers un espace dégagé.<br/>La progression reprend automatiquement dès le retour du signal.';
+const GPSFROZEN_TEXT_DEFAULT = '<b>Position GPS figée</b><br/><br/>Flanerie reçoit encore des rappels GPS, mais pas de nouvelle position exploitable.<br/><br/>Gardez le téléphone actif quelques secondes. La progression reprend dès qu\'une position fraîche arrive.';
+const GPSACQUIRING_TEXT_DEFAULT = '<b>Reconnexion GPS en cours</b><br/><br/>Flanerie attend une nouvelle position précise pour reprendre la progression.';
 
 // GPS Doze escalation (R4.3 option 0 — P1.31).
 // Motorola moto g(7) power and TCL T433D (field tests 2026-05-15 and 2026-05-18)
@@ -3249,7 +3266,7 @@ var GPS_DOZE_TIMER = null;
 // Returns a "Précision GPS: <Xm>" prefix when we have a recent fix, otherwise ''.
 // Helps the walker correlate "no signal" with the last known accuracy.
 function gpsPrecisionPrefix() {
-    let p = GEO && GEO.lastPosition;
+    let p = GEO && typeof GEO.usablePosition === 'function' ? GEO.usablePosition() : (GEO && GEO.lastPosition);
     if (!p || !p.coords || typeof p.coords.accuracy !== 'number') return '';
     return '<b>Dernière précision GPS:</b> ' + Math.round(p.coords.accuracy) + ' m<br /><br />';
 }
@@ -3361,17 +3378,66 @@ GEO.on('bgServiceStop', (info) => {
     if (BG_STOP_HISTORY.length >= BG_STOP_THRESHOLD) showBatteryKillOverlay();
 });
 
-GEO.on('stateUpdate', (state) => {
-    if (state == 'lost') {
-        // GPS-lost takes priority over LOST. Always suppress the LOST band /
-        // loop, even if the UX gates below skip the gpslost overlay — the
-        // signal is unreliable, so we must not let LOST run on top.
+GEO.on('stateUpdate', (state, meta) => {
+    let previousSignalState = GPSSIGNAL_STATE;
+    GPSSIGNAL_STATE = state;
+
+    if (state == 'acquiring' || state == 'frozen' || state == 'lost') {
         GPSSIGNAL_OK = false;
         if (PARCOURS.state.lost) {
             $('#lost-band').hide();
             LOST_PLAYER.stop();
         }
+    }
 
+    if (state == 'acquiring') {
+        clearTimeout(GPS_DOZE_TIMER);
+        GPS_DOZE_TIMER = null;
+        if (currentPage != 'parcours') return;
+        if (GEO.mode() == 'simulate') return;
+        if (PARCOURS.currentStep() == PARCOURS.spots.steps.length - 1) return;
+        if (AUDIOFOCUS == 0) return;
+        if (GEO.motionIsStationary) return;
+        console.warn('GEO acquiring position', meta);
+        TELEMETRY.log('gps_acquiring', {
+            step: PARCOURS.currentStep(),
+            reason: meta && meta.reason ? meta.reason : null,
+            fix_age_ms: meta && typeof meta.fixAgeMs === 'number' ? meta.fixAgeMs : null,
+            any_age_ms: meta && typeof meta.anyAgeMs === 'number' ? meta.anyAgeMs : null,
+            real_age_ms: meta && typeof meta.realAgeMs === 'number' ? meta.realAgeMs : null,
+        });
+        setGpsLostOverlay({html: gpsPrecisionPrefix() + GPSACQUIRING_TEXT_DEFAULT});
+        return;
+    }
+
+    if (state == 'frozen') {
+        clearTimeout(GPS_DOZE_TIMER);
+        GPS_DOZE_TIMER = null;
+        if (currentPage != 'parcours') return;
+        if (GEO.mode() == 'simulate') return;
+        if (PARCOURS.currentStep() == PARCOURS.spots.steps.length - 1) return;
+        if (AUDIOFOCUS == 0) return;
+        if (GEO.motionIsStationary) return;
+        console.warn('GEO frozen position', meta);
+        TELEMETRY.log('gps_frozen', {
+            step: PARCOURS.currentStep(),
+            reason: meta && meta.reason ? meta.reason : null,
+            fix_age_ms: meta && typeof meta.fixAgeMs === 'number' ? meta.fixAgeMs : null,
+            any_age_ms: meta && typeof meta.anyAgeMs === 'number' ? meta.anyAgeMs : null,
+            real_age_ms: meta && typeof meta.realAgeMs === 'number' ? meta.realAgeMs : null,
+        });
+        if (navigator.vibrate) navigator.vibrate([250, 120, 250]);
+        pauseAllPlayers();
+        GPSLOST_PLAYER.play();
+        setGpsLostOverlay({html: gpsPrecisionPrefix() + GPSFROZEN_TEXT_DEFAULT});
+        probeGpsHealth();
+        return;
+    }
+
+    if (state == 'lost') {
+        // GPS-lost takes priority over LOST. Always suppress the LOST band /
+        // loop, even if the UX gates below skip the gpslost overlay — the
+        // signal is unreliable, so we must not let LOST run on top.
         if (currentPage != 'parcours') return;                                  // only if on parcours page
         if (GEO.mode() == 'simulate') return;                                   // not in simulate mode
         if (PARCOURS.currentStep() == PARCOURS.spots.steps.length - 1) return;  // not if last step
@@ -3409,7 +3475,7 @@ GEO.on('stateUpdate', (state) => {
         if (currentPage != 'parcours') return; // only if on parcours page
         if (AUDIOFOCUS == 0) return;
         console.log('GEO position ok');
-        TELEMETRY.log('gps_recovered', {step: PARCOURS.currentStep()});
+        TELEMETRY.log('gps_recovered', {step: PARCOURS.currentStep(), from_state: previousSignalState});
         if (navigator.vibrate) navigator.vibrate([200]);
         GPSREVOKED = false;
         GPSLOST_PLAYER.stop();
@@ -3536,6 +3602,14 @@ setInterval(() => {
         if (bgGeoFG1 && typeof bgGeoFG1.getCLState === 'function') {
             bgGeoFG1.getCLState().then(function(clState) {
                 if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('cl_state', Object.assign({}, clState, {
+                    real_age_ms: lastReal != null ? Date.now() - lastReal : null,
+                    step: (typeof PARCOURS !== 'undefined' && PARCOURS.state) ? PARCOURS.state.stepIndex : null,
+                }));
+            }).catch(function(e) { /* non-fatal */ });
+        }
+        if (bgGeoFG1 && typeof bgGeoFG1.getIOSStreamHealth === 'function') {
+            bgGeoFG1.getIOSStreamHealth().then(function(stats) {
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('ios_stream_health', Object.assign({}, stats, {
                     real_age_ms: lastReal != null ? Date.now() - lastReal : null,
                     step: (typeof PARCOURS !== 'undefined' && PARCOURS.state) ? PARCOURS.state.stepIndex : null,
                 }));

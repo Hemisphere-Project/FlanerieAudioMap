@@ -30,6 +30,9 @@ var TELEMETRY = (function() {
             backgroundSamples: 0,
             heartbeatSamples: 0,
             stationarySamples: 0,
+            freshSamples: 0,
+            staleSamples: 0,
+            startupGradeSamples: 0,
             bucketCounts: {
                 excellent: 0,
                 good: 0,
@@ -88,9 +91,17 @@ var TELEMETRY = (function() {
         }
 
         if (typeof data.ageMs === 'number' && !isNaN(data.ageMs)) {
+            if (data.ageMs <= 12000) gpsSummary.freshSamples += 1;
+            else gpsSummary.staleSamples += 1;
             gpsSummary.maxAgeMs = gpsSummary.maxAgeMs == null ? data.ageMs : Math.max(gpsSummary.maxAgeMs, data.ageMs);
             gpsSummary.totalAgeMs += data.ageMs;
             gpsSummary.ageSamples += 1;
+        }
+
+        if (typeof data.acc === 'number' && !isNaN(data.acc) &&
+            typeof data.ageMs === 'number' && !isNaN(data.ageMs) &&
+            data.acc <= 10 && data.ageMs <= 12000) {
+            gpsSummary.startupGradeSamples += 1;
         }
 
         gpsSummary.lastSource = data.source || gpsSummary.lastSource;
@@ -110,6 +121,9 @@ var TELEMETRY = (function() {
             backgroundSamples: summary.backgroundSamples,
             heartbeatSamples: summary.heartbeatSamples,
             stationarySamples: summary.stationarySamples,
+            freshSamples: summary.freshSamples,
+            staleSamples: summary.staleSamples,
+            startupGradeSamples: summary.startupGradeSamples,
             accuracyBuckets: summary.bucketCounts,
             minAcc: summary.minAcc,
             maxAcc: summary.maxAcc,

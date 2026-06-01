@@ -13,6 +13,11 @@ var GPS_CALLBACK_GAP_THRESHOLD = 20000
 var GPS_SLEEP_SUSPECT_THRESHOLD = 30000
 var ACTIVE_GEO_BACKGROUND_TASK = null
 var IOS_GEO_BACKGROUND_TASK_TIMEOUT = 8000
+var STARTUP_FIX_MAX_AGE_MS = 12000
+var STARTUP_FIX_MAX_ACCURACY_M = 10
+var STARTUP_REQUIRED_FIXES = 2
+var STARTUP_SECOND_FIX_MIN_GAP_MS = 5000
+var STARTUP_SECOND_FIX_MIN_MOVEMENT_M = 8
 
 function gpsAccuracyBucket(acc) {
     if (typeof acc !== 'number' || isNaN(acc)) return 'unknown'
@@ -343,28 +348,29 @@ class GeoLoc extends EventEmitter {
         // not merely the arrival of a callback. This prevents stale keepalive
         // replays from masking GPS-lost.
         this.lastUsableFixTime = null;
+        this.lastUsablePosition = null;
+
+        this.startupFixMaxAgeMs = STARTUP_FIX_MAX_AGE_MS;
+        this.startupFixMaxAccuracyM = STARTUP_FIX_MAX_ACCURACY_M;
+        this.startupRequiredFixes = STARTUP_REQUIRED_FIXES;
+        this.startupSecondFixMinGapMs = STARTUP_SECOND_FIX_MIN_GAP_MS;
+        this.startupSecondFixMinMovementM = STARTUP_SECOND_FIX_MIN_MOVEMENT_M;
+        this.startupReadiness = null;
+        this._resetStartupReadiness();
 
         this.follow = false;
         this.map = null;
 
         this.runMode = 'off';   // off, gps, simulate
 
-        this.stateUpdate = 'off'; // off, ok, lost
+        this.stateUpdate = 'off'; // off, acquiring, ok, frozen, lost
+        this.stateUpdateMeta = { state: 'off', reason: 'service_off' };
         this.stateUpdateTimeout = 10000; // 10 seconds
         this.lastAccuracyBucket = null;
 
         this.stateUpdateTimer = setInterval(() => {
-            let freshnessTime = this.lastUsableFixTime != null ? this.lastUsableFixTime : this.lastTimeUpdate;
-            let nextStep = this.stateUpdate;
-            if (freshnessTime == null) nextStep = 'off';
-            else if ( (freshnessTime + this.stateUpdateTimeout) < Date.now()) nextStep = 'lost';
-            else nextStep = 'ok';
-
-            if (this.stateUpdate != nextStep) {
-                this.stateUpdate = nextStep;
-                this.emit('stateUpdate', nextStep);
-                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_state', {state: nextStep});
-            }
+            let snapshot = this._signalStateSnapshot(Date.now())
+            this._applySignalState(snapshot)
 
             // Proactive heartbeat: approaching timeout but not yet lost.
             // On iOS, stationary periods suppress CLLocation delegate callbacks but
@@ -372,15 +378,17 @@ class GeoLoc extends EventEmitter {
             // before the freshness timeout fully expires so active fixes can recover
             // the stream without stale keepalive callbacks keeping GPS falsely alive.
             if (this.stateUpdate === 'ok' &&
-                freshnessTime !== null &&
-                (Date.now() - freshnessTime) > this.stateUpdateTimeout * 0.6 &&
+                snapshot.fixAgeMs !== null &&
+                snapshot.fixAgeMs > this.stateUpdateTimeout * 0.6 &&
                 this.runMode === 'gps' &&
                 getBackgroundGeolocationPlugin()) {
                 this._heartbeat();
             }
 
-            // Reactive heartbeat: already lost — try to recover
-            if (this.stateUpdate === 'lost' && this.runMode === 'gps' && getBackgroundGeolocationPlugin()) {
+            // Reactive heartbeat: stale or fully silent stream — try to recover.
+            if ((this.stateUpdate === 'frozen' || this.stateUpdate === 'lost') &&
+                this.runMode === 'gps' &&
+                getBackgroundGeolocationPlugin()) {
                 this._heartbeat();
             }
 
@@ -417,6 +425,249 @@ class GeoLoc extends EventEmitter {
         // Resets on each new GPS session (init()). Max 3 triggers per session.
         this._forceReacquireCount = 0;
         this._lastForceReacquireTime = 0;
+    }
+
+    _resetStartupReadiness() {
+        this.startupReadiness = {
+            ready: false,
+            fixCount: 0,
+            requiredFixCount: this.startupRequiredFixes,
+            maxAccuracyM: this.startupFixMaxAccuracyM,
+            maxAgeMs: this.startupFixMaxAgeMs,
+            lastReason: 'waiting_first_fix',
+            lastSource: null,
+            lastAccuracy: null,
+            lastAgeMs: null,
+            lastSeparationMs: null,
+            lastMovementM: null,
+            lastAcceptedFixTime: null,
+            lastAcceptedPosition: null,
+        }
+    }
+
+    _updateStartupReadiness(position, info = {}) {
+        if (!this.startupReadiness) this._resetStartupReadiness()
+
+        let tracker = this.startupReadiness
+        let accuracy = info.accuracy
+        let ageMs = info.positionAgeMs
+        let usableFixTime = info.usableFixTime
+        let source = info.source || 'unknown'
+        let reason = null
+
+        if (position.simulate) reason = 'simulate'
+        else if (typeof ageMs !== 'number' || isNaN(ageMs)) reason = 'unknown_age'
+        else if (ageMs > this.startupFixMaxAgeMs) reason = 'stale'
+        else if (typeof accuracy !== 'number' || isNaN(accuracy)) reason = 'no_accuracy'
+        else if (accuracy > this.startupFixMaxAccuracyM) reason = 'accuracy'
+
+        let next = Object.assign({}, tracker, {
+            lastSource: source,
+            lastAccuracy: accuracy,
+            lastAgeMs: ageMs,
+            lastSeparationMs: null,
+            lastMovementM: null,
+        })
+
+        if (reason) {
+            next.lastReason = reason
+            this.startupReadiness = next
+            if (tracker.lastReason !== reason && typeof TELEMETRY !== 'undefined') {
+                TELEMETRY.log('gps_startup_rejected', {
+                    reason: reason,
+                    fix_count: tracker.fixCount,
+                    required_fix_count: this.startupRequiredFixes,
+                    max_accuracy_m: this.startupFixMaxAccuracyM,
+                    age_ms: ageMs,
+                    acc: accuracy,
+                    source: source,
+                })
+            }
+            return
+        }
+
+        if (tracker.ready) {
+            next.lastReason = 'ready'
+            this.startupReadiness = next
+            return
+        }
+
+        if (tracker.fixCount === 0) {
+            next.fixCount = 1
+            next.lastReason = this.startupRequiredFixes > 1 ? 'waiting_second_fix' : 'ready'
+            next.lastAcceptedFixTime = usableFixTime
+            next.lastAcceptedPosition = position
+            next.ready = next.fixCount >= this.startupRequiredFixes
+            this.startupReadiness = next
+            if (typeof TELEMETRY !== 'undefined') {
+                TELEMETRY.log('gps_startup_fix', {
+                    fix_count: next.fixCount,
+                    required_fix_count: this.startupRequiredFixes,
+                    age_ms: ageMs,
+                    acc: accuracy,
+                    source: source,
+                })
+                if (next.ready) {
+                    TELEMETRY.log('gps_startup_ready', {
+                        fix_count: next.fixCount,
+                        required_fix_count: this.startupRequiredFixes,
+                        age_ms: ageMs,
+                        acc: accuracy,
+                        source: source,
+                    })
+                }
+            }
+            return
+        }
+
+        let separationMs = usableFixTime - tracker.lastAcceptedFixTime
+        let movementM = Math.round(geo_distance(tracker.lastAcceptedPosition, position))
+        next.lastSeparationMs = separationMs
+        next.lastMovementM = movementM
+
+        if (separationMs >= this.startupSecondFixMinGapMs || movementM >= this.startupSecondFixMinMovementM) {
+            next.fixCount = tracker.fixCount + 1
+            next.lastAcceptedFixTime = usableFixTime
+            next.lastAcceptedPosition = position
+            next.ready = next.fixCount >= this.startupRequiredFixes
+            next.lastReason = next.ready ? 'ready' : 'waiting_second_fix'
+            this.startupReadiness = next
+            if (typeof TELEMETRY !== 'undefined') {
+                TELEMETRY.log('gps_startup_fix', {
+                    fix_count: next.fixCount,
+                    required_fix_count: this.startupRequiredFixes,
+                    separation_ms: separationMs,
+                    movement_m: movementM,
+                    age_ms: ageMs,
+                    acc: accuracy,
+                    source: source,
+                })
+                if (next.ready) {
+                    TELEMETRY.log('gps_startup_ready', {
+                        fix_count: next.fixCount,
+                        required_fix_count: this.startupRequiredFixes,
+                        separation_ms: separationMs,
+                        movement_m: movementM,
+                        age_ms: ageMs,
+                        acc: accuracy,
+                        source: source,
+                    })
+                    this.emit('startupReady', Object.assign({}, next, { lastAcceptedPosition: null }))
+                }
+            }
+            return
+        }
+
+        next.lastReason = 'fixes_too_similar'
+        this.startupReadiness = next
+        if (tracker.lastReason !== 'fixes_too_similar' && typeof TELEMETRY !== 'undefined') {
+            TELEMETRY.log('gps_startup_rejected', {
+                reason: 'fixes_too_similar',
+                fix_count: tracker.fixCount,
+                required_fix_count: this.startupRequiredFixes,
+                separation_ms: separationMs,
+                min_gap_ms: this.startupSecondFixMinGapMs,
+                movement_m: movementM,
+                min_movement_m: this.startupSecondFixMinMovementM,
+                age_ms: ageMs,
+                acc: accuracy,
+                source: source,
+            })
+        }
+    }
+
+    startupStatus() {
+        if (!this.startupReadiness) this._resetStartupReadiness()
+        let tracker = this.startupReadiness
+        return {
+            ready: !!tracker.ready,
+            fixCount: tracker.fixCount,
+            requiredFixCount: tracker.requiredFixCount,
+            maxAccuracyM: tracker.maxAccuracyM,
+            maxAgeMs: tracker.maxAgeMs,
+            lastReason: tracker.lastReason,
+            lastSource: tracker.lastSource,
+            lastAccuracy: tracker.lastAccuracy,
+            lastAgeMs: tracker.lastAgeMs,
+            lastSeparationMs: tracker.lastSeparationMs,
+            lastMovementM: tracker.lastMovementM,
+        }
+    }
+
+    startupReady() {
+        if (!this.startupReadiness || !this.startupReadiness.ready) return false
+        let fixTime = this.lastUsableFixTime != null ? this.lastUsableFixTime : this.lastTimeUpdate
+        let position = this.usablePosition()
+        if (!fixTime || !position || !position.coords) return false
+        let ageMs = Date.now() - fixTime
+        let accuracy = position.coords.accuracy
+        if (typeof accuracy !== 'number' || isNaN(accuracy)) return false
+        return ageMs <= this.startupFixMaxAgeMs && accuracy <= this.startupFixMaxAccuracyM
+    }
+
+    _signalStateSnapshot(now = Date.now()) {
+        let fixAgeMs = this.lastUsableFixTime != null ? Math.max(0, now - this.lastUsableFixTime) : null
+        let anyAgeMs = this.lastTimeUpdate != null ? Math.max(0, now - this.lastTimeUpdate) : null
+        let realAgeMs = this.lastRealCallbackTime != null ? Math.max(0, now - this.lastRealCallbackTime) : null
+
+        if (this.runMode === 'off') {
+            return { state: 'off', reason: 'service_off', fixAgeMs, anyAgeMs, realAgeMs }
+        }
+
+        if (this.runMode === 'simulate') {
+            return { state: this.lastPosition ? 'ok' : 'acquiring', reason: 'simulate', fixAgeMs, anyAgeMs, realAgeMs }
+        }
+
+        if (fixAgeMs !== null && fixAgeMs < this.stateUpdateTimeout) {
+            return { state: 'ok', reason: 'fresh_fix', fixAgeMs, anyAgeMs, realAgeMs }
+        }
+
+        if (fixAgeMs === null) {
+            return {
+                state: 'acquiring',
+                reason: anyAgeMs === null ? 'awaiting_first_fix' : 'callback_without_usable_fix',
+                fixAgeMs,
+                anyAgeMs,
+                realAgeMs,
+            }
+        }
+
+        if (anyAgeMs !== null && anyAgeMs < this.stateUpdateTimeout) {
+            return { state: 'frozen', reason: 'stale_fix_recent_callback', fixAgeMs, anyAgeMs, realAgeMs }
+        }
+
+        return {
+            state: 'lost',
+            reason: anyAgeMs === null ? 'no_callback_since_start' : 'callback_stream_silent',
+            fixAgeMs,
+            anyAgeMs,
+            realAgeMs,
+        }
+    }
+
+    _applySignalState(snapshot) {
+        if (!snapshot) return
+
+        let changed = this.stateUpdate !== snapshot.state
+            || !this.stateUpdateMeta
+            || this.stateUpdateMeta.reason !== snapshot.reason
+
+        this.stateUpdate = snapshot.state
+        this.stateUpdateMeta = snapshot
+
+        if (!changed) return
+
+        this.emit('stateUpdate', snapshot.state, snapshot)
+        if (typeof TELEMETRY !== 'undefined') {
+            TELEMETRY.log('gps_state', {
+                state: snapshot.state,
+                reason: snapshot.reason,
+                fix_age_ms: snapshot.fixAgeMs,
+                any_age_ms: snapshot.anyAgeMs,
+                real_age_ms: snapshot.realAgeMs,
+                visibility: APP_VISIBILITY,
+            })
+        }
     }
 
     // Active GPS recovery: when updates have stopped, try getCurrentLocation
@@ -643,21 +894,23 @@ class GeoLoc extends EventEmitter {
         // next measure
         this.lastPosition = position;
         this.lastTimeUpdate = Date.now();
-        this.lastUsableFixTime = this.lastUsableFixTime == null
-            ? usableFixTime
-            : Math.max(this.lastUsableFixTime, usableFixTime);
+        if (this.lastUsableFixTime == null || usableFixTime >= this.lastUsableFixTime) {
+            this.lastUsableFixTime = usableFixTime;
+            this.lastUsablePosition = position;
+        }
+        this._updateStartupReadiness(position, {
+            source: source,
+            accuracy: accuracy,
+            positionAgeMs: positionAgeMs,
+            usableFixTime: usableFixTime,
+        })
         // B4 diagnostic half — only count this as a "real" callback if the
         // source isn't heartbeat / simulate / keepalive. The 'unknown' default
         // (bg-geo native callbacks that don't tag a source) IS real.
         if (source !== 'heartbeat' && source !== 'simulate' && source !== 'keepalive') {
             this.lastRealCallbackTime = Date.now();
         }
-        // Immediately reflect 'ok' only when the underlying fix itself is fresh.
-        if ((now - this.lastUsableFixTime) < this.stateUpdateTimeout && this.stateUpdate !== 'ok') {
-            this.stateUpdate = 'ok';
-            this.emit('stateUpdate', 'ok');
-            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_state', {state: 'ok'});
-        }
+        this._applySignalState(this._signalStateSnapshot(now))
         if (typeof TELEMETRY !== 'undefined') TELEMETRY.gps(position, telemetryMeta);
 
         // Snapshot voice position while JS is awake inside the GPS background task window.
@@ -769,8 +1022,11 @@ class GeoLoc extends EventEmitter {
         this.lastTimeUpdate = null;
         this.lastRealCallbackTime = null;
         this.lastUsableFixTime = null;
+        this.lastUsablePosition = null;
         this.stateUpdate = 'off';
+        this.stateUpdateMeta = { state: 'off', reason: 'service_off' };
         this.lastAccuracyBucket = null;
+        this._resetStartupReadiness();
 
         this.runMode = mode;
         this._forceReacquireCount = 0;
@@ -1015,6 +1271,10 @@ class GeoLoc extends EventEmitter {
     // gps_active_fix_ok / gps_active_fix_fail telemetry. Default timeout 10 s.
     warmupPosition(options = {}) {
         return this._activeFix(options.source || 'warmup', options)
+    }
+
+    usablePosition() {
+        return this.lastUsablePosition || this.lastPosition || this.fakePosition();
     }
 
     position() {
