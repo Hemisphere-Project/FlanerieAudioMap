@@ -1,7 +1,7 @@
 # Mobile Audit & Remediation Plan
 
 **Original:** 2026-04-27
-**Last updated:** 2026-06-01 (iOS GPS hardening shipped; bg-geo v2.14.0 released)
+**Last updated:** 2026-06-01 (onboarding-flow hardening + iOS rail fix shipped; bg-geo v2.14.1 released)
 **Scope:** Cordova launcher (FlanerieCordova) + downloaded local webapp (FlanerieAudioMap) + four forked native plugins
 **Field tests so far:** ELYSEE (multiple), FRAPPAZ, GUILLOTIÈRE (2024-12), GIVORS (2026-05-20, archived). Next: VILLEURBANNE.
 
@@ -72,7 +72,7 @@ Each onboarding gate hard-blocks until its check passes.
 |---|---|---|
 | `cordova-plugin-audiofocus` | 1.9.0 | ✅ pinned (Round 25 shrink: R21+R22 iOS surface migrated to audio-simple; MediaPlayer.framework dep dropped) |
 | `cordova-plugin-power-optimization` | 0.3.1 | ✅ pinned @ `3e89474` |
-| `cordova-background-geolocation-plugin` | 2.14.0 | ✅ pinned @ `bc8fb7d` (includes the main-thread `CLLocationManager` singleton fix, iOS stream-health snapshot, and the June 1 foreground-GPS hardening round) |
+| `cordova-background-geolocation-plugin` | 2.14.1 | ✅ pinned @ `454a57b` (main-thread `CLLocationManager` singleton fix + deadlock-hardened construction, iOS stream-health snapshot, motion-prompt deferral, Android notification-prompt removal, `start`/`stop` return the real outcome) |
 | `cordova-plugin-audio-simple` | 0.3.3 | ✅ pinned (0.3.3: versionFiles mechanism ensures ping() strings auto-sync on every release) |
 
 **Workstream coverage (post-GIVORS):**
@@ -132,6 +132,30 @@ A4, A5, A6, A8, A8b, B1, B4 (diagnostic + iOS `forceReacquire`), C1, C2, D1, R7.
 - Signal liveness now follows actual usable-fix freshness instead of any callback freshness. The app emits `gps_state` and distinguishes `off`, `acquiring`, `ok`, `frozen`, and `lost`, so keepalive-only traffic no longer looks healthy.
 - iOS foreground observability now includes `ios_stream_health` beside `cl_state`. The native snapshot exposes counts and ages for real fixes, keepalive replays, SLC, rail wakes, visits, force-reacquires, and shared `CLLocationManager` creation metadata.
 - Offline analyzers now surface keepalive-only sessions, masked freshness, signal-state reasons, startup-gate counters, and iOS native snapshot counts, making the June 1 regression class directly visible in post-hoc telemetry.
+
+---
+
+## 2026-06-01 addendum (2) — onboarding-flow hardening, bg-geo v2.14.1, iOS rail dead-code fix
+
+This round is mostly **webapp (FlanerieAudioMap, dynamically loaded — live without a container rebuild)** plus a native bg-geo point release. Driven by hands-on iOS onboarding testing, not a field day.
+
+- **bg-geo v2.14.1** (`454a57b`, branch `stable`). Hardened the v2.13.0 main-thread singleton fix: `MAURLocationManager` construction is done **in-place** under `dispatch_once` and **warmed from `pluginInitialize`** (main thread), removing the `dispatch_once` + `dispatch_sync(main)` deadlock shape (a main-thread caller could block on the once-token while a worker held it inside the sync-to-main). `start:`/`stop:` now return the **actual start/stop outcome** instead of a redundant follow-up `configure:` result — a real start failure was being masked behind a config success. BG-13 `shared_manager_created_on_main_thread` telemetry flags any regression.
+
+- **iOS "Toujours" enforcement (webapp).** The in-app `requestAlwaysAuthorization` dialog can only grant *provisional* Always (reported as `AUTHORIZED`, silently downgraded later by iOS's deferred prompt); durable Always requires a Settings round-trip, which is the **only reliable provisional-vs-real discriminator** (no iOS API distinguishes them). Enforcement now sits at the real choke point — **`startgeo`'s `.then`** plus the confirmgeo poll-gate — and blocks the walk until a Settings round-trip is observed (`confirmgeoSettingsReturned`), bouncing to confirmgeo's "réglez sur Toujours" guidance otherwise. The earlier gate lived only in `confirmgeo.then`, which the accept→startgeo path bypassed (provisional-Always resolved `startGeoloc` straight through to checkmotion). Cross-launch persistence was removed (it masked the gate); per-onboarding flags reset in `checkgeo`; a `visibilitychange` hide/show guard stops the round-trip flag from being set when the app *leaves* for Settings. After the round-trip, `GEO.forceReacquire()` restarts `CLLocationManager` so the live fix stream resumes — iOS does not auto-resume `startUpdatingLocation` after an auth change while backgrounded, which had been stranding RDV at "En attente du GPS". New telemetry: `ios_always_gate` (fires pre-`TELEMETRY.start`, see observability note below).
+
+- **iOS Motion & Fitness prompt deferral (native + webapp).** `MAURRawLocationProvider.onStart` no longer starts `CMMotionActivityManager` (which fired the Motion prompt on top of the Location prompt at first install — the user could miss one). New `startMotionUpdates` bridge is called from the `checkmotion` page, so the Motion prompt appears alone, after Location is granted.
+
+- **Android notification double-prompt removed (native).** `BackgroundGeolocationFacade.start()` no longer requests `POST_NOTIFICATIONS` itself — that brief prompt collided with the app's own `checknotifications` step, now the single authority. The `checknotifications` and `checkbatteryopt` pages also re-check on `resume`/`visibilitychange` (and `checknotifications` dropped its `APP_VISIBILITY=='foreground'` gate) so they auto-advance after a Settings round-trip instead of stranding on the manual "J'ai autorisé / J'ai désactivé" button.
+
+- **iOS region wake-up rail was dead code — fixed (webapp).** The BG-11 rail configure (`PAGES['parcours']`) and clear (`PAGES_CLEANUP['parcours']`) hooks gated on `typeof bgGeo !== 'undefined'`, but `bgGeo` was never defined in those scopes (the only `let bgGeo` declarations are function-local elsewhere). `typeof` on an undeclared identifier is `'undefined'`, so the guard was **always false** and the rail never configured — confirmed by **zero `gps_rail_*` events across all 15 sessions on 2026-06-01** and `rail_region_count: 0` in `ios_stream_health`. Fixed by resolving the handle via `getBackgroundGeolocationPlugin()` in both scopes. The native `configureRail`/`clearRail` (v2.10.0) were correct all along; the JS simply never called them. **Still unverified end-to-end** — needs a field walk emitting `gps_rail_configured` (4-step Test Dumas → 3 regions; 17-step real parcours → 16) then `gps_rail_wake` during a real blackout.
+
+- **FlanerieCordova container.** iOS splash images regenerated — icon centered + square at 62 % on `#6F3CFF`, all 8 canvas sizes (they had been stretched to fill non-square canvases); global `SplashScreenBackgroundColor` and the storyboard named color set to the purple. App build → 18. (Container changes need a rebuild + TestFlight upload; the bg-geo v2.14.1 native changes ride along.)
+
+- **Onboarding UX (webapp).** confirmgeo first screen simplified (why + which permissions per platform — Localisation + Mouvement on iOS, Localisation + Notifications + Batterie on Android — with the durable-Always detail moved to its dedicated page). SAS code input is `inputmode="numeric"` / `pattern="[0-9]*"` for a numeric keypad on iOS. The "Je suis perdu·e" button is hidden during the pre-start phase (heading to the départ, where the map is already shown) and appears once the first step fires and the map collapses.
+
+- **Build-18 field validation (session `jtcv`, iPhone SE 3 / iOS 26.4.2).** Thread fix confirmed live: `shared_manager_created_on_main_thread: true` (`creation_thread: "main"`). GPS healthy — `real_location_count: 184`, `keepalive_count: 0`, `force_reacquire_count: 0`, 0 gaps ≥ 90 s, avg 8.4 m, freshness 1 s; auth = `AuthorizedAlways`; steps 0–3 contiguous; 0 audio errors; resumes 0. A short on-screen staff test, **not** a long pocketed background walk — does not yet stress background GPS or the (now-fixed) rail.
+
+- **Observability gap.** `TELEMETRY.start()` opens on the **parcours page**, so the entire onboarding flow (Toujours enforcement, motion/permission prompts, prewarm, `ios_always_gate`, `gps_rail_configured`) emits *before* the session file exists and is **not captured**. Field evidence for the onboarding fixes requires buffering pre-`TELEMETRY.start` events and flushing them once the session opens — open task.
 
 ---
 
