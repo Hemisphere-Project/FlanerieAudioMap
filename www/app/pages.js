@@ -33,6 +33,7 @@ PARCOURS.restore(); // Restore parcours from localStorage
 var PAGES = {}
 var PAGES_CLEANUP = {}
 var currentPage = '';
+const CHECKAUDIO_BUTTON_DELAY_MS = 5500;
 var NOTIF_TIMER = null;
 var NOTIF_PERMISSION_TIMER = null;
 var NOTIF_PERMISSION_ATTEMPTS = 0;
@@ -1412,6 +1413,14 @@ PAGES['confirmgeo'] = () => {
                 // startgeo. Idempotent at the bg-geo layer; the call in
                 // PAGES['startgeo'] below short-circuits when already running.
                 GEO.startGeoloc().catch((e) => console.warn('[GEO] confirmgeo prime failed:', e));
+                // iOS — reaching here means the user just did the Settings round-trip
+                // to grant "Toujours". iOS doesn't auto-resume startUpdatingLocation
+                // after an authorization change while backgrounded, so the live GPS
+                // stream is dead and rdv would hang on "En attente du GPS". Restart
+                // the CLLocationManager so delivery resumes under the new permission.
+                if (PLATFORM === 'ios') {
+                    GEO.forceReacquire().catch((e) => console.warn('[GEO] confirmgeo reacquire failed:', e));
+                }
                 PAGE('startgeo')
             })
             .catch((e) => {
@@ -2017,10 +2026,12 @@ PAGES['checkaudio'] = () => {
     let typewriterInstance = null;
     let playObserved = false;
     let playWatchdog = null;
+    let revealButtonsTimer = null;
     function failAudio(reason, html) {
         ok = false;
         fatalReason = reason;
         if (playWatchdog) { clearTimeout(playWatchdog); playWatchdog = null; }
+        if (revealButtonsTimer) { clearTimeout(revealButtonsTimer); revealButtonsTimer = null; }
         // Stop the typewriter before writing the red error — otherwise a late
         // failure (timeout, delayed playerror) would be overwritten by the
         // still-running animation restoring the original intro text.
@@ -2048,10 +2059,14 @@ PAGES['checkaudio'] = () => {
         playObserved = true;
         if (playWatchdog) { clearTimeout(playWatchdog); playWatchdog = null; }
         if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('checkaudio_play_ok', {});
-        if (ok && !fatalReason) {
-            $('#checkaudio-accept').show();
-            $('#checkaudio-help').show();
-        }
+        if (revealButtonsTimer) return;
+        revealButtonsTimer = setTimeout(() => {
+            revealButtonsTimer = null;
+            if (ok && !fatalReason) {
+                $('#checkaudio-accept').show();
+                $('#checkaudio-help').show();
+            }
+        }, CHECKAUDIO_BUTTON_DELAY_MS);
     })
 
     // Gate 1: AudioFocus plugin failed to initialize. Without it, Android can lose
@@ -2096,6 +2111,7 @@ PAGES['checkaudio'] = () => {
     }
 
     $('#checkaudio-accept').off().on('click', () => {
+        if (revealButtonsTimer) { clearTimeout(revealButtonsTimer); revealButtonsTimer = null; }
         testplayer.stop();
         testplayer.clear()
         testplayer = null;

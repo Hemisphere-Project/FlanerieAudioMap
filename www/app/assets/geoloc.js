@@ -980,6 +980,20 @@ class GeoLoc extends EventEmitter {
         })
     }
 
+    // iOS (D3) — force a CLLocationManager stop/restart. Used after the onboarding
+    // "Always" Settings round-trip: iOS does NOT auto-resume startUpdatingLocation
+    // when the authorization changes while the app is backgrounded, so the live
+    // 'location' stream stays dead on return and the rdv page hangs on
+    // "En attente du GPS". Restarting the manager resumes delivery under the new
+    // permission. No-op off iOS / when the plugin lacks the bridge method.
+    forceReacquire() {
+        let bgGeo = getBackgroundGeolocationPlugin()
+        if (!bgGeo || typeof bgGeo.forceReacquire !== 'function') return Promise.resolve(false)
+        return new Promise((resolve) => {
+            bgGeo.forceReacquire(() => resolve(true), () => resolve(false))
+        })
+    }
+
     // Thin wrapper around _activeFix for the proactive call sites
     // (startgeo-prime, rdv-warmup). Pass {source: '<call-site>'} to tag the
     // gps_active_fix_ok / gps_active_fix_fail telemetry. Default timeout 10 s.
