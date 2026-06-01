@@ -1247,6 +1247,17 @@ PAGES['load'] = (showProgress) => {
 // GEOLOCATION
 //
 PAGES['checkgeo'] = () => {
+    // Start of a fresh onboarding pass — re-arm the iOS "Toujours" enforcement.
+    // retryAuth and the Settings round-trip flags are module-scoped (so they
+    // survive the confirmgeo -> startgeo -> confirmgeo bounce within one pass), but
+    // that means they'd otherwise stay set for the rest of the app session and
+    // silently skip the enforcement on any later re-onboarding / warm resume.
+    // checkgeo runs at the top of every fresh pass and NOT on the bounce, so this
+    // is the right place to reset. (A cold start resets them anyway via module init.)
+    retryAuth = 0;
+    confirmgeoSettingsTapped = false;
+    confirmgeoSettingsReturned = false;
+
     $('#checkgeo-select').hide();
     $('#checkgeo-settings').hide().off().on('click', () => GEO.showLocationSettings())
 
@@ -1453,6 +1464,22 @@ PAGES['startgeo'] = () => {
     // dialog. No #startgeo page in app.html so we don't await here.
     GEO.startGeoloc()
         .then(() => {
+            // iOS "Toujours" enforcement — THE choke point. startGeoloc resolves on
+            // any AUTHORIZED status, but on a fresh install picking "Pendant
+            // l'utilisation" at the requestAlwaysAuthorization dialog grants
+            // *provisional* Always: iOS reports AUTHORIZED, yet it silently downgrades
+            // later and kills background GPS. Durable Always only comes from a Settings
+            // round-trip. The confirmgeo poll-gate only catches users already authorized
+            // on load; the accept -> startgeo path lands HERE instead, so we must gate
+            // here too. If the round-trip hasn't happened, bounce to confirmgeo (which
+            // shows the guidance, polls, and re-enters startgeo once Always is set).
+            if (PLATFORM == 'ios' && !confirmgeoSettingsReturned) {
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('ios_always_gate', {reason: 'startgeo_provisional_or_foreground'});
+                retryAuth++;
+                PAGE('confirmgeo');
+                return;
+            }
+
             GEO.warmupPosition({timeout: 12000, source: 'startgeo-prime'})
                 .catch(() => { /* logged by _activeFix */ });
 
@@ -1476,8 +1503,8 @@ PAGES['startgeo'] = () => {
                 }, 15000);
             }
 
-            // iOS: AUTHORIZED here already implies "Toujours" (startGeoloc rejects on partial auth),
-            // so the old confirmios reminder is redundant — go straight to motion check.
+            // iOS: past the Toujours gate above, so a durable "Toujours" is confirmed —
+            // go straight to motion check.
             if (PLATFORM == 'ios') PAGE('checkmotion')
             else if (PLATFORM == 'android') PAGE('checkbgloc')
             else PAGE('rdv')
