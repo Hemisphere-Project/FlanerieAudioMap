@@ -1357,24 +1357,18 @@ PAGES['confirmgeo'] = () => {
     checkAuth()
 
     $('#confirmgeo-accept').off().on('click', () => {
-        if (PLATFORM == 'android') {
-            alert('Vous devrez également autoriser les notifications pour que la localisation fonctionne en arrière plan !');
-        }
         clearTimeout(recheck);
-        // Round 22 — user just granted permissions via system dialog. Prime
-        // GPS immediately rather than waiting for startgeo.
-        GEO.startGeoloc().catch((e) => console.warn('[GEO] confirmgeo-accept prime failed:', e));
         PAGE('startgeo')
     })
 }
 
 PAGES['startgeo'] = () => {
-    // Round 22 — startGeoloc() is now idempotent and was likely already invoked
-    // from confirmgeo's .then or accept handler. The call here covers the rare
-    // path where confirmgeo's prime was skipped (e.g. devmode jump-in). The
-    // warmup is fire-and-forget — there is no `#startgeo` page in app.html, so
-    // awaiting here would leave the WebView on a blank screen for up to 12 s.
-    // The rdv page's hasFreshFix loop will retry warmups if needed.
+    // startGeoloc() may have already been invoked from confirmgeo's checkAuth().then()
+    // path (already-authorized users) to buy warmup time across the checkbgloc /
+    // checknotifications / checkbatteryopt pages. For first-time users (accept button
+    // path), this call is the sole trigger — the accept handler no longer primes it
+    // to avoid firing two concurrent permission requests, which freezes the Android
+    // dialog. No #startgeo page in app.html so we don't await here.
     GEO.startGeoloc()
         .then(() => {
             GEO.warmupPosition({timeout: 12000, source: 'startgeo-prime'})
