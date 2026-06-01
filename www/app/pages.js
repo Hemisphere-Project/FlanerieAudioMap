@@ -1342,6 +1342,27 @@ PAGES['confirmgeo'] = () => {
     // if (PLATFORM == 'android')
         // $('#confirmgeo-desc').text('Vous devrez autoriser l\'application et');
 
+    // First screen: explain WHY we need permissions, WHICH ones (per platform),
+    // and the "Pendant l'utilisation" choice for the upcoming system dialog. The
+    // durable "Toujours / arrière-plan" requirement is deliberately NOT shown here
+    // — it lives on its own enforcement page (showAlwaysGuidance below on iOS, the
+    // checkbgloc page on Android) so this screen stays short and readable.
+    function showIntro() {
+        var why = "Pour vous guider pendant la balade — téléphone en poche, écran éteint — Flânerie a besoin de quelques autorisations.<br /><br />" +
+                  "Aucune donnée n'est transmise : la localisation sert uniquement à déclencher les audios au bon endroit.";
+        var needs = '', next = '';
+        if (PLATFORM == 'ios') {
+            needs = "Autorisations nécessaires : <b>Localisation</b> et <b>Mouvement</b>.";
+            next  = "À l'écran suivant, choisissez <u>Pendant l'utilisation</u>.";
+        } else if (PLATFORM == 'android') {
+            needs = "Autorisations nécessaires : <b>Localisation</b>, <b>Notifications</b> et <b>Batterie</b>.";
+            next  = "À l'écran suivant, autorisez la <u>Localisation</u>.";
+        }
+        $('#confirmgeo-desc').html([why, needs, next].filter(Boolean).join('<br /><br />'));
+        $('#confirmgeo-settings').hide();
+        $('#confirmgeo-accept').show();
+    }
+
     function showAlwaysGuidance(foregroundOnly) {
         if (PLATFORM == 'ios') {
             $('#confirmgeo-desc').html(foregroundOnly
@@ -1358,6 +1379,7 @@ PAGES['confirmgeo'] = () => {
     }
 
     if (retryAuth > 0) showAlwaysGuidance(false);
+    else showIntro();
 
     var recheck = null;
     function checkAuth() {
@@ -1513,10 +1535,12 @@ PAGES['checkbgloc'] = () => {
 
 //
 // CHECK MOTION (iOS)
-// CMMotionActivityManager is started by bg-geo, but the auth prompt result is
-// not surfaced. Without motion events, stationary detection breaks and the
-// GPS-lost overlay fires spuriously during pocketed pauses. Hard-block until
-// the first 'activity' event arrives, with a Settings deep link as escape.
+// Motion activity (CMMotionActivityManager) is started HERE — not at bgGeo.start()
+// — so the iOS "Motion & Fitness" prompt appears on its own screen instead of
+// colliding with the Location prompt. Without motion events, stationary detection
+// breaks and the GPS-lost overlay fires spuriously during pocketed pauses, so we
+// hard-block until the first 'activity' event arrives, with a Settings deep link
+// as escape.
 //
 PAGES['checkmotion'] = () => {
     clearMotionCheck();
@@ -1529,6 +1553,11 @@ PAGES['checkmotion'] = () => {
         if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('motion_check', {granted: true, waited_ms: 0});
         return PAGE('rdv');
     }
+
+    // Trigger the Motion & Fitness prompt now (deferred out of bgGeo.start()).
+    // Fire-and-forget — the result arrives as an 'activity' event that sets
+    // GEO.motionAuthorized, which the poll below watches for.
+    GEO.startMotionUpdates();
 
     // Resume path: don't hard-block — short grace then proceed (see MOTION_RESUME_GRACE_MS).
     var isResume = PARCOURS.valid() && PARCOURS.currentStep() >= 0;
@@ -2338,6 +2367,8 @@ PAGES['parcours'] = async () => {
             $('#parcours-init').hide()
             $('#parcours-run').show()
             TYPEWRITE('parcours-run')
+            // Pre-start phase is over — reveal the "Je suis perdu·e" recovery button.
+            $('#parcours-lost').show()
         }
 
         // Hide map back into audio-first immersion after the first step fires.
@@ -2414,10 +2445,13 @@ PAGES['parcours'] = async () => {
     $('#parcours-title-dev').text(PARCOURS.info.name).toggle(DEVMODE)
     $('#parcours-run').hide()
 
-    // "Je suis perdu·e" button toggles the recovery map. Always visible during
-    // the walk — the label flips between "Je suis perdu·e" and "Retour à
-    // l'écoute", driven by openMapForRecovery / closeMapForRecovery.
-    $('#parcours-lost').show().off().on('click', () => {
+    // "Je suis perdu·e" button toggles the recovery map. Hidden during the
+    // pre-start phase (heading to the départ, where the map is already shown as a
+    // navigation aid — a "lost" button there is redundant/confusing). It appears
+    // once the first step fires and the map collapses into audio immersion. The
+    // label flips between "Je suis perdu·e" and "Retour à l'écoute", driven by
+    // openMapForRecovery / closeMapForRecovery.
+    $('#parcours-lost').hide().off().on('click', () => {
         if (MAP_RECOVERY_OPEN) closeMapForRecovery({source: 'manual_dismiss'});
         else openMapForRecovery({source: 'manual'});
     })
@@ -2586,6 +2620,7 @@ PAGES['parcours'] = async () => {
         console.log('RESUME PARCOURS', PARCOURS.currentStep());
         $('#parcours-init').hide()
         $('#parcours-run').show()
+        $('#parcours-lost').show() // resuming mid-walk — past the pre-start phase
         // TYPEWRITE('parcours-run')
         updateStepsMarkers()
 

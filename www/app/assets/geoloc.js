@@ -968,6 +968,18 @@ class GeoLoc extends EventEmitter {
         return checkBGPosition()
     }
 
+    // iOS — trigger the Motion & Fitness prompt from the checkmotion onboarding
+    // screen. This is deferred out of bgGeo.start() (native MAURRawLocationProvider)
+    // so it no longer stacks under the Location prompt on first install. No-op off
+    // iOS or when the plugin build predates the startMotionUpdates bridge method.
+    startMotionUpdates() {
+        let bgGeo = getBackgroundGeolocationPlugin()
+        if (!bgGeo || typeof bgGeo.startMotionUpdates !== 'function') return Promise.resolve(false)
+        return new Promise((resolve) => {
+            bgGeo.startMotionUpdates(() => resolve(true), () => resolve(false))
+        })
+    }
+
     // Thin wrapper around _activeFix for the proactive call sites
     // (startgeo-prime, rdv-warmup). Pass {source: '<call-site>'} to tag the
     // gps_active_fix_ok / gps_active_fix_fail telemetry. Default timeout 10 s.

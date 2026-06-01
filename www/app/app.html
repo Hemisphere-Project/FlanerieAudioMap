@@ -61,14 +61,9 @@
         </div>
 
         <div id="confirmgeo" class="page">
-            <h3 id="confirmgeo-title">Géolocalisation</h3>
+            <h3 id="confirmgeo-title">Autorisations</h3>
             <div class="content">
-                <p id="confirmgeo-desc">
-                    L'application a besoin de votre position en arrière plan pour vous guider, téléphone en poche écran éteint.<br /><br />
-                    À l'écran suivant, choisissez <u>Pendant l'utilisation</u>. 
-                    Il faudra ensuite autoriser la localisation en arrière plan en choisissant <u>Toujours autoriser</u>.<br /><br />
-                    Aucune donnée n'est transmise: la localisation sert uniquement à déclencher les audios.<br /><br />
-                </p>
+                <p id="confirmgeo-desc"><!-- set per-platform in PAGES['confirmgeo'] --></p>
                 <p id="confirmgeo-desc2"></p>
             </div>
             <button id="confirmgeo-accept" class="btn btn-primary btn-page">J'accepte</button>
@@ -223,7 +218,7 @@
             <div class="content">
                 <p id="sas-desc">Entrez dans le sas ...</p>
             </div>
-            <input type="number" id="sas-code" class="form-control input-page " placeholder="Code d'accès" />
+            <input type="text" id="sas-code" class="form-control input-page " placeholder="Code d'accès" inputmode="numeric" pattern="[0-9]*" autocomplete="off" />
             <button id="sas-help" class="btn btn-primary">?</button>
             <button id="sas-accept" class="btn btn-primary btn-page">En route !</button>
         </div>
