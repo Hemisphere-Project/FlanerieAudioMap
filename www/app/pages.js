@@ -290,8 +290,9 @@ PAGES_CLEANUP['parcours']           = () => {
     // leaving the parcours page. Mirror of configureRail at parcours entry;
     // bg-geo's onStop also clears the rail as a defensive backup, but doing
     // it here covers page-switch / rearm before any bgGeo.stop() runs.
+    let bgGeo = (typeof getBackgroundGeolocationPlugin === 'function') ? getBackgroundGeolocationPlugin() : null;
     if (typeof PLATFORM !== 'undefined' && PLATFORM === 'ios'
-        && typeof bgGeo !== 'undefined'
+        && bgGeo
         && typeof bgGeo.clearRail === 'function') {
         bgGeo.clearRail().then(function() {
             if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_rail_cleared', {});
@@ -2323,9 +2324,10 @@ PAGES['parcours'] = async () => {
     // region monitor fires anyway, native code restarts standard updates
     // (forceReacquire) if real callbacks have stalled >30 s, and the next
     // real fix lands within the iOS wake window (~10 s + background-task).
+    let railBgGeo = (typeof getBackgroundGeolocationPlugin === 'function') ? getBackgroundGeolocationPlugin() : null;
     if (typeof PLATFORM !== 'undefined' && PLATFORM === 'ios'
-        && typeof bgGeo !== 'undefined'
-        && typeof bgGeo.configureRail === 'function'
+        && railBgGeo
+        && typeof railBgGeo.configureRail === 'function'
         && typeof computeGpsRail === 'function') {
         try {
             let rail = computeGpsRail(PARCOURS);
@@ -2338,7 +2340,7 @@ PAGES['parcours'] = async () => {
                 rail = rail.slice(0, 20);
             }
             if (rail.length > 0) {
-                bgGeo.configureRail(rail).then(function(count) {
+                railBgGeo.configureRail(rail).then(function(count) {
                     if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_rail_configured', {
                         region_count: count,
                         rail_radius_m: 100,
