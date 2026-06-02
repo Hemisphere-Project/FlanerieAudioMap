@@ -1546,6 +1546,20 @@ PAGES['startgeo'] = () => {
             // here too. If the round-trip hasn't happened, bounce to confirmgeo (which
             // shows the guidance, polls, and re-enters startgeo once Always is set).
             if (PLATFORM == 'ios' && !confirmgeoSettingsReturned) {
+                // Fire the Motion & Fitness prompt HERE — the clean foreground window,
+                // right after Location "Pendant l'utilisation" was granted and BEFORE
+                // the user is sent to Settings for "Toujours". j1jm (real iPhone SE 3,
+                // iOS 26.4.2, apk 23/v2.14.5) proved iOS refuses to present the Motion
+                // prompt once the app has returned from that Settings round-trip — auth
+                // stayed NotDetermined across 34 retries with real hardware, app active.
+                // Requesting it now, before any backgrounding, is the only context where
+                // the prompt reliably appears; the modal sits over the confirmgeo Always
+                // guidance, so the user grants Motion first, then does the round-trip.
+                // checkmotion (after the round-trip) then just confirms the granted result.
+                if (!GEO.motionAuthorized) {
+                    GEO.startMotionUpdates();
+                    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('motion_prompt_early', {trigger: 'startgeo_preroundtrip'});
+                }
                 if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('ios_always_gate', {reason: 'startgeo_provisional_or_foreground'});
                 retryAuth++;
                 PAGE('confirmgeo');

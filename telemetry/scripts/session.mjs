@@ -69,7 +69,8 @@ const onbTypes = new Set([
   'onboarding_page', 'media_startup_check', 'parcours_freshness_check',
   'gps_hardware_prewarm_ok', 'gps_hardware_prewarm_failed', 'ios_version_warning',
   'ios_always_gate', 'confirmgeo_settings_tapped', 'confirmgeo_settings_returned',
-  'bg_location', 'motion_prompt', 'motion_check', 'notif_permission',
+  'bg_location', 'motion_prompt_early', 'motion_prompt', 'motion_authorized',
+  'motion_check', 'notif_permission',
   'background_restricted', 'power_save_mode', 'battery_opt',
 ]);
 const onbEvents = ev.filter(e => onbTypes.has(e.type));
@@ -80,6 +81,8 @@ if (onbEvents.length) {
     const d = e.data || {};
     let extra = '';
     if (e.type === 'onboarding_page')             extra = `page=${d.page}${d.retry_auth ? ' retryAuth=' + d.retry_auth : ''}${d.os_version ? ' iOS=' + d.os_version : ''}${d.apk_version ? ' apk=' + d.apk_version : ''}`;
+    else if (e.type === 'motion_prompt_early')    extra = `trigger=${d.trigger}  <- EARLY motion prompt (clean pre-round-trip context)`;
+    else if (e.type === 'motion_authorized')      extra = `type=${d.type}  <- MOTION GRANTED`;
     else if (e.type === 'motion_prompt')          extra = `attempt=${d.attempt} elapsed=${d.elapsed_ms}ms visible=${d.visible}`
                                                           + (d.auth_status != null ? ` auth=${['NotDet','Restr','DENIED','Authorized'][d.auth_status] ?? d.auth_status}` : '')
                                                           + (d.app_state != null ? ` app=${['active','inactive','bg'][d.app_state] ?? d.app_state}` : '')
