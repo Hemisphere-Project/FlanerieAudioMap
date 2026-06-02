@@ -2624,7 +2624,7 @@ PAGES['parcours'] = async () => {
             $('#parcours-run').show()
             TYPEWRITE('parcours-run')
             // Pre-start phase is over — reveal the "Je suis perdu·e" recovery button.
-            $('#parcours-lost').show()
+            if (!DEVMODE) $('#parcours-lost').show()
         }
 
         // Hide map back into audio-first immersion after the first step fires.
@@ -2711,6 +2711,7 @@ PAGES['parcours'] = async () => {
         if (MAP_RECOVERY_OPEN) closeMapForRecovery({source: 'manual_dismiss'});
         else openMapForRecovery({source: 'manual'});
     })
+    if (DEVMODE) syncDevmodeParcoursMapState();
 
     // Activate Parcours
     PARCOURS.startTracking()
@@ -2888,7 +2889,7 @@ PAGES['parcours'] = async () => {
         console.log('RESUME PARCOURS', PARCOURS.currentStep());
         $('#parcours-init').hide()
         $('#parcours-run').show()
-        $('#parcours-lost').show() // resuming mid-walk — past the pre-start phase
+        if (!DEVMODE) $('#parcours-lost').show() // resuming mid-walk — past the pre-start phase
         // TYPEWRITE('parcours-run')
         updateStepsMarkers()
 
@@ -3121,7 +3122,7 @@ $('#parcours-rearm').click(async () => {
 
     // clearLostUI() closes the recovery-map mode; in DEVMODE we still want the
     // parcours map visible after rearming, just without the LOST framing.
-    $('#parcours-map').css('opacity', 1);
+    syncDevmodeParcoursMapState();
     if (updateStepsMarkers) updateStepsMarkers();
     if (typeof updateMapInstruction === 'function') updateMapInstruction();
     if (document.MAP && typeof document.MAP.invalidateSize === 'function') {
@@ -3295,6 +3296,29 @@ function stopLostDistanceUpdater() {
     $('#map-instruction-distance').removeClass('is-approaching is-receding');
 }
 
+function syncDevmodeParcoursMapState() {
+    if (!DEVMODE) return;
+
+    $('#parcours-lost').hide();
+    $('#parcours-map').css('opacity', 1);
+    $('#map-instruction').hide();
+    stopLostDistanceUpdater();
+
+    if (!document.MAP) return;
+
+    let simulateMode = GEO && typeof GEO.mode === 'function' && GEO.mode() === 'simulate';
+    try { if (simulateMode) document.MAP.dragging.enable(); else document.MAP.dragging.disable(); } catch(e) {}
+    try { if (simulateMode) document.MAP.touchZoom.enable(); else document.MAP.touchZoom.disable(); } catch(e) {}
+    try { if (simulateMode) document.MAP.scrollWheelZoom.enable(); else document.MAP.scrollWheelZoom.disable(); } catch(e) {}
+    try { if (simulateMode) document.MAP.doubleClickZoom.enable(); else document.MAP.doubleClickZoom.disable(); } catch(e) {}
+
+    document.MAP.options.maxZoom = simulateMode ? 20 : 19;
+    if (!simulateMode && document.MAP._zoomControl) {
+        document.MAP.removeControl(document.MAP._zoomControl);
+        document.MAP._zoomControl = null;
+    }
+}
+
 function openMapForRecovery(opts) {
     opts = opts || {};
     if (currentPage !== 'parcours') return;
@@ -3321,6 +3345,7 @@ function openMapForRecovery(opts) {
     updateMapInstruction();
     $('#map-instruction').show();
     startLostDistanceUpdater();
+    syncDevmodeParcoursMapState();
 }
 
 function closeMapForRecovery(opts) {
@@ -3346,6 +3371,7 @@ function closeMapForRecovery(opts) {
 
     stopLostDistanceUpdater();
     $('#map-instruction').hide();
+    syncDevmodeParcoursMapState();
 }
 
 PARCOURS.on('lost', (info) => {
