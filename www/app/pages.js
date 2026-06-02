@@ -1715,6 +1715,7 @@ PAGES['checkmotion'] = () => {
                 app_state: info ? info.appState : null,
                 activity_available: info ? info.activityAvailable : null,
                 pending_until_active: info ? info.pendingUntilActive : null,
+                location_started: info ? info.locationStarted : null,
             });
             // Motion hardware absent — iOS Simulator (ojl2: isVirtual, activity_available
             // false), or a real device with no motion coprocessor. isActivityAvailable is

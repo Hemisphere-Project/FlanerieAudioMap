@@ -91,6 +91,7 @@ if (onbEvents.length) {
     else if (e.type === 'motion_prompt')          extra = `attempt=${d.attempt} elapsed=${d.elapsed_ms}ms visible=${d.visible}`
                                                           + (d.auth_status != null ? ` auth=${['NotDet','Restr','DENIED','Authorized'][d.auth_status] ?? d.auth_status}` : '')
                                                           + (d.app_state != null ? ` app=${['active','inactive','bg'][d.app_state] ?? d.app_state}` : '')
+                                                          + (d.location_started === false ? ' locStarted=NO' : '')
                                                           + (d.activity_available === false ? '  <- MOTION HW UNAVAILABLE (simulator / no coprocessor)' : '');
     else if (e.type === 'motion_check')           extra = `granted=${d.granted}${d.resumed ? ' (resumed)' : ''}${d.reason ? ' reason=' + d.reason : ''} waited=${d.waited_ms}ms`;
     else if (e.type === 'media_startup_check')    extra = `ok=${d.ok} missing=${d.missing} online=${d.online}${d.missing_files && d.missing_files.length ? ' [' + d.missing_files.join(',') + ']' : ''}`;

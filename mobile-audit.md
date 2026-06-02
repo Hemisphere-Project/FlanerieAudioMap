@@ -249,6 +249,20 @@ What still works (original): `onStart` requested motion **inside `bgGeo.start()`
 - **Honest caveat:** the original `onStart` call wasn't a *direct* gesture handler either (it ran async in `bgGeo.start`), so a gesture may not be strictly required — but the button also fixes the timing/race, so it addresses several plausible causes at once. **If it still fails**, the next step is a native diagnostic (report `isStarted` + active-provider-is-Raw + whether `startActivityUpdatesToQueue` actually executed + `queryActivity` error code) — the current telemetry reads bridge-level state only and can't see whether the provider reached the prompt call.
 - **Ships in the webapp push. Unverified on device** — success: tap **Autoriser** → dialog appears → `motion_authorized` → `motion_check granted=true`.
 
+## 2026-06-02 addendum (10) — back to the native plugin: the `isStarted` gate + accumulated churn (bg-geo v2.14.6)
+
+Button-first (50ebf0d, `5dvj`) ALSO failed: tap → 1 prompt, `app=active`, `avail=true`, `auth=NotDetermined`, no dialog. So gesture/timing/round-trip were all dead ends — the failure is the **native call path itself**.
+
+**How iOS Motion & Fitness auth actually works:** there is no explicit `requestAuthorization` for `CMMotionActivityManager`; the prompt is presented on the **first access to activity data** (`startActivityUpdatesToQueue` or `queryActivityStartingFromDate`) while the app is foreground-active, and `NSMotionUsageDescription` must be present (it is). The original `onStart` did exactly this — **one `startActivityUpdatesToQueue` on the main thread** — and it worked.
+
+**What the saga had turned that single call into** (in `MAURRawLocationProvider.startMotionActivityUpdates`): a `dispatch_async(global)→dispatch_async(main)` hop, **an `if (!isStarted) return` gate**, an `authorizationStatus` branch, **manager recreation throttled to 4 s**, a **`stopActivityUpdates` before every start**, AND a **parallel `queryActivityStartingFromDate`** — all added blind while chasing the hang. Two of these directly explain the failure:
+  1. **The `isStarted` gate is wrong** — Motion auth is INDEPENDENT of `CLLocationManager`. On a fresh first run the location provider can still be starting when checkmotion fires, so the method **returned before any Core Motion call** → no prompt. (The original never hit this; it called motion inline right after `isStarted` was set. Fits "works sometimes after restart", where location is primed earlier.) The bridge-level diagnostic still read `avail=true/auth=NotDetermined` because that's measured in the bridge, not the provider — masking the early return.
+  2. **The stop/recreate/parallel-query churn** double-accessed / tore down the manager around the prompt.
+
+- **Fix (bg-geo v2.14.6, `167337f`):** `startMotionActivityUpdates` reverted to the canonical minimal form — `isActivityAvailable` check, bail on Denied/Restricted, create the manager once, **one `startActivityUpdatesToQueue` on the main queue**, nothing else. Removed the `isStarted` gate, the recreate logic (+ its ivar), the `stopActivityUpdates` churn, the parallel query, and the global-queue hop. `startActivityUpdatesToQueue` also delivers an initial activity shortly after starting (even stationary), which flips `motionAuthorized`.
+- **Diagnostic:** the `startMotionUpdates` bridge now also returns `locationStarted` (`facade.isStarted`); `checkmotion` logs it as `motion_prompt.location_started` and `session.mjs` prints `locStarted=NO` when false — so the next session confirms whether the fresh-install `isStarted` race was the cause.
+- **Needs a TestFlight rebuild** (native). Webapp side already correct (button-first, single call). config.xml → 25. **Unverified on device** — success: ~1 `motion_prompt` then `motion_authorized` → `motion_check granted=true`.
+
 ---
 
 ## Telemetry events (current code)
