@@ -26,7 +26,30 @@
         #select-parcours-start {
             background-image: url('$BASEPATH$/images/arrow-right.png?1');
         }
+        /* Discreet build-provenance band — running webapp commit + apk version, so a
+           tester can confirm at a glance the phone isn't on a stale cached bundle. */
+        #build-band {
+            position: fixed; left: 0; right: 0; bottom: 0;
+            text-align: center;
+            font: 9px/1.5 monospace;
+            color: rgba(255,255,255,0.55);
+            background: rgba(0,0,0,0.28);
+            padding: 1px 4px;
+            letter-spacing: 0.5px;
+            z-index: 100000;
+            pointer-events: none;
+        }
+        /* Phone is running a different commit than the server currently serves —
+           i.e. a stale cached bundle / a pending-or-failed update. */
+        #build-band.mismatch {
+            color: #fff;
+            background: rgba(200,0,0,0.92);
+            font-weight: bold;
+        }
     </style>
+
+    <!-- build provenance, embedded into the zip by modules/updater.js (window.BUILD_COMMIT) -->
+    <script src="$BASEPATH$/build.js"></script>
 
     <script>
         var BASEURL = "$BASEPATH$";
@@ -315,5 +338,37 @@
     <script src="$BASEPATH$/assets/spot.js"></script>
     <script src="$BASEPATH$/assets/diagnostic.js"></script>
     <script src="$BASEPATH$/pages.js"></script>
+
+    <div id="build-band"></div>
+    <script>
+        // Build band: webapp commit (build.js, baked into the bundle) + apk version
+        // (document.APPVERSION, set asynchronously by the launcher, so we repaint for a
+        // few seconds). At start it also asks the server /version and turns the band RED
+        // if the running commit differs from what the server now serves — i.e. the phone
+        // is on a stale cached bundle / an update is pending or failed.
+        (function () {
+            var serverCommit = null;
+            function paint() {
+                var el = document.getElementById('build-band');
+                if (!el) return;
+                var commit = (typeof window.BUILD_COMMIT !== 'undefined' && window.BUILD_COMMIT) ? window.BUILD_COMMIT : 'dev';
+                var apk = (document.APPVERSION && document.APPVERSION !== '0') ? document.APPVERSION : '?';
+                var mismatch = !!(serverCommit && window.BUILD_COMMIT && serverCommit !== window.BUILD_COMMIT);
+                el.textContent = 'build ' + commit + ' · apk ' + apk + (mismatch ? '  ⚠ serveur ' + serverCommit : '');
+                el.classList.toggle('mismatch', mismatch);
+            }
+            function checkServer() {
+                if (!window.BUILD_COMMIT) return;               // dev/live: nothing to compare
+                if (typeof get !== 'function') return;
+                get('/version')
+                    .then(function (info) { if (info && info.commit) { serverCommit = info.commit; paint(); } })
+                    .catch(function () { /* offline: leave band neutral */ });
+            }
+            paint();
+            document.addEventListener('deviceready', function () { paint(); checkServer(); }, false);
+            var n = 0, iv = setInterval(function () { paint(); if (++n > 20) clearInterval(iv); }, 500);
+            setTimeout(checkServer, 3000);
+        })();
+    </script>
 </body>
 </html>

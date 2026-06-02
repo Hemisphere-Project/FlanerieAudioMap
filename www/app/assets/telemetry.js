@@ -229,6 +229,17 @@ var TELEMETRY = (function() {
 
         if (typeof cordova !== 'undefined' && cordova.version) meta.cordovaVersion = cordova.version;
         if (typeof window !== 'undefined' && window.APP_VERSION) meta.appVersion = window.APP_VERSION;
+        // Build provenance on every session's client meta (small, session-level):
+        //   appVersion   — apk build number (document.APPVERSION, set by the launcher)
+        //   webappCommit — running webapp commit (window.BUILD_COMMIT, baked into the zip)
+        // so any session — including onboarding-only ones with no session_diag — is
+        // matchable to an exact apk build + webapp push. Plugin versions are heavier and
+        // logged once per session in session_diag / the checkgeo onboarding_page event.
+        if (typeof document !== 'undefined' && document.APPVERSION && document.APPVERSION !== '0') {
+            meta.appVersion = document.APPVERSION;
+        }
+        if (typeof window !== 'undefined' && window.BUILD_COMMIT) meta.webappCommit = window.BUILD_COMMIT;
+        if (typeof window !== 'undefined' && window.BUILD_TIME) meta.webappBuiltAt = window.BUILD_TIME;
         if (typeof device !== 'undefined') {
             if (device.model) meta.deviceModel = device.model;
             if (device.version) meta.osVersion = device.version;

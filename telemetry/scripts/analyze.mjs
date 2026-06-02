@@ -223,7 +223,10 @@ P('\n## Build / webapp version  (from session_diag)');
 const builds = {};
 for (const s of main) {
   if (!s.diag) continue;
-  const key = `apk=${s.diag.apk_version} webapp=${String(s.diag.webapp_hash || '').slice(0, 8)}`;
+  const bggeo = (s.diag.plugin_versions || {})['cordova-background-geolocation-plugin'];
+  const key = `apk=${s.diag.apk_version} commit=${s.diag.webapp_commit || '?'}`
+            + (bggeo ? ` bg-geo=${bggeo}` : '')
+            + ` webapp=${String(s.diag.webapp_hash || '').slice(0, 8)}`;
   (builds[key] ||= []).push(s.shortId);
 }
 for (const [key, ids] of Object.entries(builds)) P(`  ${key}  x${ids.length}`);

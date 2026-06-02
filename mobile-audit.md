@@ -1,7 +1,7 @@
 # Mobile Audit & Remediation Plan
 
 **Original:** 2026-04-27
-**Last updated:** 2026-06-01 (Motion hang diagnosed from `l5bi` telemetry → bg-geo v2.14.5 fix+instrumentation; onboarding telemetry closes the observability gap; iOS rail fix shipped)
+**Last updated:** 2026-06-02 (Motion prompt reordered before the "Toujours" Settings round-trip — webapp-only — after `j1jm` disproved the v2.14.5 native fix; onboarding telemetry; iOS rail fix)
 **Scope:** Cordova launcher (FlanerieCordova) + downloaded local webapp (FlanerieAudioMap) + four forked native plugins
 **Field tests so far:** ELYSEE (multiple), FRAPPAZ, GUILLOTIÈRE (2024-12), GIVORS (2026-05-20, archived). Next: VILLEURBANNE.
 
@@ -187,6 +187,34 @@ The onboarding telemetry paid off immediately. **Session `l5bi`** (iPhone 14-cla
 
 - **First v2.14.5 run — `ojl2` (apk 22, iOS 26.4.1, SIMULATOR).** Same hang, but the diagnostic explained it: `motion_prompt` carried **`activity_available=false`, `auth=NotDet`, `app=active`** on all 36 attempts, and client `isVirtualDevice=true`. **The iOS Simulator has no motion coprocessor — `CMMotionActivityManager isActivityAvailable` returns NO, so the M&F prompt can never be presented and the native code returns at its first line.** This is expected simulator behaviour and **not a valid test of the v2.14.5 fix** (which targets reused-instance poisoning on a *real* device, where `isActivityAvailable` is true). **v2.14.5 must be validated on a physical iPhone.**
   - **Robustness fix shipped (webapp).** `checkmotion` now short-circuits to `rdv` when the native call reports `activity_available === false` (logs `motion_check {granted:false, reason:'unavailable'}`), so the simulator — and any real device lacking a motion coprocessor — no longer hangs forever on a sensor that doesn't exist. `session.mjs` flags `activity_available=false` inline as "MOTION HW UNAVAILABLE".
+
+- **`j1jm` (apk 23 / v2.14.5, REAL iPhone SE 3, iOS 26.4.2) — v2.14.5 native fix DISPROVEN.** `isVirtual=false`, `activity_available=true`, `NSMotionUsageDescription` present, `app_state` active, recreate-every-4s + unconditional `queryActivity` running — and `auth_status` stayed **NotDetermined across all 34 retries**, prompt never appeared. Rules out hardware, entitlement, app-state, and the instance-poisoning theory. **Conclusion: iOS structurally refuses to present the Motion & Fitness prompt in the window right after the Location "Toujours" Settings round-trip.** Every time the prompt *has* fired, it was a clean foreground context (original onStart stack; "fires after a couple restarts" = restart skips the round-trip because Always is already set).
+
+## 2026-06-02 addendum (5) — Motion prompt reordered before the Settings round-trip (webapp-only)
+
+Decision after three failed native attempts (v2.14.3/4/5): stop fighting Core Motion's post-round-trip suppression and **request the Motion prompt in the one context that works** — the clean foreground window right after Location "Pendant l'utilisation" is granted, BEFORE the user is sent to Settings for "Toujours". User chose to **keep the hard gate** (motion still required; `checkmotion` unchanged as the gate, now reached already-granted on the happy path).
+
+- **Where (`pages.js`, `startgeo.then`).** At the iOS Always-gate bounce (`PLATFORM=='ios' && !confirmgeoSettingsReturned`) — the exact moment Location was just granted and we're about to route to the confirmgeo "Toujours" guidance — fire `GEO.startMotionUpdates()` once if `!GEO.motionAuthorized` (logs `motion_prompt_early {trigger:'startgeo_preroundtrip'}`). The Motion system modal sits over the Always-guidance page, so the user grants Motion first (clean context → prompt appears), then does the Settings round-trip. By the time `checkmotion` runs post-round-trip, `GEO.motionAuthorized` is already true → it skips immediately.
+- **No native change, no TestFlight.** Pure orchestration over the existing `startMotionUpdates` bridge — deploy the webapp and test. v2.14.5's native diagnostics stay in place to confirm the result.
+- **Telemetry.** `motion_prompt_early` + `motion_authorized` now render in the `session.mjs` onboarding timeline. Success signature: `motion_prompt_early` → `motion_authorized` BEFORE `confirmgeo_settings_returned`, then `checkmotion` → `motion_check granted=true waited≈0`.
+- **Unverified on device.**
+
+## 2026-06-02 addendum (6) — build provenance (running webapp commit), to kill "am I on the right bundle?" doubt
+
+The webapp is **zipped server-side and cached on the phone** (launcher: `/update/info` → download `/update/appdata` → unzip to `appdata/`, `APPHASH` = the zip's sha256). So a phone can silently run a **stale cached bundle** even after push + pull + restart — exactly the doubt raised when the reordered motion fix "didn't take". Provenance is now visible end-to-end:
+
+- **Embedded in the bundle (`modules/updater.js`).** `bundleAppData()` stamps `git rev-parse --short HEAD` into `APPINFO.commit` and appends a generated **`build.js`** (`window.BUILD_COMMIT`, `window.BUILD_TIME`) **into the zip** — so the cached copy reports the commit *actually running on the device*, not the server's current HEAD (a live fetch would hide staleness). No on-disk `build.js`, so no duplicate archive entry.
+- **Server endpoint `/version`** → `{commit, builtAt, appzipHash}` = the commit the latest zip was built from (what a freshly-updated phone should get). `commit` is also added to `/update/info`.
+- **In-app band (`app.html`).** A discreet fixed bottom strip shows `build <commit> · apk <n>` (`window.BUILD_COMMIT` + `document.APPVERSION`), `pointer-events:none`. Falls back to `build dev` when served live (no zip).
+- **Telemetry.** `webapp_commit` added to `session_diag` and the `checkgeo` `onboarding_page` event; `analyze.mjs` build grouping and `session.mjs` header/onboarding lines now print `commit=…`. Every session is now matchable to a push.
+- **Diagnosing the stale-bundle doubt:** compare the **in-app band** (phone's running commit) to **`curl …/version`** (server's bundled commit) to your **`git push`**. Band ≠ /version → phone kept a stale cache (launcher didn't re-download); /version behind your push → server didn't rebuild the zip (restart/pull issue).
+- **Requires a SERVER RESTART, not just the webhook pull** — the GitHub hook runs `git pull && npm i` but does not restart node, so the new `updater.js` only takes effect on restart. (The webapp changes ride in the same FlanerieAudioMap push.)
+
+**Extended (same day) — version provenance everywhere + live staleness alarm:**
+
+- **Commit + apk on every session's client meta (`telemetry.js`).** `_buildSessionMeta()` now sets `webappCommit` (`window.BUILD_COMMIT`), `webappBuiltAt`, and `appVersion` (`document.APPVERSION` — the old code read `window.APP_VERSION`, which was never set). So even onboarding-only sessions (no `session_diag`) are matchable to an exact apk + webapp push.
+- **Native plugin versions in telemetry (container build hook).** `hooks/after_prepare_plugin_versions.js` reads each `plugins/<name>/package.json` and writes `document.PLUGIN_VERSIONS = {…}` into the platform www (loaded by the launcher `index.html`, persists into the webapp document). Logged once per session in `session_diag` + the `checkgeo` `onboarding_page` event as `plugin_versions`. Confirms e.g. **bg-geo 2.14.5** is the build this apk actually carries — the exact ambiguity that made "apk 21 has v2.14.2" hard to trust. `session.mjs` prints a `plugins  bg-geo=… (N total: …)` line; `analyze.mjs` build grouping keys on `bg-geo=…`. **Needs a container rebuild** to populate (until then `plugin_versions` is null, graceful).
+- **Band turns RED on version mismatch (`app.html`).** At start the band calls `get('/version')` and, if the server's bundled commit differs from `window.BUILD_COMMIT`, turns red and appends `⚠ serveur <commit>` — a live "you're on a stale cached bundle / update pending or failed" alarm. Offline → left neutral (no false alarm).
 
 ---
 

@@ -2,6 +2,7 @@ import archiver from "archiver";
 import fs from "fs";
 import crypto from "crypto";
 import path from 'path';
+import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
 const __basepath = path.resolve(path.dirname(fileURLToPath(import.meta.url))+ "/..")
 
@@ -28,8 +29,24 @@ var APPINFO = {
     'appzip': {
         'url': null,
         'hash': null
-    }
+    },
+    // Git provenance of the bundled webapp. Refreshed on every (re)bundle so it
+    // tracks the commit the GitHub webhook pulled. Surfaced via /update/info and
+    // /version, and embedded INTO the zip as build.js so the cached bundle on the
+    // phone reports its OWN running commit (not the server's current HEAD).
+    'commit': null,
+    'builtAt': null
 };
+
+// Short commit hash of the server's checkout, read fresh at bundle time.
+function getGitCommit() {
+    try {
+        return execSync('git rev-parse --short HEAD', { cwd: __basepath }).toString().trim();
+    } catch (e) {
+        error('git commit lookup failed: ' + (e && e.message ? e.message : e));
+        return 'unknown';
+    }
+}
 
 var APPMEDIA = {};
 
@@ -63,13 +80,25 @@ function compressFolder(dir) {
 
         archive.pipe(output);
         archive.directory(APPDATA_PATH, false); // append files from a sub-directory, putting its contents at the root of archive
+        // Embed build provenance directly in the bundle. The phone runs the cached
+        // unzipped copy, so reading this (window.BUILD_COMMIT, via app.html) reports
+        // the commit actually running on the device — which is what reveals a stale
+        // cache. No build.js exists on disk, so there's no duplicate archive entry.
+        const buildJs = `window.BUILD_COMMIT=${JSON.stringify(APPINFO.commit)};window.BUILD_TIME=${JSON.stringify(APPINFO.builtAt)};`;
+        archive.append(buildJs, { name: 'build.js' });
         archive.finalize();
     });
 }
 
 // Bundle APPDATA (Promise)
-function bundleAppData() 
+function bundleAppData()
 {
+    // Stamp the commit + build time BEFORE compressing so build.js (embedded in the
+    // zip) and APPINFO carry the commit this bundle was built from.
+    APPINFO.commit = getGitCommit();
+    APPINFO.builtAt = new Date().toISOString();
+    log(`bundling webapp @ commit ${APPINFO.commit}`);
+
     // Prepare APPDATA zip file
     return compressFolder(APPDATA_DIR)
 
@@ -187,6 +216,17 @@ function initUpdater(app)
     // Get APPINFO
     app.get('/update/info', (req, res) => {
         res.json(APPINFO);
+    });
+
+    // Build provenance of the currently-bundled webapp (what the latest zip — and
+    // therefore a freshly-updated phone — is built from). Compare this commit to the
+    // band shown in-app to confirm a phone isn't running a stale cached bundle.
+    app.get('/version', (req, res) => {
+        res.json({
+            commit: APPINFO.commit,
+            builtAt: APPINFO.builtAt,
+            appzipHash: APPINFO.appzip.hash
+        });
     });
 
     // Get MEDIA tree

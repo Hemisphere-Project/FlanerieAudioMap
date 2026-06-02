@@ -56,7 +56,12 @@ console.log(`  device     ${s.deviceModel}  ${s.manufacturer}  ${s.platform} ${s
 console.log(`  started    ${json.startTime}   (file local ${s.localClock})`);
 console.log(`  duration   ${fmtDuration(s.durationMs)}   events: ${s.eventCount}`);
 if (s.diag) {
-  console.log(`  build      apk=${s.diag.apk_version}  webapp=${String(s.diag.webapp_hash || '').slice(0, 12)}  devmode=${s.diag.devmode}`);
+  const pv = s.diag.plugin_versions || {};
+  const bggeo = pv['cordova-background-geolocation-plugin'];
+  console.log(`  build      apk=${s.diag.apk_version}  commit=${s.diag.webapp_commit || '?'}  webapp=${String(s.diag.webapp_hash || '').slice(0, 12)}  devmode=${s.diag.devmode}`);
+  if (bggeo || Object.keys(pv).length) {
+    console.log(`  plugins    bg-geo=${bggeo || '?'}` + (Object.keys(pv).length ? `   (${Object.keys(pv).length} total: ${Object.entries(pv).map(([k, v]) => k.replace(/^cordova-(plugin-)?/, '') + '@' + v).join(', ')})` : ''));
+  }
 }
 if (s.powerState) console.log(`  power      ${JSON.stringify(s.powerState)}`);
 
@@ -80,7 +85,7 @@ if (onbEvents.length) {
   for (const e of onbEvents) {
     const d = e.data || {};
     let extra = '';
-    if (e.type === 'onboarding_page')             extra = `page=${d.page}${d.retry_auth ? ' retryAuth=' + d.retry_auth : ''}${d.os_version ? ' iOS=' + d.os_version : ''}${d.apk_version ? ' apk=' + d.apk_version : ''}`;
+    if (e.type === 'onboarding_page')             extra = `page=${d.page}${d.retry_auth ? ' retryAuth=' + d.retry_auth : ''}${d.os_version ? ' iOS=' + d.os_version : ''}${d.apk_version ? ' apk=' + d.apk_version : ''}${d.webapp_commit ? ' commit=' + d.webapp_commit : ''}`;
     else if (e.type === 'motion_prompt_early')    extra = `trigger=${d.trigger}  <- EARLY motion prompt (clean pre-round-trip context)`;
     else if (e.type === 'motion_authorized')      extra = `type=${d.type}  <- MOTION GRANTED`;
     else if (e.type === 'motion_prompt')          extra = `attempt=${d.attempt} elapsed=${d.elapsed_ms}ms visible=${d.visible}`

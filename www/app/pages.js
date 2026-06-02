@@ -1303,6 +1303,8 @@ PAGES['checkgeo'] = () => {
             page: 'checkgeo', platform: PLATFORM,
             apk_version: (typeof document !== 'undefined' && document.APPVERSION) || null,
             webapp_hash: localStorage.getItem('APPHASH') || null,
+            webapp_commit: (typeof window !== 'undefined' && window.BUILD_COMMIT) || null,
+            plugin_versions: (typeof document !== 'undefined' && document.PLUGIN_VERSIONS) || null,
             os_version: (typeof device !== 'undefined' && device.version) || null,
         });
     }
@@ -2726,6 +2728,13 @@ PAGES['parcours'] = async () => {
             // APK build number + downloaded webapp zip hash (changes on every deploy)
             apk_version:  document.APPVERSION  || null,
             webapp_hash:  localStorage.getItem('APPHASH') || null,
+            // Git commit of the running webapp bundle (window.BUILD_COMMIT, baked into
+            // the zip by modules/updater.js) — matches a session directly to a push.
+            webapp_commit: (typeof window !== 'undefined' && window.BUILD_COMMIT) || null,
+            // Native plugin versions (document.PLUGIN_VERSIONS, written at container build
+            // time by hooks/after_prepare_plugin_versions.js) — confirms e.g. which bg-geo
+            // build (2.14.x) this apk actually carries, instead of inferring from apk number.
+            plugin_versions: (typeof document !== 'undefined' && document.PLUGIN_VERSIONS) || null,
             // Device identity
             platform:     PLATFORM,
             manufacturer: (typeof device !== 'undefined') ? device.manufacturer : null,
