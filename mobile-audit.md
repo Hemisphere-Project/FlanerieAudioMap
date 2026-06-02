@@ -239,6 +239,16 @@ Addendum (7)'s reorder was sound UX but did NOT fix it — build fe8b96d (apk 24
 - **Native churn is now harmless** (one JS call ⇒ one native stop[noop]+start), so no rebuild needed; the v2.14.5 recreate/stop-restart logic can be simplified in a later native pass but isn't on the critical path.
 - **Ships in the webapp push. Unverified on device** — success signature: `checkmotion` fires **~1** `motion_prompt`, then `motion_authorized` → `motion_check granted=true`.
 
+## 2026-06-02 addendum (9) — gesture-triggered prompt (button-first checkmotion)
+
+The single-call fix (addendum 8) worked mechanically — build 7e9be90 fired exactly **1** `motion_prompt` (`dvkf`, no more churn) — but motion **still didn't grant**: one clean call, app foreground-active, `activity_available=true`, `auth=NotDetermined`, no dialog. So a single automated call doesn't present the prompt on a fresh install.
+
+What still works (original): `onStart` requested motion **inside `bgGeo.start()`, in the same accept-tap permission burst as the Location prompt** (it stacked under it). What broke: the deferred auto-fire on `checkmotion` page-load has none of that — no user gesture, and a possible `isStarted` / app-active race at page entry.
+
+- **Fix (webapp-only, user's idea):** `checkmotion` is now **button-first** — it shows an explanation + an **"Autoriser"** button, and the Motion & Fitness prompt is fired from the **button's tap handler** (mirroring confirmgeo's "J'accepte" → Location prompt). A tap guarantees: a fresh user gesture, the app is foreground-active, and the location provider has finished starting — removing every race the auto-fire was exposed to. Mid-walk **resume** still auto-fires (no tap) + grace-proceeds; the manual "J'ai autorisé" retry and Settings deep-link fallbacks are unchanged. New `#checkmotion-accept` button in `app.html`.
+- **Honest caveat:** the original `onStart` call wasn't a *direct* gesture handler either (it ran async in `bgGeo.start`), so a gesture may not be strictly required — but the button also fixes the timing/race, so it addresses several plausible causes at once. **If it still fails**, the next step is a native diagnostic (report `isStarted` + active-provider-is-Raw + whether `startActivityUpdatesToQueue` actually executed + `queryActivity` error code) — the current telemetry reads bridge-level state only and can't see whether the provider reached the prompt call.
+- **Ships in the webapp push. Unverified on device** — success: tap **Autoriser** → dialog appears → `motion_authorized` → `motion_check granted=true`.
+
 ---
 
 ## Telemetry events (current code)

@@ -1746,11 +1746,6 @@ PAGES['checkmotion'] = () => {
         return proceedAfterMotion();
     }
 
-    // Trigger the Motion & Fitness prompt now (deferred out of bgGeo.start()).
-    // Fire-and-forget — the result arrives as an 'activity' event that sets
-    // GEO.motionAuthorized, which the poll below watches for.
-    triggerMotionPrompt();
-
     function bindMotionResume() {
         if (MOTION_RESUME) return;
         MOTION_RESUME = function(e) {
@@ -1761,10 +1756,37 @@ PAGES['checkmotion'] = () => {
         document.addEventListener('visibilitychange', MOTION_RESUME, false);
     }
 
-    bindMotionResume();
-
     // Resume path: don't hard-block — short grace then proceed (see MOTION_RESUME_GRACE_MS).
     var isResume = PARCOURS.valid() && PARCOURS.currentStep() >= 0;
+
+    // Begin the prompt + verification. The Motion & Fitness prompt is triggered by a USER
+    // GESTURE here (like the Location prompt on confirmgeo's "J'accepte"). Auto-firing it
+    // on page load never presented the dialog on a fresh install (dvkf, build 7e9be90: one
+    // clean call, app foreground-active, hardware available, NotDetermined — no prompt).
+    // A tap also guarantees the app is active and the location provider has finished
+    // starting, removing the isStarted/active-state races the auto-fire was exposed to.
+    function beginMotionPrompt() {
+        $('#checkmotion-accept').hide();
+        $('#checkmotion-desc').text('Vérification du capteur de mouvement...');
+        start = Date.now();
+        warningShown = false;
+        triggerMotionPrompt();
+        bindMotionResume();
+        poll();
+    }
+
+    if (isResume) {
+        // Mid-walk resume — don't make the visitor tap; fire immediately, grace-proceed.
+        beginMotionPrompt();
+    } else {
+        // Fresh onboarding — gate the prompt behind a tap (the gesture is what makes iOS
+        // present the dialog).
+        $('#checkmotion-desc').html(
+            "Flânerie utilise le <b>capteur de mouvement</b> pour détecter vos pauses et éviter de fausses alertes « GPS perdu » lorsque vous êtes immobile.<br /><br />" +
+            "Appuyez sur <u>Autoriser</u>, puis acceptez « Mouvement et fitness »."
+        );
+        $('#checkmotion-accept').show().off().on('click', beginMotionPrompt);
+    }
 
     function poll() {
         MOTION_TIMER = null;
