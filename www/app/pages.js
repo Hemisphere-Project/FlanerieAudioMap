@@ -1289,6 +1289,7 @@ PAGES['checkgeo'] = () => {
     retryAuth = 0;
     confirmgeoSettingsTapped = false;
     confirmgeoSettingsReturned = false;
+    iosMotionDone = false;
 
     // Open an onboarding telemetry session for the permission gauntlet (geo →
     // motion → notifications → battery). Flushed live, so the iOS Motion-auth hang
@@ -1358,6 +1359,10 @@ PAGES['checkgeo'] = () => {
 }
 
 var retryAuth = 0;
+// iOS — set once the Motion & Fitness check has run for this onboarding pass, so the
+// startgeo gate routes motion BEFORE the "Toujours" Settings round-trip (and doesn't
+// loop back to checkmotion after). Reset in checkgeo at the top of each fresh pass.
+var iosMotionDone = false;
 // iOS "force Toujours" Settings round-trip — confirmgeoSettingsTapped is set when the
 // user taps the Réglages button; confirmgeoSettingsReturned flips once they come back
 // to the app. A single listener registered at module load (confirmgeo can be entered
@@ -1547,21 +1552,21 @@ PAGES['startgeo'] = () => {
             // on load; the accept -> startgeo path lands HERE instead, so we must gate
             // here too. If the round-trip hasn't happened, bounce to confirmgeo (which
             // shows the guidance, polls, and re-enters startgeo once Always is set).
+            // iOS — Motion & Fitness check goes FIRST, in the clean window right after
+            // Location was granted and BEFORE the "Toujours" Settings round-trip. This
+            // restores the original (working) timing: motion used to fire inside
+            // bgGeo.start() during the initial permission phase and appeared reliably
+            // (it even stacked under the Location prompt). Deferring it to a checkmotion
+            // page AFTER the round-trip is the regression — the round-trip backgrounds
+            // the app, and iOS drops a Motion prompt requested in that window (j1jm/sk3u:
+            // auth stuck NotDetermined across dozens of retries, real hardware, app
+            // active). checkmotion is now a blocking step here; it routes back to startgeo
+            // via iosMotionDone once motion resolves, and only THEN do we enforce Toujours.
+            if (PLATFORM == 'ios' && !GEO.motionAuthorized && !iosMotionDone) {
+                return PAGE('checkmotion');
+            }
+
             if (PLATFORM == 'ios' && !confirmgeoSettingsReturned) {
-                // Fire the Motion & Fitness prompt HERE — the clean foreground window,
-                // right after Location "Pendant l'utilisation" was granted and BEFORE
-                // the user is sent to Settings for "Toujours". j1jm (real iPhone SE 3,
-                // iOS 26.4.2, apk 23/v2.14.5) proved iOS refuses to present the Motion
-                // prompt once the app has returned from that Settings round-trip — auth
-                // stayed NotDetermined across 34 retries with real hardware, app active.
-                // Requesting it now, before any backgrounding, is the only context where
-                // the prompt reliably appears; the modal sits over the confirmgeo Always
-                // guidance, so the user grants Motion first, then does the round-trip.
-                // checkmotion (after the round-trip) then just confirms the granted result.
-                if (!GEO.motionAuthorized) {
-                    GEO.startMotionUpdates();
-                    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('motion_prompt_early', {trigger: 'startgeo_preroundtrip'});
-                }
                 if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('ios_always_gate', {reason: 'startgeo_provisional_or_foreground'});
                 retryAuth++;
                 PAGE('confirmgeo');
@@ -1591,9 +1596,9 @@ PAGES['startgeo'] = () => {
                 }, 15000);
             }
 
-            // iOS: past the Toujours gate above, so a durable "Toujours" is confirmed —
-            // go straight to motion check.
-            if (PLATFORM == 'ios') PAGE('checkmotion')
+            // iOS: motion was already checked before the Toujours round-trip and a
+            // durable "Toujours" is now confirmed — go straight to rdv.
+            if (PLATFORM == 'ios') PAGE('rdv')
             else if (PLATFORM == 'android') PAGE('checkbgloc')
             else PAGE('rdv')
         })
@@ -1680,6 +1685,15 @@ PAGES['checkmotion'] = () => {
         is_resume: !!(PARCOURS.valid() && PARCOURS.currentStep() >= 0),
     });
 
+    // Motion now runs BEFORE the iOS "Toujours" round-trip, so on completion iOS
+    // re-enters startgeo (which skips motion via iosMotionDone and runs the Always
+    // gate) rather than going straight to rdv. Other platforms keep the rdv exit.
+    function proceedAfterMotion() {
+        clearMotionCheck();
+        if (PLATFORM == 'ios') { iosMotionDone = true; return PAGE('startgeo'); }
+        return PAGE('rdv');
+    }
+
     function triggerMotionPrompt() {
         if (currentPage !== 'checkmotion' || GEO.motionAuthorized) return;
         lastPromptAt = Date.now();
@@ -1712,8 +1726,7 @@ PAGES['checkmotion'] = () => {
                 currentPage === 'checkmotion' && !GEO.motionAuthorized) {
                 if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('motion_check',
                     {granted: false, reason: 'unavailable', waited_ms: Date.now() - start});
-                clearMotionCheck();
-                PAGE('rdv');
+                proceedAfterMotion();
             }
         });
     }
@@ -1730,7 +1743,7 @@ PAGES['checkmotion'] = () => {
     // Already received a motion event from a previous startGeoloc cycle? skip.
     if (GEO.motionAuthorized) {
         if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('motion_check', {granted: true, waited_ms: 0});
-        return PAGE('rdv');
+        return proceedAfterMotion();
     }
 
     // Trigger the Motion & Fitness prompt now (deferred out of bgGeo.start()).
@@ -1758,7 +1771,7 @@ PAGES['checkmotion'] = () => {
         if (currentPage !== 'checkmotion') return;
         if (GEO.motionAuthorized) {
             if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('motion_check', {granted: true, waited_ms: Date.now() - start});
-            return PAGE('rdv');
+            return proceedAfterMotion();
         }
         // Re-issue the prompt request repeatedly (not just once): iOS silently drops
         // a Motion prompt requested while the app is still settling from the Location
@@ -1770,7 +1783,7 @@ PAGES['checkmotion'] = () => {
         }
         if (isResume && Date.now() - start >= MOTION_RESUME_GRACE_MS) {
             if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('motion_check', {granted: false, resumed: true, waited_ms: Date.now() - start});
-            return PAGE('rdv');
+            return proceedAfterMotion();
         }
         if (!isResume && !warningShown && Date.now() - start >= MOTION_WAIT_MS) {
             warningShown = true;

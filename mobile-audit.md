@@ -1,7 +1,7 @@
 # Mobile Audit & Remediation Plan
 
 **Original:** 2026-04-27
-**Last updated:** 2026-06-02 (Motion prompt reordered before the "Toujours" Settings round-trip — webapp-only — after `j1jm` disproved the v2.14.5 native fix; onboarding telemetry; iOS rail fix)
+**Last updated:** 2026-06-02 (Motion hang root cause = REGRESSION: deferring motion to after the "Toujours" round-trip broke it; fixed by reordering checkmotion before the round-trip — webapp-only. Also: build/version provenance + onboarding telemetry)
 **Scope:** Cordova launcher (FlanerieCordova) + downloaded local webapp (FlanerieAudioMap) + four forked native plugins
 **Field tests so far:** ELYSEE (multiple), FRAPPAZ, GUILLOTIÈRE (2024-12), GIVORS (2026-05-20, archived). Next: VILLEURBANNE.
 
@@ -215,6 +215,16 @@ The webapp is **zipped server-side and cached on the phone** (launcher: `/update
 - **Commit + apk on every session's client meta (`telemetry.js`).** `_buildSessionMeta()` now sets `webappCommit` (`window.BUILD_COMMIT`), `webappBuiltAt`, and `appVersion` (`document.APPVERSION` — the old code read `window.APP_VERSION`, which was never set). So even onboarding-only sessions (no `session_diag`) are matchable to an exact apk + webapp push.
 - **Native plugin versions in telemetry (container build hook).** `hooks/after_prepare_plugin_versions.js` reads each `plugins/<name>/package.json` and writes `document.PLUGIN_VERSIONS = {…}` into the platform www (loaded by the launcher `index.html`, persists into the webapp document). Logged once per session in `session_diag` + the `checkgeo` `onboarding_page` event as `plugin_versions`. Confirms e.g. **bg-geo 2.14.5** is the build this apk actually carries — the exact ambiguity that made "apk 21 has v2.14.2" hard to trust. `session.mjs` prints a `plugins  bg-geo=… (N total: …)` line; `analyze.mjs` build grouping keys on `bg-geo=…`. **Needs a container rebuild** to populate (until then `plugin_versions` is null, graceful).
 - **Band turns RED on version mismatch (`app.html`).** At start the band calls `get('/version')` and, if the server's bundled commit differs from `window.BUILD_COMMIT`, turns red and appends `⚠ serveur <commit>` — a live "you're on a stale cached bundle / update pending or failed" alarm. Offline → left neutral (no false alarm).
+
+## 2026-06-02 addendum (7) — Motion hang ROOT CAUSE: it's a regression (timing), fixed by reordering the page
+
+The onboarding telemetry + git archaeology finally pinned it as a **regression**, not an iOS quirk. The motion prompt *used to appear reliably*; it broke when motion was **deferred** from `bgGeo.start()` (`onStart`) to a `checkmotion` page that runs **after** the "Toujours" Settings round-trip.
+
+- **Original (working, ≤ v2.4.x):** `MAURRawLocationProvider.onStart` called `startActivityUpdatesToQueue` **synchronously during `bgGeo.start()`** — i.e. during the *initial permission phase*, before any Settings round-trip. It appeared reliably (it even stacked under the Location prompt — the user's original complaint). Clean foreground context = prompt shows.
+- **Regression:** motion was deferred to the JS `checkmotion` page, which the onboarding flow reaches **after** the iOS "Toujours" Settings round-trip. That round-trip backgrounds the app, and **iOS drops a Motion prompt requested in the post-round-trip window** — `j1jm`/`sk3u`: `auth` stuck `NotDetermined` across 34–463 retries, real hardware, `NSMotionUsageDescription` present, app active. No native trick (v2.14.3 re-prompt, v2.14.4 app-active gate, v2.14.5 instance-recreate + unconditional `queryActivity`) could make iOS present a prompt in that context.
+- **Why addendum (5) didn't fix it:** `motion_prompt_early` fired in the right (pre-round-trip) context but **fire-and-forget**, then immediately routed to the confirmgeo "Toujours" guidance; `sk3u` shows the user tapped Réglages seconds later → app backgrounded → prompt dropped before it could land. The *page* still ran after Always.
+- **Fix (webapp-only, `pages.js`) — restore the early timing as a blocking step.** `checkmotion` now runs **before** the Always round-trip: `startgeo.then` routes to `checkmotion` first (iOS, `!motionAuthorized && !iosMotionDone`); on completion `proceedAfterMotion()` sets `iosMotionDone` and re-enters `startgeo`, which skips motion and runs the Toujours gate. So motion gets a **clean, uninterrupted window with no competing Settings navigation** — the condition under which the prompt has always worked — and only then does the Toujours round-trip happen. New module flag `iosMotionDone`, reset in `checkgeo`. The addendum-5 `motion_prompt_early` fire-and-forget is removed.
+- **No native change, no TestFlight** — pure page-order fix over the existing bridge. Ships in the webapp push. **Unverified on device**; success signature in telemetry: `checkmotion` → `motion_check granted=true` appears BEFORE `confirmgeo_settings_returned` (motion before the round-trip), and the walk session opens normally after.
 
 ---
 
