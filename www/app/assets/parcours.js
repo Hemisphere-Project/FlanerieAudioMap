@@ -191,6 +191,40 @@ class Parcours extends EventEmitter {
         return this.state.stepIndex;
     }
 
+    rearmForDevmode(triggerReason = 'dev_rearm') {
+        for (let type in this.spots) {
+            this.spots[type].forEach(spot => {
+                spot._wasInside = false;
+                spot._firstInsideSampleAt = null;
+                spot._consecutiveInsideCount = 0;
+                if ('_done' in spot) spot._done = false;
+                if ('_active' in spot) spot._active = false;
+                if ('_skipDoneLogged' in spot) spot._skipDoneLogged = false;
+                if ('_keepLoadedForUpcomingTrigger' in spot) spot._keepLoadedForUpcomingTrigger = false;
+
+                if (spot.player && typeof spot.player.clear === 'function') {
+                    spot.player.clear();
+                } else if (spot.player && typeof spot.player.stop === 'function') {
+                    spot.player.stop(0);
+                }
+            });
+        }
+
+        this.state.stepIndex = -2;
+        this.state.stepDone = false;
+        this.state.globalOfflimit = false;
+        this.state.resumeStepVoicePos = 0;
+        this.state.lost = false;
+        this.state.lostSince = null;
+        this._lostBeyondSince = null;
+        this._lastSnapshotSkipKey = null;
+        this._lastNearBorderSample = null;
+
+        this.store(triggerReason);
+        this.prewarmUpcomingStep(triggerReason);
+        return this;
+    }
+
     prewarmUpcomingStep(reason = 'unknown') {
         let nextIndex = this.state.stepIndex < 0 ? 0 : this.state.stepIndex + 1;
         let steps = this.spots.steps || [];

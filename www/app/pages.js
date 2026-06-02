@@ -3073,13 +3073,10 @@ devmode(DEVMODE);
 // DEV TOOLS
 $('#parcours-rearm').click(async () => {
     console.log('REARM');
-    // A3: explicit confirmation prevents accidental mid-walk re-arm and makes
-    // the operator intent explicit. Cancel is the safe default so an errant tap
-    // never disrupts a walk in progress.
-    if (!confirm('Confirmer : la balade précédente est terminée ?')) return;
+    if (!confirm('Confirmer : réarmer toutes les zones sans terminer la balade ?')) return;
 
     // F-R2 — snapshot the audio + GPS engine state at re-arm so we can confirm
-    // the A3 teardown is reaching each device correctly.
+    // the dev reset stays local to the parcours page.
     if (typeof TELEMETRY !== 'undefined') {
         try {
             TELEMETRY.log('rearm_pre_state', {
@@ -3100,53 +3097,39 @@ $('#parcours-rearm').click(async () => {
         } catch (e) { console.warn('[F-R2] rearm_pre_state log failed:', e); }
     }
 
-    // A3/A1: stop tracking and audio before teardown (mirrors PAGES['end']).
-    PARCOURS.stopTracking();
     PARCOURS.stopAudio();
     GPSLOST_PLAYER.stop();
-    SILENT_PLAYER.stop();
     LOST_PLAYER.stop();
     RESUME_PLAYER.stop();
+    DEFAULT_AFTERPLAY_PLAYER.stop();
 
-    // A3/A1: drain interrupt/duck queues and rebuild SILENT_PLAYER, matching
-    // the teardown at PAGES['end'] so the new visitor's first play can't race
-    // a phantom resume from the previous walk.
+    // Clear any interrupted-player bookkeeping so a later focus event can't
+    // revive audio from the pre-rearm state.
     PAUSED_PLAYERS = [];
     DUCKED_PLAYERS.clear();
-    SILENT_PLAYER.load(BASEURL + '/images/', {src: 'flanerie.mp3', master: 1}, false);
+    $('#resume-overlay').hide();
 
-    // Round 21: release ExoPlayer-plugin players + its FG service before the
-    // audiofocus session teardown, so the ExoPlayer FG notification exits
-    // ahead of AudioFocusService's. Awaited for symmetry with the audiofocus
-    // release below — the new visitor's resetAudioSession must run against
-    // a fully torn-down player layer.
-    await releaseAudioPluginAll('rearm');
+    if (typeof TELEMETRY !== 'undefined') {
+        TELEMETRY.log('dev_rearm', {
+            step_before: PARCOURS.currentStep(),
+            lost_before: !!(PARCOURS.state && PARCOURS.state.lost),
+        });
+    }
 
-    // A3/G1: release the full session-scoped audiofocus state (stopKeepalive
-    // alone leaves iOS AVAudioSession active; releaseSession does the teardown).
-    // Awaited so the release (setActive:NO) completes before the reset
-    // (setCategory + setActive:YES) below — otherwise the late deactivate
-    // callback can tear down the freshly activated session on iOS.
-    await releaseAudiofocusSession('rearm');
+    PARCOURS.rearmForDevmode('dev_rearm');
+    clearLostUI();
 
-    // Restart the telemetry session for the new visitor, then reset parcours state.
-    TELEMETRY.restart(
-        'rearm_button',
-        PARCOURS.pID || PARCOURS.info.name || '',
-        PARCOURS.info.name || PARCOURS.pID || ''
-    );
-    PARCOURS.currentStep(-2) // Reset current step
-    PARCOURS.state.lost = false
-    PARCOURS.state.lostSince = null
-    PARCOURS._lostBeyondSince = null
-    clearLostUI()
-    closeMapForRecovery({source: 'rearm'})
-
-    // A3/A2: reset the audio engine for the new visitor's session, then route
-    // to PAGES['rdv'] so the full preload + sas + walk-start flow runs cleanly
-    // (rather than dropping the new visitor mid-parcours without a sas check).
-    await resetAudioSessionForFreshParcoursStart();
-    PAGE('rdv');
+    // clearLostUI() closes the recovery-map mode; in DEVMODE we still want the
+    // parcours map visible after rearming, just without the LOST framing.
+    $('#parcours-map').css('opacity', 1);
+    if (updateStepsMarkers) updateStepsMarkers();
+    if (typeof updateMapInstruction === 'function') updateMapInstruction();
+    if (document.MAP && typeof document.MAP.invalidateSize === 'function') {
+        setTimeout(() => document.MAP.invalidateSize(), 0);
+    }
+    if (SILENT_PLAYER && typeof SILENT_PLAYER.isPlaying === 'function' && !SILENT_PLAYER.isPlaying()) {
+        SILENT_PLAYER.play();
+    }
 })
 
 $('#parcours-restart').click(() => {
