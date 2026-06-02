@@ -1773,14 +1773,15 @@ PAGES['checkmotion'] = () => {
             if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('motion_check', {granted: true, waited_ms: Date.now() - start});
             return proceedAfterMotion();
         }
-        // Re-issue the prompt request repeatedly (not just once): iOS silently drops
-        // a Motion prompt requested while the app is still settling from the Location
-        // Settings round-trip, so we keep re-issuing every MOTION_PROMPT_RETRY_MS until
-        // it lands once the app is fully foreground-active. The native side re-presents
-        // the prompt on each call while authorization is still undetermined.
-        if (Date.now() - lastPromptAt >= MOTION_PROMPT_RETRY_MS) {
-            triggerMotionPrompt();
-        }
+        // DO NOT re-issue the prompt on a timer. Each GEO.startMotionUpdates() call does
+        // stopActivityUpdates+startActivityUpdatesToQueue natively, and the repeated
+        // stopActivityUpdates TEARS DOWN the in-flight Motion prompt before iOS can present
+        // it / before the user can tap it — the regression. Telemetry proof (build fe8b96d):
+        // f21e granted after 1 prompt; uqwm fired 166 prompts and NEVER granted. The
+        // original onStart code called it once and left it alone, which is why it worked.
+        // We fire once on entry (above) and only re-arm on a real resume-from-background
+        // (bindMotionResume) — never on a poll timer. This loop now just watches for the
+        // result and handles the timeout/resume-grace UI.
         if (isResume && Date.now() - start >= MOTION_RESUME_GRACE_MS) {
             if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('motion_check', {granted: false, resumed: true, waited_ms: Date.now() - start});
             return proceedAfterMotion();

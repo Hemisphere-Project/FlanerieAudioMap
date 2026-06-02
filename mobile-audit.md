@@ -226,6 +226,19 @@ The onboarding telemetry + git archaeology finally pinned it as a **regression**
 - **Fix (webapp-only, `pages.js`) — restore the early timing as a blocking step.** `checkmotion` now runs **before** the Always round-trip: `startgeo.then` routes to `checkmotion` first (iOS, `!motionAuthorized && !iosMotionDone`); on completion `proceedAfterMotion()` sets `iosMotionDone` and re-enters `startgeo`, which skips motion and runs the Toujours gate. So motion gets a **clean, uninterrupted window with no competing Settings navigation** — the condition under which the prompt has always worked — and only then does the Toujours round-trip happen. New module flag `iosMotionDone`, reset in `checkgeo`. The addendum-5 `motion_prompt_early` fire-and-forget is removed.
 - **No native change, no TestFlight** — pure page-order fix over the existing bridge. Ships in the webapp push. **Unverified on device**; success signature in telemetry: `checkmotion` → `motion_check granted=true` appears BEFORE `confirmgeo_settings_returned` (motion before the round-trip), and the walk session opens normally after.
 
+## 2026-06-02 addendum (8) — ACTUAL root cause: the retry loop was cancelling its own prompt
+
+Addendum (7)'s reorder was sound UX but did NOT fix it — build fe8b96d (apk 24) still failed on a fresh install with `checkmotion` running BEFORE any round-trip (clean context). So the round-trip context was never the cause. The real regression, proved by two fe8b96d sessions:
+
+- **`f21e` (success):** motion granted after just **1** `motion_prompt`.
+- **`uqwm` (fail):** **166** `motion_prompt`, never granted — every one `app=active`, `avail=true`, `auth=NotDetermined`.
+
+**Few prompts → works; hammering → never works.** Each `GEO.startMotionUpdates()` does `stopActivityUpdates` + `startActivityUpdatesToQueue` natively, and the `checkmotion` poll loop re-issued it every `MOTION_PROMPT_RETRY_MS` (~1.5–2 s). **The repeated `stopActivityUpdates` tore down the in-flight Motion prompt before iOS could present it / before the user could tap it.** The original `onStart` code called `startActivityUpdatesToQueue` **once and left it alone** — exactly why it worked reliably. The retry loop (added blind, mid-saga, to "force" the prompt) was self-defeating: it was the regression's amplifier.
+
+- **Fix (webapp-only, `pages.js` `checkmotion`):** removed the poll-timer re-fire entirely. Now fires `triggerMotionPrompt()` **once** on entry; re-arms only on a real resume-from-background (`bindMotionResume`) or the manual retry button — never on a timer. The single prompt stays stable for the user to grant. Combined with the addendum-(7) reorder, motion is requested once, in the clean pre-round-trip window, and left alone.
+- **Native churn is now harmless** (one JS call ⇒ one native stop[noop]+start), so no rebuild needed; the v2.14.5 recreate/stop-restart logic can be simplified in a later native pass but isn't on the critical path.
+- **Ships in the webapp push. Unverified on device** — success signature: `checkmotion` fires **~1** `motion_prompt`, then `motion_authorized` → `motion_check granted=true`.
+
 ---
 
 ## Telemetry events (current code)
