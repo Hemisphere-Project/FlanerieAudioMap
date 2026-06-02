@@ -263,6 +263,16 @@ Button-first (50ebf0d, `5dvj`) ALSO failed: tap → 1 prompt, `app=active`, `ava
 - **Diagnostic:** the `startMotionUpdates` bridge now also returns `locationStarted` (`facade.isStarted`); `checkmotion` logs it as `motion_prompt.location_started` and `session.mjs` prints `locStarted=NO` when false — so the next session confirms whether the fresh-install `isStarted` race was the cause.
 - **Needs a TestFlight rebuild** (native). Webapp side already correct (button-first, single call). config.xml → 25. **Unverified on device** — success: ~1 `motion_prompt` then `motion_authorized` → `motion_check granted=true`.
 
+## 2026-06-02 addendum (11) — THE root cause: concurrent vs sequential prompts (iOS suppresses Motion-after-Location)
+
+apk 25 ran **bg-geo 2.14.6** (confirmed by the new `plugin_versions` telemetry — that feature paid off), so the canonical-call fix was live and STILL failed first-run. `mogr` (d0d5918) gave the decisive comparison — **first run vs restart, every diagnostic identical** (`auth=NotDet, app=active, avail=true`), yet first-run never grants and the restart does. The only state difference between the two launches: **the first run showed a Location prompt ~3 s before the Motion request; the restart (Location already granted) showed none.**
+
+→ **iOS silently suppresses the Motion & Fitness prompt when it is requested in the same app launch shortly after the Location prompt has been answered.** The original `onStart` worked because it requested Location and Motion **concurrently** (both pending before either was answered → iOS queues and shows both — exactly the "stacking under the Location prompt" the user first reported). Every deferral of Motion to *after* the Location grant — checkmotion page, reorder, single-call, button-first — requested it in the suppressed window. That's why nothing worked, and why a kill+restart (no Location prompt that launch) always did.
+
+- **Fix (webapp-only, `pages.js`):** at the top of `startgeo`, fire `GEO.startMotionUpdates()` **concurrently with** `GEO.startGeoloc()` (iOS only — concurrent permission requests freeze the Android dialog) so both prompts are pending before the user answers either. `checkmotion` is now a pure **verifier** — it polls for the grant and never re-requests (a request there is post-Location = suppressed); Settings deep-link + "J'ai autorisé" retry remain manual fallbacks. Simulator/no-coprocessor handled via `GEO.motionUnavailable` (set from the startgeo call's `activity_available=false`). Button-first (`beginMotionPrompt`, `#checkmotion-accept`) removed.
+- **No rebuild** — runs on the v2.14.6 native already in apk 25. Just deploy the webapp.
+- **Unverified on device** — success: Location prompt → Motion prompt appears right after (same launch, fresh install) → `motion_check granted=true`, no kill+restart needed. If it still fails, the fallback is to request both in native `onStart` (literally the original concurrent call site), which is the proven mechanism.
+
 ---
 
 ## Telemetry events (current code)

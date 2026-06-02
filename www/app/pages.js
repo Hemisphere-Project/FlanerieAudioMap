@@ -1541,6 +1541,22 @@ PAGES['startgeo'] = () => {
     // path), this call is the sole trigger — the accept handler no longer primes it
     // to avoid firing two concurrent permission requests, which freezes the Android
     // dialog. No #startgeo page in app.html so we don't await here.
+
+    // iOS — fire the Motion & Fitness prompt CONCURRENTLY with the Location request
+    // below, so BOTH system prompts are pending before the user answers either; iOS then
+    // queues and shows both in turn. This is the crux: a Motion request issued AFTER the
+    // Location prompt has been answered, in the same launch, is SILENTLY SUPPRESSED by iOS
+    // (mogr, build d0d5918 / bg-geo 2.14.6: identical auth=NotDet/app=active/avail=true,
+    // yet the first run — which showed a Location prompt that launch — never grants, while
+    // a restart with Location already granted DOES). The original onStart worked precisely
+    // because it requested both together (hence the "stacking" under the Location prompt).
+    // iOS-only: two concurrent permission requests freeze the Android dialog (note above).
+    if (PLATFORM == 'ios' && !GEO.motionAuthorized) {
+        Promise.resolve(GEO.startMotionUpdates()).then(function(info) {
+            if (info && info.activityAvailable === false) GEO.motionUnavailable = true;
+        });
+    }
+
     GEO.startGeoloc()
         .then(() => {
             // iOS "Toujours" enforcement — THE choke point. startGeoloc resolves on
@@ -1760,34 +1776,21 @@ PAGES['checkmotion'] = () => {
     // Resume path: don't hard-block — short grace then proceed (see MOTION_RESUME_GRACE_MS).
     var isResume = PARCOURS.valid() && PARCOURS.currentStep() >= 0;
 
-    // Begin the prompt + verification. The Motion & Fitness prompt is triggered by a USER
-    // GESTURE here (like the Location prompt on confirmgeo's "J'accepte"). Auto-firing it
-    // on page load never presented the dialog on a fresh install (dvkf, build 7e9be90: one
-    // clean call, app foreground-active, hardware available, NotDetermined — no prompt).
-    // A tap also guarantees the app is active and the location provider has finished
-    // starting, removing the isStarted/active-state races the auto-fire was exposed to.
-    function beginMotionPrompt() {
-        $('#checkmotion-accept').hide();
-        $('#checkmotion-desc').text('Vérification du capteur de mouvement...');
-        start = Date.now();
-        warningShown = false;
-        triggerMotionPrompt();
-        bindMotionResume();
-        poll();
+    // checkmotion only VERIFIES — the Motion prompt was already requested CONCURRENTLY
+    // with Location at startgeo (the one context where iOS presents it). We must NOT
+    // re-request here: a Motion request after the Location prompt is answered, same launch,
+    // is suppressed. Just poll for the grant. The Settings deep-link + "J'ai autorisé"
+    // retry stay as a manual fallback (retry re-requests; useful after a Settings visit).
+    $('#checkmotion-accept').hide();
+
+    // Motion hardware absent (iOS Simulator / no coprocessor), detected by the startgeo
+    // concurrent call — don't hang onboarding on a sensor that doesn't exist.
+    if (GEO.motionUnavailable) {
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('motion_check', {granted: false, reason: 'unavailable', waited_ms: 0});
+        return proceedAfterMotion();
     }
 
-    if (isResume) {
-        // Mid-walk resume — don't make the visitor tap; fire immediately, grace-proceed.
-        beginMotionPrompt();
-    } else {
-        // Fresh onboarding — gate the prompt behind a tap (the gesture is what makes iOS
-        // present the dialog).
-        $('#checkmotion-desc').html(
-            "Flânerie utilise le <b>capteur de mouvement</b> pour détecter vos pauses et éviter de fausses alertes « GPS perdu » lorsque vous êtes immobile.<br /><br />" +
-            "Appuyez sur <u>Autoriser</u>, puis acceptez « Mouvement et fitness »."
-        );
-        $('#checkmotion-accept').show().off().on('click', beginMotionPrompt);
-    }
+    bindMotionResume();
 
     function poll() {
         MOTION_TIMER = null;
@@ -1796,15 +1799,11 @@ PAGES['checkmotion'] = () => {
             if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('motion_check', {granted: true, waited_ms: Date.now() - start});
             return proceedAfterMotion();
         }
-        // DO NOT re-issue the prompt on a timer. Each GEO.startMotionUpdates() call does
-        // stopActivityUpdates+startActivityUpdatesToQueue natively, and the repeated
-        // stopActivityUpdates TEARS DOWN the in-flight Motion prompt before iOS can present
-        // it / before the user can tap it — the regression. Telemetry proof (build fe8b96d):
-        // f21e granted after 1 prompt; uqwm fired 166 prompts and NEVER granted. The
-        // original onStart code called it once and left it alone, which is why it worked.
-        // We fire once on entry (above) and only re-arm on a real resume-from-background
-        // (bindMotionResume) — never on a poll timer. This loop now just watches for the
-        // result and handles the timeout/resume-grace UI.
+        // DO NOT request the prompt here. Motion was already requested concurrently with
+        // Location at startgeo (the only context where iOS presents it); re-requesting now
+        // (after the Location prompt was answered) is suppressed and would also churn the
+        // native manager. This loop only watches for the grant and drives the timeout /
+        // resume-grace UI; the retry button + resume re-arm are the manual fallbacks.
         if (isResume && Date.now() - start >= MOTION_RESUME_GRACE_MS) {
             if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('motion_check', {granted: false, resumed: true, waited_ms: Date.now() - start});
             return proceedAfterMotion();
