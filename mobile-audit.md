@@ -1,7 +1,7 @@
 # Mobile Audit & Remediation Plan
 
 **Original:** 2026-04-27
-**Last updated:** 2026-06-02 (Motion hang root cause = REGRESSION: deferring motion to after the "Toujours" round-trip broke it; fixed by reordering checkmotion before the round-trip — webapp-only. Also: build/version provenance + onboarding telemetry)
+**Last updated:** 2026-06-03 (Motion prompt SOLVED — addendum 14: on a fresh install the app starts the DistanceFilter provider, not the Raw provider, so `MAURRawLocationProvider.onStart` — where motion is requested — never runs; root cause is an unsynchronised `_config` race between native `configure:`/`start:`; webapp-only fix awaits configure before start)
 **Scope:** Cordova launcher (FlanerieCordova) + downloaded local webapp (FlanerieAudioMap) + four forked native plugins
 **Field tests so far:** ELYSEE (multiple), FRAPPAZ, GUILLOTIÈRE (2024-12), GIVORS (2026-05-20, archived). Next: VILLEURBANNE.
 
@@ -291,6 +291,27 @@ apk 26 (build 94765ac, bg-geo 2.14.7 = concurrent onStart, the historically-prov
 - **In Xcode/Console answer:** (1) does `facade … isRaw=1`? (2) `authorizationStatus=` 0 or 2? (3) does `startActivityUpdatesToQueue` get called? (4) `queryActivity` error code or OK? (5) **macOS Console.app, device, process `tccd` / filter `Motion` / `kTCCServiceMotion`** — the system's actual prompt decision. (6) On-device check: Settings → Confidentialité → Mouvement et fitness → is **"Suivi de la condition physique" (Fitness Tracking) master toggle** ON, and is Flanerie listed?
 - **Leading suspects to confirm/kill with the logs:** TCC has a persisted denial for the bundle id (survives reinstall) → would show `authorizationStatus=2` or query `code=105`; Fitness Tracking master toggle off → prompt impossible; entitlement/usage-desc not in the actual binary → `code=107`; provider not Raw at call time → `isRaw=0`.
 - Build from Xcode (FlanerieCordova/platforms/ios) — no TestFlight needed for this. **Diagnostic build, not a fix.**
+
+## 2026-06-03 addendum (14) — SOLVED: the wrong location provider starts on fresh install (webapp-only fix)
+
+The Xcode/Console run from addendum (13) cracked it — and it was leading-suspect (4)/(6) ("provider not Raw at call time → `isRaw=0`") all along. **On a fresh install the app starts `MAURDistanceFilterLocationProvider`, not `MAURRawLocationProvider`.** All ~26 builds of motion-timing surgery edited `MAURRawLocationProvider.onStart` — a method that **never runs on first launch**. There is no Motion prompt because there is no Raw provider to request it.
+
+**Console evidence (fresh onboarding, apk 26 / bg-geo 2.14.8):**
+- **Zero `MOTIONDBG` lines** anywhere — `MAURRawLocationProvider.onStart` was never called.
+- Config dump shows `locationProvider=2` (RAW) **but** the running provider logs are all `DistanceFilterLocationProvider` ("iOS9 detected", "will start", "switchMode 1", "didUpdateLocations").
+- Thread/timestamp ordering is the proof: `BgGeo #start: 0` at `:928` on the **main** thread fires **before** `BgGeo #configure: …locationProvider=2` at `:942` on a **background** thread, then `DistanceFilterLocationProvider iOS9 detected` at `:952`.
+
+**Root cause — an unsynchronised `_config` race in `MAURBackgroundGeolocationFacade`:**
+- JS `bgGeo.configure({locationProvider: RAW})` → CDV `configure:` runs via `runInBackground` (**background** thread): sets `_config` = RAW and persists to SQLite.
+- JS `bgGeo.start()` → CDV `start:` does `dispatch_sync(main)` → `facade start:` reads config via `getConfig` on the **main** thread (`start:` line 188), then `getProvider:config.locationProvider.intValue` (line 195).
+- The two share `_config` with no lock. On a fresh install **nothing is persisted**, so if `start:`'s `getConfig` wins the race it returns `[[MAURConfig alloc] initWithDefaults]`, whose default is `locationProvider = DISTANCE_FILTER_PROVIDER (0)` (`MAURConfig.m:35`) → `MAURDistanceFilterLocationProvider` starts → no motion code → no prompt.
+- **Why kill+restart "fixes" it:** by then the RAW config is persisted, so `getConfig` returns RAW even under the race → `MAURRawLocationProvider.onStart` runs → motion prompt fires. This — **not** "Location already granted so Motion is the first prompt" (the theory baked into the onStart comment and addenda 7/11/12) — is the real reason restart worked. Every "fix" that relied on restart-context reasoning was chasing a false model.
+
+**Regression origin:** bg-geo **v2.14.1** (addendum 2) removed the "redundant" `configure:` that the CDV `start:` action used to re-run; that call had been setting `_config` = RAW on the main thread as part of every start, masking the race. Dropping it exposed it.
+
+**Fix (webapp-only, `geoloc.js` — no TestFlight):** `prepareBackgroundGeoloc()` now passes a success callback to `bgGeo.configure(...)` and stores a module promise `backgroundGeolocConfigured`; `backgroundGeoloc()` gates `checkStatus`/`start` behind it (`(backgroundGeolocConfigured || Promise.resolve()).then(...)`). The configure success callback fires only after the native `configure:` action has merged + persisted RAW, so `start:` always reads RAW. Already-setup path resolves immediately (config persisted). Deploy the webapp and test — **no native change needed**; v2.14.8's `MOTIONDBG` logging stays in place to confirm.
+- **Success signature:** fresh install → `RawLocationProvider will start` + `MOTIONDBG onStart: requesting Motion` in the Xcode log (NOT `DistanceFilterLocationProvider`), Location prompt then Motion prompt, **no kill+restart**; telemetry `checkmotion` → `motion_check granted=true`.
+- **Optional native belt-and-braces (next TestFlight round, not required):** in CDV `start:`, re-apply the last JS config via `configure:` on the main thread *before* `facade start:` (restores pre-v2.14.1 ordering) **while keeping** v2.14.1's real-start-outcome return — makes the right provider start regardless of JS call ordering. The motion saga's native churn in `MAURRawLocationProvider` (v2.14.3–v2.14.8) can then be simplified back to the canonical single `startActivityUpdatesToQueue`.
 
 ---
 

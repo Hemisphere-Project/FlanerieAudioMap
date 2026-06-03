@@ -1302,6 +1302,10 @@ var backgroundGeolocSetup = false;
 var backgroundGeolocResolve = null;
 var backgroundGeolocReject = null;
 var backgroundGeolocIntentionalStop = false;
+// Resolves once the native configure: has FULLY applied (locationProvider=RAW set +
+// persisted). start() must wait on this — see the fresh-install race note in
+// prepareBackgroundGeoloc() below.
+var backgroundGeolocConfigured = null;
 
 let initialBackgroundGeolocation = getBackgroundGeolocationPlugin()
 if (initialBackgroundGeolocation) {
@@ -1326,27 +1330,47 @@ function prepareBackgroundGeoloc(positionCallback, errorCallback)
 
     if (backgroundGeolocSetup) {
         console.log('[INFO] BackgroundGeolocation is already setup');
-        
+        // configure() already applied & persisted on a previous setup — nothing to await.
+        if (!backgroundGeolocConfigured) backgroundGeolocConfigured = Promise.resolve();
     }
     else {
         console.log('[INFO] Setting up BackgroundGeolocation');
-    
-        bgGeo.configure({
-            locationProvider: bgGeo.RAW_PROVIDER,
-            desiredAccuracy: bgGeo.HIGH_ACCURACY,
-            stationaryRadius: 0.01,
-            distanceFilter: 0,
-            pauseLocationUpdates: false,
-            saveBatteryOnBackground: false,
-            stopOnTerminate: false,
-            startForeground: true,
-            notificationTitle: 'Flanerie',
-            notificationText: 'localisation en cours',
-            debug: false,
-            interval: 1000,
-            fastestInterval: 1000,
-            activitiesInterval: 1000,
-            activityType: 'OtherNavigation',
+
+        // CRITICAL: configure() must FULLY COMPLETE before start() is called.
+        // Native configure: (background thread) and start: (main thread) share an
+        // unsynchronised _config ivar. On a FRESH install there is no persisted config,
+        // so if start: reads _config before configure: has set it, it falls back to the
+        // DEFAULT (locationProvider = DISTANCE_FILTER), starts MAURDistanceFilterLocationProvider
+        // instead of MAURRawLocationProvider, and the Motion & Fitness prompt — requested only
+        // in MAURRawLocationProvider.onStart — never fires. A kill+restart "fixes" it only
+        // because the RAW config is persisted by then. Awaiting the configure() callback
+        // (fires after the native configure: action persists RAW) closes the race.
+        backgroundGeolocConfigured = new Promise(function(resolve) {
+            bgGeo.configure({
+                locationProvider: bgGeo.RAW_PROVIDER,
+                desiredAccuracy: bgGeo.HIGH_ACCURACY,
+                stationaryRadius: 0.01,
+                distanceFilter: 0,
+                pauseLocationUpdates: false,
+                saveBatteryOnBackground: false,
+                stopOnTerminate: false,
+                startForeground: true,
+                notificationTitle: 'Flanerie',
+                notificationText: 'localisation en cours',
+                debug: false,
+                interval: 1000,
+                fastestInterval: 1000,
+                activitiesInterval: 1000,
+                activityType: 'OtherNavigation',
+            },
+            function() {
+                console.log('[INFO] BackgroundGeolocation configured (locationProvider=RAW applied)');
+                resolve();
+            },
+            function(err) {
+                console.error('[ERROR] BackgroundGeolocation configure failed:', err);
+                resolve(); // proceed anyway — start: will at least read the persisted/default config
+            });
         });
     }
 
@@ -1712,7 +1736,11 @@ function backgroundGeoloc(positionCallback, errorCallback) {
         backgroundGeolocReject = reject;
 
         prepareBackgroundGeoloc(positionCallback, errorCallback);
-    
+
+        // Wait for native configure: to finish applying RAW_PROVIDER before checkStatus/start,
+        // otherwise start: can race ahead with the default DISTANCE_FILTER provider on a fresh
+        // install (see prepareBackgroundGeoloc note — this is the iOS Motion-prompt root cause).
+        (backgroundGeolocConfigured || Promise.resolve()).then(function() {
         bgGeo.checkStatus(function(status) {
             console.log('[INFO] BackgroundGeolocation service is running', status.isRunning);
             console.log('[INFO] BackgroundGeolocation services enabled', status.locationServicesEnabled);
@@ -1753,7 +1781,8 @@ function backgroundGeoloc(positionCallback, errorCallback) {
                 }
             }
         });
-    
+        });
+
     })
 }
 
