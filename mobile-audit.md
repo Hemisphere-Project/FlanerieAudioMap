@@ -283,6 +283,15 @@ The one pattern proven to show both prompts is the **original `onStart`**: reque
 - **Webapp (reverted to match):** `confirmgeo` accept → `startgeo` (which triggers `onStart` → both prompts) → Toujours gate → **`checkmotion` = pure verifier** (polls for the grant, never re-requests — a request there is post-Location = suppressed) → rdv. Removed the addendum-7/9/11 reorder, button-first, and JS-concurrent code; `iosMotionDone` gone.
 - **Needs a TestFlight rebuild** (native). config.xml already 25 → bump to 26. **Unverified on device** — success: on a fresh install, tap J'accepte → **Motion prompt then Location prompt, same launch** → walk proceeds, no kill+restart.
 
+## 2026-06-03 addendum (13) — STOP the TestFlight loop; debug locally in Xcode (bg-geo v2.14.8 = diagnostic logging)
+
+apk 26 (build 94765ac, bg-geo 2.14.7 = concurrent onStart, the historically-proven mechanism) STILL did not prompt. After ~26 builds and a multi-hour telemetry round-trip per attempt, telemetry-only diagnosis has hit its limit — bridge-level telemetry cannot see whether the provider's Core Motion calls execute, what `queryActivity` returns, or why iOS withholds the prompt. **Pivot: run the app from Xcode on a tethered device and read the native + TCC system logs.**
+
+- **bg-geo v2.14.8** adds verbose `NSLog` diagnostics on the whole motion path (grep `MOTIONDBG`): `onStart` motion call + `isStarted`; facade routing (`provider=… isRaw=…`); `isActivityAvailable`; `authorizationStatus`; `startActivityUpdatesToQueue` call + each activity update; and a **diagnostic `queryActivity` whose error code is the definitive "why no prompt"** (105=NotAuthorized/TCC-denied, 107=NotEntitled/missing usage desc, NotAvailable=no hw; success=N samples=authorized). No behaviour change beyond the added query.
+- **In Xcode/Console answer:** (1) does `facade … isRaw=1`? (2) `authorizationStatus=` 0 or 2? (3) does `startActivityUpdatesToQueue` get called? (4) `queryActivity` error code or OK? (5) **macOS Console.app, device, process `tccd` / filter `Motion` / `kTCCServiceMotion`** — the system's actual prompt decision. (6) On-device check: Settings → Confidentialité → Mouvement et fitness → is **"Suivi de la condition physique" (Fitness Tracking) master toggle** ON, and is Flanerie listed?
+- **Leading suspects to confirm/kill with the logs:** TCC has a persisted denial for the bundle id (survives reinstall) → would show `authorizationStatus=2` or query `code=105`; Fitness Tracking master toggle off → prompt impossible; entitlement/usage-desc not in the actual binary → `code=107`; provider not Raw at call time → `isRaw=0`.
+- Build from Xcode (FlanerieCordova/platforms/ios) — no TestFlight needed for this. **Diagnostic build, not a fix.**
+
 ---
 
 ## Telemetry events (current code)
