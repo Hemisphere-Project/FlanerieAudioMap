@@ -1439,7 +1439,11 @@ PAGES['confirmgeo'] = () => {
         var needs = '', next = '';
         if (PLATFORM == 'ios') {
             needs = "Autorisations nécessaires : <b>Localisation</b> et <b>Mouvement</b>.";
-            next  = "À l'écran suivant, choisissez <u>Pendant l'utilisation</u>.";
+            // Set the two-step expectation up front so the Settings round-trip isn't a
+            // surprise: iOS only grants durable "Toujours" from Settings, not from the
+            // in-app dialog, so we walk the user there deliberately.
+            next  = "iOS va demander la localisation : choisissez <u>Pendant l'utilisation</u>.<br />" +
+                    "Nous vous guiderons ensuite, en deux gestes, pour la régler sur <u>Toujours</u> dans les Réglages — indispensable lorsque le téléphone est en poche, écran éteint.";
         } else if (PLATFORM == 'android') {
             needs = "Autorisations nécessaires : <b>Localisation</b>, <b>Notifications</b> et <b>Batterie</b>.";
             next  = "À l'écran suivant, autorisez la <u>Localisation</u>.";
@@ -1538,9 +1542,13 @@ PAGES['startgeo'] = () => {
     // path), this call is the sole trigger — the accept handler no longer primes it
     // to avoid firing two concurrent permission requests, which freezes the Android
     // dialog. No #startgeo page in app.html so we don't await here.
-    // NOTE: on iOS, native onStart (inside bgGeo.start, triggered by startGeoloc below)
-    // requests Motion & Fitness CONCURRENTLY with Location — both prompts queue. checkmotion
-    // (after the Toujours gate) only verifies the grant. See the note in PAGES['checkmotion'].
+    // NOTE: on iOS, native MAURRawLocationProvider.onStart (inside bgGeo.start, triggered by
+    // startGeoloc below) requests Motion & Fitness alongside Location — both prompts queue.
+    // checkmotion (after the Toujours gate) only verifies the grant. This works only because
+    // the RAW provider actually starts: startGeoloc now awaits native configure: before start:
+    // so the right provider (not the DISTANCE_FILTER default) launches on a fresh install —
+    // that race was the real cause of the "Motion prompt only after kill+restart" bug, NOT any
+    // iOS suppression of motion-after-location. See PAGES['checkmotion'] and mobile-audit §14.
     GEO.startGeoloc()
         .then(() => {
             // iOS "Toujours" enforcement — THE choke point. startGeoloc resolves on
@@ -1648,13 +1656,16 @@ PAGES['checkbgloc'] = () => {
 }
 
 //
-// CHECK MOTION (iOS)
-// Motion activity (CMMotionActivityManager) is started HERE — not at bgGeo.start()
-// — so the iOS "Motion & Fitness" prompt appears on its own screen instead of
-// colliding with the Location prompt. Without motion events, stationary detection
-// breaks and the GPS-lost overlay fires spuriously during pocketed pauses, so we
-// hard-block until the first 'activity' event arrives, with a Settings deep link
-// as escape.
+// CHECK MOTION (iOS) — VERIFIER ONLY.
+// The Motion & Fitness prompt is requested NATIVELY in MAURRawLocationProvider.onStart,
+// alongside the Location request, during bgGeo.start() (see startGeoloc / PAGES['startgeo']).
+// This page does not normally trigger it — it polls for the grant that the native request
+// already obtained. Motion events are needed because without them stationary detection
+// breaks and the GPS-lost overlay fires spuriously during pocketed pauses, so we hard-block
+// until motion is authorized, with a Settings deep link + manual retry as escape.
+// (Historical note: the "prompt only fires after kill+restart" bug was the wrong location
+// provider starting on fresh install — see mobile-audit §14 — not iOS suppressing a
+// motion-after-location prompt, a theory the broken-provider sessions made look true.)
 //
 PAGES['checkmotion'] = () => {
     clearMotionCheck();
@@ -1662,7 +1673,6 @@ PAGES['checkmotion'] = () => {
     $('#checkmotion-settings').hide().off().on('click', () => GEO.showAppSettings());
     var start = Date.now();
     var warningShown = false;
-    var lastPromptAt = 0;
     var promptAttempts = 0;
 
     if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('onboarding_page', {
@@ -1679,18 +1689,18 @@ PAGES['checkmotion'] = () => {
         return PAGE('rdv');
     }
 
+    // Manual fallback only: the native onStart request is the primary path. This fires
+    // from the "J'ai autorisé" retry button and the resume-from-Settings re-arm — e.g. if
+    // motion was denied and the user enabled it in Settings, this re-checks/re-requests.
     function triggerMotionPrompt() {
         if (currentPage !== 'checkmotion' || GEO.motionAuthorized) return;
-        lastPromptAt = Date.now();
         promptAttempts++;
         var attempt = promptAttempts;
         var visible = (typeof document !== 'undefined' && document.visibilityState === 'visible');
-        // Each (re-)issue of the Motion prompt request. Logged WITH the native truth
-        // the call returns (v2.14.5+): auth_status (0=NotDetermined 1=Restricted
-        // 2=Denied 3=Authorized) + app_state (0=Active 1=Inactive 2=Background). This
-        // is what finally distinguishes an implicit Denied from a NotDetermined whose
-        // prompt opportunity was consumed during the post-Settings settling window —
-        // the l5bi signature of the "prompt won't fire until a couple restarts" hang.
+        // Logged WITH the native truth the call returns (v2.14.5+): auth_status
+        // (0=NotDetermined 1=Restricted 2=Denied 3=Authorized) + app_state
+        // (0=Active 1=Inactive 2=Background) — kept for diagnosing any future motion
+        // grant failure (distinguishes an implicit Denied from a stuck NotDetermined).
         Promise.resolve(GEO.startMotionUpdates()).then(function(info) {
             if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('motion_prompt', {
                 attempt: attempt,
@@ -1745,13 +1755,11 @@ PAGES['checkmotion'] = () => {
     // Resume path: don't hard-block — short grace then proceed (see MOTION_RESUME_GRACE_MS).
     var isResume = PARCOURS.valid() && PARCOURS.currentStep() >= 0;
 
-    // VERIFY only. The Motion & Fitness prompt is requested by native onStart, concurrently
-    // with Location (both prompts queue) — the only reliable timing, since iOS suppresses a
-    // Motion request made after the Location prompt is answered in the same launch. So here
-    // we just poll for the grant; we must NOT re-request (that would be the suppressed case).
-    // bindMotionResume re-arms only after a real Settings round-trip; the "J'ai autorisé"
-    // retry button is the manual fallback if the user enabled it from Settings.
-    $('#checkmotion-accept').hide();
+    // VERIFY only. The Motion & Fitness prompt was already requested by native onStart
+    // alongside Location during bgGeo.start(). Here we poll for the grant rather than
+    // re-request on a timer — a single stable native request is what reliably presents the
+    // prompt; hammering it would churn the native manager. bindMotionResume re-arms on a
+    // Settings round-trip; the "J'ai autorisé" retry button is the manual fallback.
     $('#checkmotion-desc').text('Vérification du capteur de mouvement...');
     bindMotionResume();
 
@@ -1762,11 +1770,10 @@ PAGES['checkmotion'] = () => {
             if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('motion_check', {granted: true, waited_ms: Date.now() - start});
             return proceedAfterMotion();
         }
-        // DO NOT request the prompt here. Motion was already requested concurrently with
-        // Location at startgeo (the only context where iOS presents it); re-requesting now
-        // (after the Location prompt was answered) is suppressed and would also churn the
-        // native manager. This loop only watches for the grant and drives the timeout /
-        // resume-grace UI; the retry button + resume re-arm are the manual fallbacks.
+        // Don't request the prompt on this timer — motion was already requested by native
+        // onStart during bgGeo.start(); re-issuing every tick would only churn the native
+        // manager. This loop just watches for the grant and drives the timeout / resume-grace
+        // UI; the retry button + resume re-arm are the manual fallbacks.
         if (isResume && Date.now() - start >= MOTION_RESUME_GRACE_MS) {
             if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('motion_check', {granted: false, resumed: true, waited_ms: Date.now() - start});
             return proceedAfterMotion();

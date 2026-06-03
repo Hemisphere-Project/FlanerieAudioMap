@@ -1240,10 +1240,12 @@ class GeoLoc extends EventEmitter {
         return checkBGPosition()
     }
 
-    // iOS — trigger the Motion & Fitness prompt from the checkmotion onboarding
-    // screen. This is deferred out of bgGeo.start() (native MAURRawLocationProvider)
-    // so it no longer stacks under the Location prompt on first install. No-op off
-    // iOS or when the plugin build predates the startMotionUpdates bridge method.
+    // iOS — manual fallback to (re-)trigger the Motion & Fitness prompt.
+    // The PRIMARY motion request happens natively in MAURRawLocationProvider.onStart,
+    // alongside the Location request, during bgGeo.start() (see startGeoloc). This
+    // bridge is only the fallback used by checkmotion's "J'ai autorisé" retry button
+    // and the resume-from-Settings re-arm. No-op off iOS or when the plugin build
+    // predates the startMotionUpdates bridge method.
     startMotionUpdates() {
         let bgGeo = getBackgroundGeolocationPlugin()
         if (!bgGeo || typeof bgGeo.startMotionUpdates !== 'function') return Promise.resolve(null)
