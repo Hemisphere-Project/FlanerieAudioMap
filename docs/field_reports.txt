@@ -1,0 +1,57 @@
+
+
+Magalie, 04/06/2026:
+
+alors je n’ai que des tel Android 
+j’en ai 4 
+J’ai retéléchargé l’app surles 4 tel
+mais en fait 3 se bloque à l’ouverture et je n’arrive même pas jusqu’à l’écran avec du texte, 
+je reste bloquée sur l’icone avec l’écran mauve avec "Veuillez connecter à internet"
+
+My takes: this is a running bug not yet fixed: only happen on fresh install, 
+mostly when phone are wifi-ed to another phone in 4G AP tethering, 
+bug vanish on same devices when direct 4G or standard wifi AP.
+
+--------------------------------
+
+Baptiste, 05/06/2026:
+
+Petit rapport de bug sur le parcours flanerie frappaz V2
+Telephone samsung A51 / dernière version de l'app installée aujourd'hui
+
+Le GPS s'est emballé quand j'ai verrouillé le tel et que je l'ai mis dans ma poche.  
+Il m'a envoyé n'importe où. M'a retrouvé au bout d'un certain temps après deverrouillage et l'audio a repris.  
+C'etait aux environs de 17h 
+
+My takes: something went wrong, was supposed to be in real GPS, maybe old Simulation mode kick back ?
+
+----------------------- 
+
+Magalie, 05/06/2026: 
+
+j’ai enfin pu faire un test du parcours "St bonnet test »
+pour voir comment réagit le GPS.
+je suis partie à 18h25
+je l’ai fait sur 5 tel
+un fairphone (est arrivé au bout )
+Trois redmis
+- xiaomi hyper OS redmi note 11 ( a quitté je sais pas quand et du coup je ne l’ai pas relancé) marqué B en code Ö
+- miui global 12.0.1 (est arrivé au bout ) marqué D en code Ö
+-miui global 12.0.2 (est arrivé au bout ) marqué E en code Ö
+
+un samsung galaxi A41, est arrivé au bout 
+
+si tu réussis à nous dire des lieux où il n’y a pas (ou mauvaise précision) de GPS 
+ça pourra nous aider à chercher à ne pas mettre des débuts de zones dans ces endroits …
+
+My takes: it seems that only 8aym reported a proper walk, i guess there where a newtork issue 
+for other phone.. was using wifi tethering 4G from antoher phone.. maybe same issue than earlier ?
+anyway. Others seems mostly tests / onboarding.. maybe some interesting data from there ?
+
+-----------------------
+
+Baptiste, 06/06/2026:
+
+et autre petit bug repéré ce matin - mais ça doit être une ligne de code qui a sauté  : sur mon tel,  le mode simulation utlise la position reelle du GPS
+
+My take: this means real GPS position was kicking in while in Simulation mode...

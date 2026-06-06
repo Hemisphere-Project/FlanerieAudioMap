@@ -1997,9 +1997,11 @@ PAGES['checkbatteryopt'] = () => {
         // listener we still need on this page).
         if (BATTOPT_TIMER) { clearTimeout(BATTOPT_TIMER); BATTOPT_TIMER = null; }
         BATTOPT_ATTEMPTS = 0;
+        $('#checkbatteryopt-blocked-help').hide();
         check();
     });
     $('#checkbatteryopt-oem').hide();
+    $('#checkbatteryopt-blocked-help').hide();
 
     // Render manufacturer-tailored copy up front, before the user can fail.
     if (oemCopy) {
@@ -2097,6 +2099,12 @@ PAGES['checkbatteryopt'] = () => {
                 if (BATTOPT_ATTEMPTS >= BATTOPT_MAX_ATTEMPTS) {
                     $('#checkbatteryopt-retry').show();
                     $('#checkbatteryopt-settings').show();
+                    // OS is blocking the exemption dialog (e.g. Xiaomi HyperOS — field
+                    // 2026-06-05 8aym: 31 min stuck, walk never started). The gate STAYS
+                    // blocking (the exemption is what keeps the bg service alive while the
+                    // screen is locked), but surface staff-help / loan-phone guidance so a
+                    // user who can't grant it via Settings isn't silently stranded.
+                    $('#checkbatteryopt-blocked-help').show();
                     if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('battery_opt', { blocked: true, manufacturer: device.manufacturer, family });
                     return;
                 }
@@ -2120,6 +2128,7 @@ PAGES['checkbatteryopt'] = () => {
         if (BATTOPT_TIMER) { clearTimeout(BATTOPT_TIMER); BATTOPT_TIMER = null; }
         BATTOPT_ATTEMPTS = 0;
         $('#checkbatteryopt-retry').hide();
+        $('#checkbatteryopt-blocked-help').hide();
         check();
     };
     document.addEventListener('resume', BATTOPT_RESUME, false);
@@ -2137,6 +2146,8 @@ PAGES['rdv'] = () => {
     if (PARCOURS.valid() && PARCOURS.currentStep() >= 0) return PAGE('parcours');
 
     $('#rdvdistance').hide()
+    $('#rdv-startup-fallback').hide()
+    $('#rdv-force-start').hide()
 
     var warmupPending = false
     var warmupAttempts = 0
@@ -2145,6 +2156,14 @@ PAGES['rdv'] = () => {
     // walker is somewhere GPS can't reach (indoors), and continuing to
     // hammer getCurrentLocation won't help either case.
     const RDV_WARMUP_MAX_ATTEMPTS = 5
+    // Time-boxed best-effort fallback: on weak-GPS / stationary devices the startup
+    // gate (<=15 m, 2 distinct fresh fixes) can never pass — field 2026-06-05 nlrc
+    // (Fairphone 4) was stranded 74 min on "En attente du GPS". After this long
+    // failing the gate, offer an informed "Démarrer quand même" (best accuracy
+    // shown) plus loan-phone guidance, rather than trapping the walker.
+    const RDV_STARTUP_FALLBACK_MS = 90000
+    var rdvWaitStartMs = Date.now()
+    var startupFallbackShown = false
     function hasFreshFix() {
         return typeof GEO.startupReady === 'function' ? GEO.startupReady() : false
     }
@@ -2192,11 +2211,34 @@ PAGES['rdv'] = () => {
             let passive = warmupAttempts >= RDV_WARMUP_MAX_ATTEMPTS
             let label = startupWarmupLabel(passive)
             $('#rdvdistance').show().text(label)
+            // P0.2b — time-boxed best-effort fallback, only after a sustained failure
+            // to clear the gate (a normal short acquisition is not short-circuited).
+            if (!startupFallbackShown && (Date.now() - rdvWaitStartMs) >= RDV_STARTUP_FALLBACK_MS) {
+                startupFallbackShown = true
+                let status = typeof GEO.startupStatus === 'function' ? GEO.startupStatus() : null
+                let acc = status && typeof status.lastAccuracy === 'number' ? Math.round(status.lastAccuracy) : null
+                let accTxt = acc != null ? ('meilleure précision obtenue : ' + acc + ' m') : 'précision insuffisante'
+                $('#rdv-startup-fallback').show().html(
+                    'Le GPS de ce téléphone n\'atteint pas la précision requise (' + accTxt + ').<br /><br />'
+                    + 'Vous pouvez <b>démarrer quand même</b> (le déclenchement des premières étapes peut être moins précis), '
+                    + 'ou demander un <b>téléphone de prêt</b> à l\'équipe à l\'accueil.'
+                )
+                $('#rdv-force-start').show()
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_startup_fallback_offered', {
+                    waited_ms: Date.now() - rdvWaitStartMs,
+                    last_accuracy: status ? status.lastAccuracy : null,
+                    last_reason: status ? status.lastReason : null,
+                    max_accuracy_m: status ? status.maxAccuracyM : null,
+                })
+            }
             return;
         }
         let d = PARCOURS.find('steps', 0).distanceToBorder(GEO.usablePosition())
         $('#rdvdistance').show().text('Distance: '+Math.round(d) + ' m');
         clearInterval(checkpos);
+        // GPS reached the gate (possibly after the fallback was offered) — hide it.
+        $('#rdv-startup-fallback').hide()
+        $('#rdv-force-start').hide()
         $('#rdv-accept').show()
         $('#rdvdistance').hide()
     }, 1000);
@@ -2210,6 +2252,18 @@ PAGES['rdv'] = () => {
 
     $('#rdv-accept').hide().off().on('click', () => {
         clearInterval(checkpos);
+        PAGE('checkaudio')
+    })
+
+    // P0.2b — informed best-effort start when the GPS gate can't be met on this device.
+    $('#rdv-force-start').hide().off().on('click', () => {
+        clearInterval(checkpos);
+        let status = typeof GEO.startupStatus === 'function' ? GEO.startupStatus() : null
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_startup_fallback_used', {
+            waited_ms: Date.now() - rdvWaitStartMs,
+            last_accuracy: status ? status.lastAccuracy : null,
+            last_reason: status ? status.lastReason : null,
+        })
         PAGE('checkaudio')
     })
 

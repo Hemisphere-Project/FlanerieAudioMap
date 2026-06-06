@@ -1,5 +1,12 @@
 const LOAD_EXTRARADIUS = 10
 const UNLOAD_EXTRA_HYSTERESIS = 10  // extra meters beyond _loadRadius before unloading — prevents load/unload oscillation at zone edges
+// A spot must stay continuously beyond _unloadRadius for this long before its
+// player is torn down. The 10 m hysteresis band alone did not stop oscillation
+// when a walker tracks a zone edge with GPS jitter (field 2026-06-06, y9ns /
+// GIVORS_V7: one quai ambiance zone reloaded 74×, each reload re-acquiring a
+// MediaCodec → hardware-decoder pool exhaustion). The debounce ignores transient
+// excursions; a spot is unloaded only once the walker has genuinely left it.
+const UNLOAD_DEBOUNCE_MS = 30000
 
 function telemetryLog(type, data) {
     if (typeof TELEMETRY !== 'undefined') TELEMETRY.log(type, data)
@@ -19,6 +26,7 @@ class Spot extends EventEmitter
         this._color = color
         this._loadRadius = 1
         this._wasInside = false
+        this._farSinceMs = null   // timestamp first seen beyond _unloadRadius — drives the unload debounce
 
         this.player = null
 
@@ -288,9 +296,16 @@ class Spot extends EventEmitter
         // Defensive: a cleared spot has no player. Treat as "not inside".
         if (!this.player) return false
 
-        // Near: load if not loaded — skip if player has a load error (prevents reload loop)
+        // Near: load if not loaded — skip if the player has a load error OR a load
+        // is already in flight. The in-flight guard stops the reload-storm seen in
+        // field 2026-06-06 (y9ns): an offlimit whose load never completed (stuck in
+        // 'loading' under MediaCodec pressure) was re-issued a fresh load on every
+        // GPS fix (~every 3 s), each one re-acquiring a codec. Loaded / hard-errored
+        // players are already covered by isLoaded() / hasError().
         let hasError = typeof this.player.hasError === 'function' && this.player.hasError()
-        if (!this.player.isLoaded() && !hasError && this.near(pos)) {
+        let loading = typeof this.player.loadState === 'function'
+            && String(this.player.loadState()).indexOf('loading') >= 0
+        if (!this.player.isLoaded() && !hasError && !loading && this.near(pos)) {
             telemetryLog('spot_audio_prepare', {
                 spot_type: this._type,
                 step: this._type === 'steps' ? this._index : undefined,
@@ -302,18 +317,30 @@ class Spot extends EventEmitter
             console.log('Spot load:', this._spot.name, this.player.isLoaded())
         }
 
-        // Far: unload if loaded — uses _unloadRadius (> _loadRadius) to avoid oscillation at zone edges
-        if (this.player && this.player.isLoaded() && this.distanceToCenter(pos) > this._unloadRadius && !this._keepLoadedForUpcomingTrigger) {
-            if (this._type === 'steps' && PARCOURS.currentStep() == this._index) {
-                telemetryLog('step_active_unload', {
-                    step: this._index,
-                    name: this._spot.name,
-                    distanceToCenter: this.distanceToCenter(pos),
-                    distanceToBorder: this.distanceToBorder(pos)
-                })
+        // Far: unload if loaded — uses _unloadRadius (> _loadRadius) plus a time
+        // debounce (UNLOAD_DEBOUNCE_MS) so a transient excursion past the edge does
+        // not tear down and immediately recreate the player. Pure-radius hysteresis
+        // was not enough: a walker tracking a zone edge with GPS jitter oscillated
+        // across the band and thrashed load/unload (field 2026-06-06, y9ns).
+        if (this.player && this.player.isLoaded()) {
+            if (this._keepLoadedForUpcomingTrigger || this.distanceToCenter(pos) <= this._unloadRadius) {
+                this._farSinceMs = null   // in range or pinned loaded → cancel any pending unload
+            } else {
+                if (this._farSinceMs == null) this._farSinceMs = Date.now()
+                if (Date.now() - this._farSinceMs >= UNLOAD_DEBOUNCE_MS) {
+                    if (this._type === 'steps' && PARCOURS.currentStep() == this._index) {
+                        telemetryLog('step_active_unload', {
+                            step: this._index,
+                            name: this._spot.name,
+                            distanceToCenter: this.distanceToCenter(pos),
+                            distanceToBorder: this.distanceToBorder(pos)
+                        })
+                    }
+                    this.player.clear()
+                    this._farSinceMs = null
+                    // console.log('Spot unload:', this._spot.name, this.player.isLoaded())
+                }
             }
-            this.player.clear()
-            // console.log('Spot unload:', this._spot.name, this.player.isLoaded())
         }
 
         // Enter / Leave event

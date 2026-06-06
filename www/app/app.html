@@ -141,6 +141,7 @@
             <button id="checkbatteryopt-settings" class="btn btn-primary btn-page" style="display:none;">Paramètres batterie</button>
             <button id="checkbatteryopt-oem-btn" class="btn btn-primary btn-page" style="display:none;">Paramètres fabricant</button>
             <button id="checkbatteryopt-retry" class="btn btn-primary btn-page" style="display:none;">J'ai désactivé</button>
+            <p id="checkbatteryopt-blocked-help" style="display:none;"><b>Votre téléphone bloque cette autorisation.</b><br /><br />Suivez les indications ci-dessus dans les Paramètres. Si vous n'y parvenez pas, <b>demandez de l'aide à l'équipe à l'accueil</b> — sinon la balade risque d'être interrompue lorsque l'écran est verrouillé. L'équipe pourra vous aider ou vous prêter un téléphone configuré.</p>
         </div>
 
         <div id="nodata" class="page">
@@ -224,8 +225,10 @@
                 <p id="rdv-desc"></p>
                 <br />
                 <p id="rdvdistance">Initialisation de votre position...</p>
+                <p id="rdv-startup-fallback" style="display:none;"></p>
             </div>
             <button id="rdv-accept" class="btn btn-primary btn-page">J'y suis !</button>
+            <button id="rdv-force-start" class="btn btn-secondary btn-page" style="display:none;">Démarrer quand même</button>
         </div>
 
         <div id="checkaudio" class="page">

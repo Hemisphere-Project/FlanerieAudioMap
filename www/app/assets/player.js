@@ -590,11 +590,13 @@ class PlayerSimple extends EventEmitter
         // instances commonly produces "{}" which is what GIVORS field reports
         // showed as "[object Object]" — defend against that.
         let code = null
+        let nativeCode = null   // raw backend error code (Media3 PlaybackException.errorCode on ExoPlayer) — kept distinct from the mapped 1–4 `code` so e.g. DECODER_INIT_FAILED vs DECODING_RESOURCES_RECLAIMED is visible in telemetry
         let message = ''
         if (typeof error === 'string') message = error
         else if (typeof error === 'number') { code = error; message = 'code:' + error }
         else if (error && typeof error === 'object') {
             if (typeof error.code === 'number') code = error.code
+            if (typeof error.errorCode === 'number') nativeCode = error.errorCode
             if (typeof error.message === 'string' && error.message) message = error.message
             else if (code !== null) message = 'MediaError:' + code
             else {
@@ -621,6 +623,7 @@ class PlayerSimple extends EventEmitter
                 error: message,
                 error_type: errorType,
                 error_code: code,
+                native_error_code: nativeCode,
                 backend: this._backend || (this._isNativeFallback ? 'howler-fallback'
                     : (PLATFORM === 'ios' ? 'native' : 'howler')),
                 cleared: !this._player

@@ -85,23 +85,24 @@ Each onboarding gate hard-blocks until its check passes.
 | E — Step lifecycle correctness (E1/E2/E3) | Not shipped — blocks on `accuracy_near_border` field data |
 | F — Telemetry & diagnostics (F-K1..F-N3) | All Phase 1A JS items shipped. The June 1 round added `gps_state`, `gps_startup_fix` / `gps_startup_ready` / `gps_startup_rejected`, `ios_stream_health`, freshness buckets in `gps_quality_summary`, and offline analyzer support for keepalive-only sessions, masked freshness, and signal-state reasons. F-A4 silence detection dropped (covered by `voice_snapshot` heuristics) |
 | G — Plugin extensions (G1–G4) | G1 (audiofocus v1.7.1 — incl. Round 21 `ExtraFocusListener`), G2 (power-opt v0.3.1), G3 (bg-geo v2.14.0 — Architecture D + rail/visit telemetry + main-thread singleton fix + iOS stream-health bridge), **G4 (cordova-plugin-exoplayer-simple v0.1.1 — NEW Android Media3 backend, Round 21)** all shipped |
-| H — Android audio backend (H1) | H1 (audio-simple plugin + `AUDIO_BACKEND_ANDROID` flag + `_backend` telemetry field) shipped — **default is now `'exoplayer'`** (canary bucket retired in Round 24 plugin rename; set `window.AUDIO_BACKEND_ANDROID = 'howler'` pre-load to opt back). Full Howler retirement still pending second clean field test. |
+| H — Android audio backend (H1) | H1 (audio-simple plugin + `AUDIO_BACKEND_ANDROID` flag + `_backend` telemetry field) shipped — **default is now `'exoplayer'`** (canary bucket retired in Round 24 plugin rename; set `window.AUDIO_BACKEND_ANDROID = 'howler'` pre-load to opt back). **Howler retirement POSTPONED** — the second-device field test (2026-06-06 `y9ns`, SM-A528B) FAILED with 38 ExoPlayer `MediaCodecAudioRenderer` decode errors; Howler stays the default fallback until the codec-exhaustion fix re-validates clean across devices. Still the eventual goal. |
 | iOS native plan (H/I/J/K/L) | See §[iOS native plan (R22–R26) — settled design decisions](#ios-native-plan-r22r26--settled-design-decisions) below. All five workstreams shipped between R22 and R26. **L (CLMonitor iOS 17+)** scope reduced to visit events only via legacy `startMonitoringVisits` (CLMonitor proper deferred indefinitely). |
 
 **Open items requiring next field test data:**
-- **B4 / R27 startup + stalled-signal calibration** — implementation shipped. Need one iOS + one Android session set to tune the `gps_state` cutovers above the ~20 s NSTimer/Handler floor and confirm that the 2-fix / <=10 m / <=12 s startup gate is comfortable in real use.
-- **E1/E2/E3 zone-overshoot gates** — need `accuracy_near_border` distribution to set accuracy and sustain thresholds.
-- **H1 ExoPlayer backend validation** — flag `AUDIO_BACKEND_ANDROID='exoplayer'` on at least one loan SM-A515F at VILLEURBANNE. Compare `audio_play_started.load_duration_ms`, `audio_play_stuck`, `audio_loaderror` rates vs the Howler fleet (`backend` field on `audio_uri_resolved` / `audio_*error` is the bucket key).
-- **R21 / R22 iOS validation** — on at least one iOS device at VILLEURBANNE: confirm `nowplaying_setup` fires at parcours entry, lock-screen tile shows title with disabled controls, `resume_snapshot_check` (or `resume_native_override`) emits at every `parcours_restore`. Cross-check `lastUpdatedMs` parity between localStorage and NSUserDefaults timestamps.
-- **R27 iOS foreground-stream validation** — on at least one iOS device at VILLEURBANNE: confirm `ios_stream_health` appears every 30 s beside `cl_state`, `shared_manager_created_on_main_thread=true`, `real_location_count` rises during foreground walking, and `gps_state` transitions (`acquiring` / `ok` / `frozen` / `lost`) line up with actual callback freshness.
-- **R23 iOS rail validation** — on at least one iOS device at VILLEURBANNE: confirm `gps_rail_configured` fires once per parcours entry with `region_count` = (step_count − 1), `gps_rail_wake` events fire as the walker crosses transition midpoints, and `did_force_reacquire=true` correlates with actual standard-callback stalls (cross-check against `real_callback_freshness`). On an iOS 26.3.x device the rail should produce non-zero `gps_rail_wake.did_force_reacquire=true` events during the 8–14 min blackouts (S1 failure mode).
-- **R26 iOS visit validation** — `gps_visit_event` should fire during VILLEURBANNE walks, particularly during the FLANERIE_ELYSEE step 4 "choice step" lingering case and any natural pause spots. Cross-check the `arrival_date` / `departure_date` deltas against `voice_snapshot` step timing — if visit detection lines up with step dwell, the data may eventually feed E1/E2/E3 step-confirm gating as a stronger signal than the GPS-accuracy-only path.
+- **B4 / R27 startup + stalled-signal calibration** — Android startup gate confirmed comfortable on a GOOD-GPS device (8giw: `fixes=2 ready=1 rejected=3`, no stuck startup). **But `nlrc` (Fairphone 4, avgAcc ~21 m) never cleared the gate in 74 min** — `gps_startup_rejected reason=accuracy`/`stale` ×dozens; the `STARTUP_FIX_MAX_ACCURACY_M=15` + 2-distinct-fix gate strands poor-GPS / stationary onboarding at `rdv` (see 2026-06-06 addendum, correction 2). Calibration must soften the accuracy gate and/or add a time-boxed best-effort fallback. iOS still needs data.
+- **E1/E2/E3 zone-overshoot gates** — 300 `accuracy_near_border` events collected from 8giw (SM-A515F, avgAcc=7m): p75=−3m inside, p95=+3.2m outside. Single high-accuracy device only; need a session with avgAcc 20–30m before setting production thresholds.
+- **H1 ExoPlayer backend validation** — ⚠️ **SECOND DEVICE FAILED** (2026-06-06, `y9ns` SM-A528B / Galaxy A52s 5G / GIVORS_V7_CBR): **38 `step_voice` playerrors** = `MediaCodecAudioRenderer` hardware-decoder exhaustion under instance churn (`format_supported=YES`, transient). The 8giw "0 errors" result was one device + one parcours only. **Howler retirement POSTPONED** until the exhaustion class is fixed and re-validated on this device. See 2026-06-06 addendum.
+- **R21 / R22 iOS validation** — ✅ **configure-level validated** (2026-06-06, `imug` apk 27): `audio_uri_resolved backend=audio-simple`, `nowplaying_setup`. Walk-level (BLOC narration under load) still pending.
+- **R27 iOS foreground-stream validation** — ✅ **configure-level validated** (`imug`): `ios_stream_health` + `cl_state` ×25, healthy stream (0 gaps ≥90 s). Background-blackout behaviour still pending (no blackout occurred).
+- **R23 iOS rail validation** — ✅ **configure validated** (`imug`): `gps_rail_configured`×2 (the dead-code fix works). **Rail wake still pending** (`gps_rail_wake`=0 — no blackout to trigger it).
+- **R26 iOS visit validation** — ✅ **validated** (`imug`): `gps_visit_event`×1 fired.
+- **Architecture D (Fused fallback) end-to-end** — `fusedAvailable=false` on the dev SM-A515F (GMS issue on this ROM). Not yet validated on any device. Need a GMS-enabled Android that experiences a real GPS gap.
 
 **Recommended next moves (post-GIVORS archive):**
 - **Do not open new native scope before VILLEURBANNE.** The June 1 iOS GPS scope is now implemented; remaining blockers are build validation and threshold calibration, not missing code.
 - **Run one focused VILLEURBANNE validation pass with the minimum device set:** 1 iOS device (ideally 26.3.x or 26.4.x) and 1 loan-phone Android SM-A515F. Success criteria: startup-gate behaviour, B4/R27 `gps_state` histograms, E1/E2/E3 border-accuracy histograms, H1 ExoPlayer metrics, and `ios_stream_health` + `cl_state` present in one session set.
 - **Immediately after that data lands, ship one small threshold round:** calibrate B4/R27 `gps_state` cutovers (`acquiring` / `frozen` / `lost`) and E1/E2/E3 accuracy + sustain gates. Avoid unrelated refactors in the same round.
-- **If H1 is clean, make ExoPlayer the canonical Android path and schedule Howler retirement.** Keep the override flag through one more clean production-like session, then remove the Howler branch / `Howler.autoUnlock` / `Howler.autoSuspend` under the existing R21-followup item.
+- **Howler retirement is POSTPONED, not cancelled** (was: "if H1 is clean, retire Howler"). The second-device test (`y9ns`) failed: ExoPlayer must first stop exhausting the MediaCodec pool (prefer SW MP3 decode / `setEnableDecoderFallback` / release idle codecs + cut load churn — see P0.1) and then pass a clean multi-device field test. Keep `AUDIO_BACKEND_ANDROID='howler'` reachable and Howler as the **default fallback** until then. The eventual goal remains removing the Howler branch / `Howler.autoUnlock` / `Howler.autoSuspend`.
 - **Only reopen Phase 3 items if telemetry still shows a real gap.** P3.5 Plan B/C and any visit-driven step-confirm work stay conditional on VILLEURBANNE evidence, not pre-emptive scope growth.
 
 ---
@@ -326,18 +327,133 @@ One cosmetic wart remained: on tapping "J'accepte" the user saw a **quick Motion
 - **Fix part 3 (bg-geo v2.14.12) — the one that should actually do it.** On-device test of v2.14.11 (session `…ip87`) proved the code-level double-*request* was gone: exactly one `requesting Motion` log, no `queryActivity`, no JS `facade startMotionUpdates`, and `motion_authorized` fired — yet the user still *saw* two Motion dialogs. Cause: `onStart` requested Motion (via `dispatch_async`) right after the Location request, so iOS began presenting Motion *while the Location prompt was also coming up*, preempted it with Location, then re-presented Motion — **one request, two visual presentations**. Fix: don't request Motion in `onStart` at all; request it from the `_slcManager` location **auth-change callback** (`-locationManager:didChangeAuthorizationStatus:`), one-shot (`_motionRequestedThisStart`), once the Location prompt has been **answered** (any definitive status) and the app is active again. Motion is then presented alone, nothing competing → single clean prompt. Still same-launch / in-app / immediately after the Location answer (the original "Motion stacks under Location" timing), so NOT the §14 deferral failure mode. Safety nets intact: the JS `checkmotion` retry/resume fallback still exists if the callback is ever missed.
 - **Released + applied** via the `plugin-upgrade` skill (latest `bg-geo=2.14.12` on `origin/stable`, FlanerieCordova platforms regenerated). **Each native change needs a TestFlight/Xcode rebuild** to reach devices (the §14 webapp fix already works on the current build). On-device sequence: v2.14.10 still double-prompted (queryActivity) → v2.14.11 single *request* but iOS still double-*presented* (onStart timing) → **v2.14.12 defers Motion to the post-Location auth callback** — the build to verify shows a single Location prompt then a single Motion prompt.
 
+## 2026-06-05 addendum — FRAPPAZ + ST-BONNET field sessions (Baptiste + Magalie)
+
+**Sessions:** 24 total, 13 onboarding, 11 visitor. All Android, apk=23 / commit=`ad6dd58` / bg-geo=2.14.5. Full report: [`docs/archive/20260605-FRAPPAZ-STBONNET-report.md`](docs/archive/20260605-FRAPPAZ-STBONNET-report.md).
+
+**Field report scope note:** The four ST_BONNET walk completions (`7sn4`, `j37j`, `cm3j`, `occn` — sessions starting 17h58–18h23) are pre-departure setup/test runs, not Magalie's actual 18h25 five-phone group. The only session with telemetry from Magalie's walk is `8aym`. Magalie's other four phones produced no telemetry.
+
+### New bug — `checkbatteryopt` silent deadlock on `battery_opt: {blocked:true}`
+
+On Android 13+ (confirmed: Xiaomi HyperOS 2201117TY, Fairphone FP4 Android 15), `ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` is silently blocked by the OS. `battery_opt:{blocked:true}` fires but the `checkbatteryopt` page has no handler — the user gets a frozen screen with no feedback and no exit path.
+
+- **`8aym`** (Magalie's Redmi Note 11 HyperOS): blocked at 2.3min, 29-minute gap, eventually `ignoring:true` — but walk never opened. This is why the phone "quit."
+- **`nlrc`** (Fairphone 4 Android 15, noon setup): 5 blocked events, 3 onboarding restarts, 74 minutes total.
+
+**Fix (webapp `checkbatteryopt`):** detect `blocked=true`, surface manual instructions ("Paramètres → Applications → Flânerie → Batterie → Sans restriction"), offer "J'ai fait ça" re-poll + "Continuer quand même" escape. Wire `visibilitychange`/`resume` auto-advance as in `checknotifications`.
+
+### New bug — simulation state persists in localStorage across sessions (silently)
+
+`ykvf` (Baptiste, 16h39): intended real GPS test, but ran silently in simulation mode. Evidence: within 55ms of `session_start`, simulate GPS fixes were already injecting — simulate mode had been persisted since the morning dev sessions (`cz3v` at 08:30, all subsequent sessions). `gps_startup_rejected reason:"simulate"` shows the startup gate correctly excluded simulated fixes for readiness, but `route_probe acceptedForTrigger:true` still processed them and fired zone triggers. Baptiste pocketed the phone, the simulation replay timer stopped (JS timer, screen-off), and the walk paused for 26 minutes. On unlock a single out-of-sequence waypoint teleported the simulated position ≈3km away (the "GPS went haywire / m'a envoyé n'importe où"), then the session crashed and resumed.
+
+**Fix:** reset simulate mode flag to OFF on every fresh session start (not inherited from localStorage). Add a persistent visible "SIMULATION ACTIVE" banner in devmode. Unify route_probe and startup gate: if startup gate rejects simulate fixes, route_probe should also not advance zones from them unless simulation is explicitly active for this session.
+
+**Note on simulation design:** simulation is foreground-only (user drags map marker → position injected). Screen-lock stopping positions is expected behavior, not a bug. The issue is the stale state, not the timer.
+
+### New bug — real GPS runs concurrently with simulation and can override it
+
+Baptiste, 06/06/2026: in simulation mode, real GPS position fires alongside and overrides simulated positions. When simulate is active, `source:"raw"` fixes still arrive and are processed by route_probe — whichever fix is most recent wins zone triggering. **Fix:** route_probe (or the fix dispatcher) should discard `source:"raw"` fixes while simulate mode is active.
+
+### New issue — launcher blocks at first launch via WiFi tethering (no cached zip)
+
+Magalie, 04/06/2026: fresh-install phones (no cached zip) blocked at splash with "Veuillez connecter à internet" when connected via WiFi hotspot from another 4G phone. Same devices work on normal WiFi and direct 4G. No telemetry (phones never reached the server).
+
+Most likely causes: (1) double-NAT stack (Android hotspot → operator CG-NAT) causes silent connection timeout; (2) IPv6/IPv4 mismatch — French 4G hotspots often provide IPv4 only to clients while the server may have AAAA record; (3) timing — hotspot is up before the tethering phone's 4G connection is re-established (~15s window).
+
+**Fix (launcher):** retry server connectivity check with backoff (5s → 15s → 30s) before showing the error; add "Réessayer" button; surface a more specific message. Long-term: launch from cached zip when available, even without network.
+
+### H1 ExoPlayer — partially confirmed
+
+`8giw` (SM-A515F / Android 13, 21-min 12-step walk): 40 `audio_uri_resolved` = `backend:'exoplayer'`, 0 errors. Loan-phone second confirmation still needed before retiring Howler.
+
+### GPS healthy on Android — no OEM kill, no Doze activation
+
+`8giw`: 211 real fixes, avgAcc=7m, max freshness gap=80s (two auto-recovered stream pauses), 0 blackouts. AlarmManager Doze backup (`alarm_wake_stats count=0`) never activated. Architecture D (`fusedAvailable=false` on this dev ROM) was not exercised.
+
+### `accuracy_near_border` calibration data collected
+
+300 events from `8giw` (all 12 steps). p50=−9m, p75=−3m, p95=+3.2m. Useful baseline but avgAcc=7m only — need a session with avgAcc 20–30m before setting E1/E2/E3 thresholds.
+
+### SM-A415F LOW_MEMORY exits
+
+`cm3j` (Samsung A41, Android 12): two LOW_MEMORY exits in `last_exit_reasons`. No impact on 1-min walk; monitor on longer sessions.
+
+---
+
+## 2026-06-06 addendum — first iOS field validation + ExoPlayer decode regression
+
+**29 sessions (the day the 2026-06-05 round did not analyse).** iOS on **apk 27 / bg-geo 2.14.12**; all Android on **apk 23 / bg-geo 2.14.5**. Full report: [`docs/archive/20260606-IOS-GIVORS-V7-report.md`](docs/archive/20260606-IOS-GIVORS-V7-report.md).
+
+### 🔴 ExoPlayer decode regression — "H1 clean" disproven on a second device
+
+`y9ns` (SM-A528B / Galaxy A52s 5G, Android 14, GIVORS_V7_CBR) threw **38 `step_voice` playerrors**, all `backend=exoplayer` with native message `MediaCodecAudioRenderer error, index=1, format=Format(… audio/mpeg, 256000, [2, 44100]), format_supported=YES`. The format **is** supported → these are **runtime MediaCodec (hardware decoder) failures**, not bad files. **Transient** (10/17 files later played; 7× `audio_playerror_retry`) and **churn-correlated** (250 `audio_uri_resolved` for an 8-step segment → many concurrently-prepared `ExoPlayerInstance`s each holding a HW MP3 codec → pool exhaustion / reclaim). Same device + parcours `8bfn` (steps 8-16) was clean → driven by cold-start/high-churn, not the device or the files. **Visitor impact:** 3 blocs fell to afterplay (`step_voice_failed reason=playerror`) = silence-instead-of-narration. **8giw (the one "clean" test) was a single device + single parcours; the second-device confirmation the audit was waiting for is `y9ns`, and it failed. Howler retirement is POSTPONED; Howler stays the default fallback.** (See H1 row + open-items correction below.)
+
+### 🟢 First iOS field sessions — iOS native plan validated at configure level
+
+`5h9a` (onboarding) + `imug` (Test Dumas, 0 steps fired) on iPhone17,5 / iOS 26.5 / apk 27 / bg-geo 2.14.12:
+- **Motion saga field-resolved on the shipping build** — both iOS onboarding sessions **granted Motion on fresh install** (`imug`: `motion_check granted=true waited=501ms`). Confirms §14/§15 beyond the build-18 staff test `jtcv`.
+- **audio-simple iOS backend** (R25/I.B): 7 `audio_uri_resolved` all `backend=audio-simple`, 0 errors. **nowplaying** (J/R22): `nowplaying_setup`×2. **GPS rail configure** (H/R23, was dead code): `gps_rail_configured`×2. **ios_stream_health + cl_state** (R27/D6): 25 each. **CLVisit** (R26/L): `gps_visit_event`×1. iOS GPS healthy: 134 fixes, 0 gaps ≥90 s, avgAcc 4.8 m.
+- **Still NOT validated** (imug fired 0 steps — staff onboarding/GPS test, not a walk): full locked-pocket iOS walk with BLOC narration, **rail wake** during a real blackout (`gps_rail_wake`=0), iOS audio resume after kill, audio-simple under narration load.
+
+### Correction to the 2026-06-05 `checkbatteryopt` finding
+
+The deployed `checkbatteryopt` is **not** "a frozen screen with no exit." It renders tailored OEM/restricted/power-save copy and shows `Paramètres batterie` / `Paramètres fabricant` / `J'ai désactivé` after a ~15 s poll (`BATTOPT_MAX_ATTEMPTS=10 × 1500 ms`) and re-polls on resume/visibilitychange. The real defect: the gate is **un-skippable**, and `8aym` actually **passed it** (`battery_opt {ignoring:true}` at event 477/495, 42 s before session end) — it was stuck ~31 min *failing to grant* the exemption on HyperOS, then ran out of departure window. Fix per the operator's principle: keep it blocking, but after repeated failure surface an **explicit risk + informed "continuer quand même" + loan-phone guidance** for unfixable OEMs (do not silently skip, do not trap).
+
+### Correction (2) — `nlrc`'s 74-min stall was the GPS startup gate, not battery-opt
+
+The 2026-06-05 report attributes `nlrc` (Fairphone 4, Android 15, noon setup) to the battery block. The timeline disproves that: battery reached `ignoring:true` after each of its 3 onboarding restarts. The real blocker was the **GPS startup gate at `rdv`** — `nlrc` logged `gps_startup_rejected reason=accuracy` (and `stale`) **dozens of times across 74 min**, only momentarily reaching `READY`. The FP4 GPS is poor (avgAcc ~21 m, p95 114 m) and the gate (`geoloc.js`) requires `STARTUP_FIX_MAX_ACCURACY_M = 15` + 2 distinct fresh fixes (`STARTUP_SECOND_FIX_MIN_MOVEMENT_M = 8`, `STARTUP_FIX_MAX_AGE_MS = 12000`). A stationary, weak-GPS phone cannot clear a 15 m bar → it never leaves `rdv`. This is a **separate trap from battery-opt and arguably worse**: it hits *any* weak-GPS device, not just specific OEMs, and presents as the generic "En attente du GPS". It is the B4/R27 calibration item with field proof the gate is too strict. Fix direction: soften the accuracy gate and/or add a time-boxed best-effort fallback (after N s of trying, allow "départ" on the best fix obtained) so a weak-GPS walker isn't stranded.
+
+### Diagnostic gap — `route_probe` has no `source` field
+
+`fire`/`n8i1`/`xp3u` (HTC U11 sim) show real `rdv-warmup` GPS fixes coexisting with `simulate` fixes (Baptiste's "simulation uses real GPS"), but `route_probe` events don't tag the fix source, so sim-vs-real triggering can't be audited post-hoc. Add `source` to `route_probe` before/with the simulate-isolation fix.
+
+---
+
+### P0.3 (deferred) — launcher tethering connectivity: diagnose first, then fix
+
+**Decision:** do NOT add a launch-from-cache workaround; fix the real connectivity path. But it can't be picked blind — the failure produces no telemetry (the launcher beacon posts to the same unreachable server). So the first deliverable is **on-screen diagnostics**; the fix follows from what they show.
+
+**The check (FlanerieCordova `launcher.js` → `apputils.js`):** `onDeviceReady` → `app_prepare` → `fetchRemote('/update/info')` — a single `XMLHttpRequest`, `xhr.timeout = 12000`, **no retry** — then `app_run`. On a fresh install (no cached zip) a failed fetch dead-ends at the "Liaison internet nécessaire" screen; the real error only reaches `console.warn`, and `sendLauncherBeacon` can't escape the broken network.
+
+**Ranked hypotheses (tethering-specific, fresh install):**
+1. **DNS via the hotspot relay not up / fails** → instant `onerror` (status 0). Most common "works on 4G/WiFi, not tethering".
+2. **IPv6/IPv4 mismatch** — hotspots hand clients IPv4-only; if the host has an AAAA record and the resolver prefers it → unreachable v6 → `ontimeout`. (Server-side checkable now: does the host have an AAAA reachable over v4 from CG-NAT?)
+3. **Thundering herd during hotspot NAT setup** — all phones hit the single 12 s shot in the uplink-reestablish window → all fail; a 30 s retry succeeds. (Fits "3 of 4".)
+4. **TLS failure from a wrong clock** on a factory-fresh phone → `onerror` even though "internet works".
+5. **Double-NAT / MTU drop** of the TLS handshake → intermittent `ontimeout`.
+
+**Plan when picked up:**
+- On-screen failure detail (not console): stage (`info`/download/`app_run`), `onerror` vs `ontimeout`, URL, `navigator.onLine`, `connection.type`, device clock, model/platform — under "Réessayer".
+- Backoff retry before failing (5→15→30 s) — fixes #3 and transient #1/#5; safe to ship regardless.
+- Staged reachability probe to localize the fault: HTTP-to-host vs HTTPS-to-host vs HTTPS-to-IP-literal (bypasses DNS) → DNS vs TLS vs routing.
+- Queue the beacon (localStorage) to fire when any network returns, so the next failure is finally captured.
+- **Fast field narrowing:** on the next failure, open a browser on a blocked phone to `https://flanerie.bloffique-theatre.com` → loads / cert-warning / spins / can't-resolve eliminates 3 of the 5.
+
+### P0 fixes implemented (2026-06-06, post-analysis) — needs builds / field validation
+
+Webapp changes are live on the next deploy; the audio-simple change needs a plugin bump + container rebuild.
+
+- **P0.1 codec exhaustion** — `cordova-plugin-audio-simple`: new `ExoPlayerInstance.softwarePreferredRenderersFactory()` builds every player (and the `ExoPlayerService` silent keepalive) with a `MediaCodecSelector` that prefers **software** audio decoders + `setEnableDecoderFallback(true)`. SW MP3/WAV decode is not subject to the hardware codec-instance limit, so the `MediaCodecAudioRenderer` exhaustion is structurally removed. **Needs plugin version bump + container rebuild + on-device re-test (SM-A528B / GIVORS_V7)** before Howler retirement is reconsidered.
+- **P0.1 #4 churn** — `spot.js`: unload now requires being beyond `_unloadRadius` continuously for `UNLOAD_DEBOUNCE_MS=30000` (kills the zone load/unload thrash, e.g. Objet 1 ×74), and a load is skipped while one is already in flight (`loadState()` contains `'loading'`) — stops the offlimit reload-storm (a stuck load re-issued every GPS fix). Webapp-only.
+- **P0.1 telemetry** — `player.js` logs `native_error_code` (raw Media3 errorCode) on audio load/play errors. Webapp-only.
+- **P0.2 battery** — `checkbatteryopt` stays fully blocking; on `blocked:true` (OS suppresses the exemption dialog, e.g. HyperOS) it shows `#checkbatteryopt-blocked-help` = staff-help / loan-phone guidance (no skip — the exemption protects the locked-screen walk). Webapp-only.
+- **P0.2b GPS gate** — rdv: after `RDV_STARTUP_FALLBACK_MS=90000` failing the gate, `#rdv-startup-fallback` + `#rdv-force-start` ("Démarrer quand même", shows best accuracy) appear with loan-phone guidance; logs `gps_startup_fallback_offered`/`_used`; auto-hidden if GPS recovers. Webapp-only.
+- **P0.3 launcher** — deferred (diagnostics-first plan above); not implemented.
+
+Known follow-ups: `PlayerSimple` has no `hasError()`, so a *hard* loaderror on a zone/offlimit could still reload-storm (masked for now by P0.1 #1 + the in-flight guard); the load-churn root (≈250 resolves / 8 steps on GIVORS_V7) is reduced, not eliminated — why those zones overlap so heavily is a P1.5 follow-up.
+
 ---
 
 ## Telemetry events (current code)
 
 ### GPS / lifecycle
-`session_start`, `session_resume`, `session_restart_click`, `session_end`, `session_diag`, `parcours_restore`, `parcours_freshness_check`, `parcours_update_chosen`, `bg_geo_authorization`, `app_visibility`, `gps_lost`, `gps_recovered`, `gps_callback_gap`, `gps_state`, `gps_startup_fix`, `gps_startup_ready`, `gps_startup_rejected`, `real_callback_freshness` (30 s, includes `cl_state` + `ios_stream_health` on iOS and `alarm_wake_stats` + `location_dispatch_stats` on Android), `ios_power_state` (60 s iOS), `bg_restrictions_recheck` (5 min Android, includes `memory_info` + `standby_bucket`), `power_state_at_parcours` (now includes `auto_revoke_whitelisted` on Android), `alarm_wake_stats` (30 s Android, bg-geo v2.8.0 P0.5 Fix 1e diagnostic), `location_dispatch_stats` (30 s Android, bg-geo v2.9.0 Architecture D: `{fusedAvailable, rawDelivered, rawKeepalive, fusedDelivered, fusedSuppressed, fusedStaleIgnored, lastDeliveredSource}`), `gps_quality_summary` (flush summary including `freshSamples`, `staleSamples`, `startupGradeSamples`). Each `bg-geo` location event now carries `dispatch_source` ∈ `{raw, raw-keepalive, fused}` and `is_keepalive` on Android (`is_keepalive` already on iOS via F-G4).
+`session_start`, `session_resume`, `session_restart_click`, `session_end`, `session_diag`, `parcours_restore`, `parcours_freshness_check`, `parcours_update_chosen`, `bg_geo_authorization`, `app_visibility`, `gps_lost`, `gps_recovered`, `gps_callback_gap`, `gps_state`, `gps_startup_fix`, `gps_startup_ready`, `gps_startup_rejected`, `gps_startup_fallback_offered` / `gps_startup_fallback_used` (P0.2b — rdv time-boxed best-effort start after the startup gate can't be met; carry `waited_ms`, `last_accuracy`, `last_reason`), `real_callback_freshness` (30 s, includes `cl_state` + `ios_stream_health` on iOS and `alarm_wake_stats` + `location_dispatch_stats` on Android), `ios_power_state` (60 s iOS), `bg_restrictions_recheck` (5 min Android, includes `memory_info` + `standby_bucket`), `power_state_at_parcours` (now includes `auto_revoke_whitelisted` on Android), `alarm_wake_stats` (30 s Android, bg-geo v2.8.0 P0.5 Fix 1e diagnostic), `location_dispatch_stats` (30 s Android, bg-geo v2.9.0 Architecture D: `{fusedAvailable, rawDelivered, rawKeepalive, fusedDelivered, fusedSuppressed, fusedStaleIgnored, lastDeliveredSource}`), `gps_quality_summary` (flush summary including `freshSamples`, `staleSamples`, `startupGradeSamples`). Each `bg-geo` location event now carries `dispatch_source` ∈ `{raw, raw-keepalive, fused}` and `is_keepalive` on Android (`is_keepalive` already on iOS via F-G4).
 
 ### Step / parcours
 `step_fire`, `step_done`, `step_skip_done`, `step_implicit_done`, `step_audio_trigger` (carries `accuracy`, `consecutive_inside_samples`, `time_since_first_inside_ms`, `neighbor_distances`, `step_fire_latency_ms`), `step_resume_current`, `step_past_unload`, `step_voice_failed`, `step_afterplay_fallback`, `step_prewarm_next`, `parcours_store`, `accuracy_near_border` (when within 20 m), `voice_snapshot`, `voice_snapshot_skipped`, `user_lost`, `user_recovered`.
 
 ### Audio
-`audio_play_requested`, `audio_play_started` (carries `load_duration_ms`), `audio_play_gate`, `audio_play_timeout`, `audio_play_stuck`, `audio_play_stuck_retry`, `audio_play_timeout_self_healed`, `audio_loaderror`, `audio_playerror` (both carry `error_type` ∈ {not_found, network, decode_failed, src_unsupported, timeout, stuck}), `audio_uri_resolved`, `audio_playerror_retry`, `audio_engine_reset`, `audio_engine_reset_error`, `audiofocus_request_fail`, `audiofocus_keepalive_started`, `audiofocus_session_released`, `audio_route_changed`, `audio_session_state` (60 s). **Round 21:** `audio_uri_resolved` and `audio_loaderror`/`audio_playerror` now carry `backend` ∈ {`exoplayer`, `howler`, `howler-fallback`, `native`} so analyze.mjs can bucket post-rollout comparisons cleanly. On the ExoPlayer path the `error_code` 1–4 is derived natively from `PlaybackException.errorCode` (see `ExoPlayerInstance.mapToHowlerCode` — IO range → 2/4, parsing/decoder → 3, unknown → 4) so `classifyAudioErrorType()` in player.js produces the same `error_type` enum without changes.
+`audio_play_requested`, `audio_play_started` (carries `load_duration_ms`), `audio_play_gate`, `audio_play_timeout`, `audio_play_stuck`, `audio_play_stuck_retry`, `audio_play_timeout_self_healed`, `audio_loaderror`, `audio_playerror` (both carry `error_type` ∈ {not_found, network, decode_failed, src_unsupported, timeout, stuck} **and `native_error_code`** = the raw Media3 `PlaybackException.errorCode` on ExoPlayer, so DECODER_INIT_FAILED vs DECODING_RESOURCES_RECLAIMED is distinguishable — the mapped 1–4 `error_code` collapses both to 4/`src_unsupported`, which masked the 2026-06-06 codec-exhaustion failure), `audio_uri_resolved`, `audio_playerror_retry`, `audio_engine_reset`, `audio_engine_reset_error`, `audiofocus_request_fail`, `audiofocus_keepalive_started`, `audiofocus_session_released`, `audio_route_changed`, `audio_session_state` (60 s). **Round 21:** `audio_uri_resolved` and `audio_loaderror`/`audio_playerror` now carry `backend` ∈ {`exoplayer`, `howler`, `howler-fallback`, `native`} so analyze.mjs can bucket post-rollout comparisons cleanly. On the ExoPlayer path the `error_code` 1–4 is derived natively from `PlaybackException.errorCode` (see `ExoPlayerInstance.mapToHowlerCode` — IO range → 2/4, parsing/decoder → 3, unknown → 4) so `classifyAudioErrorType()` in player.js produces the same `error_type` enum without changes.
 
 ### Operator / rearm
 `rearm_button`, `rearm_pre_state`, `walk_end_shutdown`, `inter_session_idle_ms` (on `session_start`), `exoplayer_release_all` / `exoplayer_release_all_error` (Round 21; emitted before `audiofocus_session_released` in both walk-end A1 and rearm A3 paths so the ExoPlayer FG service ID 7375 tears down ahead of AudioFocusService ID 7374).
