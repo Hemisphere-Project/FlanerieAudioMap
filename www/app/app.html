@@ -57,9 +57,13 @@
 
 </head>
 <body>
+    <!-- P1.4 — persistent SIMULATION banner: toggled by GEO._updateSimulationBanner()
+         so a stale/forgotten simulate mode is never silent (Baptiste's ykvf ran a whole
+         "real GPS" test in simulation unknowingly). -->
+    <div id="simulation-banner" style="display:none; position:fixed; top:0; left:0; right:0; z-index:99999; background:#b00020; color:#fff; text-align:center; font-weight:bold; font-size:13px; padding:3px 0; pointer-events:none; letter-spacing:1px;">⚠ SIMULATION</div>
     <div id="app">
         <div id="map"></div>
-        
+
         <div id="title" class="page">
             Flanerie en paysage mobile
         </div>

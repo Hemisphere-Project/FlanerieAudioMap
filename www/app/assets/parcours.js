@@ -258,7 +258,8 @@ class Parcours extends EventEmitter {
             nextName: nextStep ? nextStep._spot.name : null,
             nextDistanceToBorder: nextStep ? nextStep.distanceToBorder(position) : null,
             nextDistanceToCenter: nextStep ? nextStep.distanceToCenter(position) : null,
-            gpsAccuracy: position && position.coords ? Math.round(position.coords.accuracy) : null
+            gpsAccuracy: position && position.coords ? Math.round(position.coords.accuracy) : null,
+            source: position ? (position.simulate ? 'simulate' : (position._source || 'unknown')) : null
         });
     }
 

@@ -1336,11 +1336,16 @@ PAGES['checkgeo'] = () => {
     // if (false) {
         checkGeo()
     }
-    else if (PARCOURS.geomode() == 'simulate') {
+    // DEVMODE auto-restore of the persisted geo mode applies ONLY to resume a walk
+    // already in progress (crash-resume convenience). A stale persisted 'simulate'
+    // with no walk in progress must NOT silently simulate a FRESH walk the dev meant
+    // to run on real GPS — that was Baptiste's ykvf "GPS s'emballé" (2026-06-05): a
+    // morning sim walk left geoMode='simulate', the afternoon "real" test inherited it.
+    else if (PARCOURS.geomode() == 'simulate' && PARCOURS.valid() && PARCOURS.currentStep() >= 0) {
         GEO.simulateGeoloc()
         PAGE('rdv')
     }
-    else if (PARCOURS.geomode() == 'gps') {
+    else if (PARCOURS.geomode() == 'gps' && PARCOURS.valid() && PARCOURS.currentStep() >= 0) {
         checkGeo()
     }
     else {

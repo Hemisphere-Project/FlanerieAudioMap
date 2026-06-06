@@ -788,6 +788,7 @@ class GeoLoc extends EventEmitter {
         let accuracyBucket = gpsAccuracyBucket(accuracy)
 
         telemetryMeta.source = source
+        position._source = source   // P1.4 — stamp so route_probe can tag sim-vs-real triggering
         telemetryMeta.visibility = visibility
         telemetryMeta.motionStationary = motionStationary
         if (callbackGapMs !== null) telemetryMeta.callbackGapMs = callbackGapMs
@@ -886,6 +887,16 @@ class GeoLoc extends EventEmitter {
                 }
                 // Still update lastPosition/lastTimeUpdate so callback telemetry
                 // and the visible map position reflect the incoming stream.
+            } else if (this.runMode === 'simulate' && !position.simulate) {
+                // P1.4 — in simulation mode, real GPS fixes (rdv-warmup / navigator /
+                // bg-geo keepalive) still arrive but must NOT drive triggering, else the
+                // real position "overrides" the simulated one (Baptiste 06/06). They
+                // still update lastPosition / startup readiness / telemetry below.
+                telemetryMeta.rejected = true
+                telemetryMeta.reason = 'real_fix_during_simulate'
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_trigger_rejected', {
+                    reason: 'real_fix_during_simulate', source: source, acc: accuracy, visibility: visibility
+                })
             } else {
                 this.emit('position', position);
             }
@@ -1029,9 +1040,20 @@ class GeoLoc extends EventEmitter {
         this._resetStartupReadiness();
 
         this.runMode = mode;
+        // P1.4 — visible SIMULATION banner so a stale/forgotten simulate mode is never
+        // silent (Baptiste's ykvf ran a whole "real GPS" test in simulation unknowingly).
+        this._updateSimulationBanner();
         this._forceReacquireCount = 0;
         this._lastForceReacquireTime = 0;
         this.setMap(this.map);
+    }
+
+    // P1.4 — show/hide the persistent SIMULATION banner based on runMode.
+    _updateSimulationBanner() {
+        try {
+            var b = document.getElementById('simulation-banner');
+            if (b) b.style.display = (this.runMode === 'simulate') ? 'block' : 'none';
+        } catch (e) {}
     }
 
     ready() {
@@ -1234,6 +1256,7 @@ class GeoLoc extends EventEmitter {
             catch (e) { console.warn('[GEO] stopGeoloc failed:', e); }
         }
         this.runMode = 'off';
+        this._updateSimulationBanner();
     }
 
     checkPosition() {
