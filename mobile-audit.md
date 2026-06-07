@@ -98,7 +98,8 @@ Each onboarding gate hard-blocks until its check passes.
 - **R26 iOS visit validation** — ✅ **validated** (`imug`): `gps_visit_event`×1 fired.
 - **Architecture D (Fused fallback) end-to-end** — `fusedAvailable=false` on the dev SM-A515F (GMS issue on this ROM). Not yet validated on any device. Need a GMS-enabled Android that experiences a real GPS gap.
 
-**Recommended next moves (post-GIVORS archive):**
+**Recommended next moves (post-2026-06-07 audit):**
+- **Next build is apk 28 (A):** `audio-simple` 0.3.4 with SW-preferred decoders is in the fork and installed in FlanerieCordova but has not been built. One `cordova build android` + TestFlight bump. The launcher HTML/JS changes (C, below) ride in the same container build. ExoPlayer Howler-retirement path opens once SM-A528B re-tests clean.
 - **Do not open new native scope before VILLEURBANNE.** The June 1 iOS GPS scope is now implemented; remaining blockers are build validation and threshold calibration, not missing code.
 - **Run one focused VILLEURBANNE validation pass with the minimum device set:** 1 iOS device (ideally 26.3.x or 26.4.x) and 1 loan-phone Android SM-A515F. Success criteria: startup-gate behaviour, B4/R27 `gps_state` histograms, E1/E2/E3 border-accuracy histograms, H1 ExoPlayer metrics, and `ios_stream_health` + `cl_state` present in one session set.
 - **Immediately after that data lands, ship one small threshold round:** calibrate B4/R27 `gps_state` cutovers (`acquiring` / `frozen` / `lost`) and E1/E2/E3 accuracy + sustain gates. Avoid unrelated refactors in the same round.
@@ -438,10 +439,42 @@ Webapp changes are live on the next deploy; the audio-simple change needs a plug
 - **P0.1 telemetry** — `player.js` logs `native_error_code` (raw Media3 errorCode) on audio load/play errors. Webapp-only.
 - **P0.2 battery** — `checkbatteryopt` stays fully blocking; on `blocked:true` (OS suppresses the exemption dialog, e.g. HyperOS) it shows `#checkbatteryopt-blocked-help` = staff-help / loan-phone guidance (no skip — the exemption protects the locked-screen walk). Webapp-only.
 - **P0.2b GPS gate** — rdv: after `RDV_STARTUP_FALLBACK_MS=90000` failing the gate, `#rdv-startup-fallback` + `#rdv-force-start` ("Démarrer quand même", shows best accuracy) appear with loan-phone guidance; logs `gps_startup_fallback_offered`/`_used`; auto-hidden if GPS recovers. Webapp-only.
-- **P0.3 launcher** — deferred (diagnostics-first plan above); not implemented.
+- **P0.3 launcher** — ✅ **partial (2026-06-07, container):** `fetchInfoWithRetry([5000, 15000, 30000])` retries the `/update/info` check up to 3× before proceeding; fixes the hotspot thundering-herd failure (hypothesis #3: 4G uplink not re-established before the single 12 s shot). On terminal failure `showLauncherError` surfaces stage + error kind (network/timeout) + `navigator.onLine` state + **"Réessayer"** button in `#launcher-detail`. The staged-reachability probe (DNS vs TLS vs routing) and beacon-queue remain as follow-up. **Needs container rebuild** (HTML + JS changes).
 - **P1.4 simulation hygiene** (webapp): (a) `geoloc.js` `_callbackPosition` no longer emits `'position'` for real fixes while `runMode==='simulate'` (logs `gps_trigger_rejected reason=real_fix_during_simulate`) → real GPS can't override the simulated position (Baptiste 06/06); (b) DEVMODE `checkgeo` auto-restores a persisted `geoMode` **only to resume a walk in progress** (`valid() && currentStep>=0`), so a stale `'simulate'` never silently simulates a fresh real-GPS walk (ykvf 2026-06-05); (c) a persistent **`#simulation-banner`** shows whenever `runMode==='simulate'`; (d) `route_probe` now carries `source` (sim vs real) — the diagnostic gap that made (a) un-auditable. Production GPS path unchanged (the gate is inert unless simulating; checkgeo change is DEVMODE-only).
 
-Known follow-ups: `PlayerSimple` has no `hasError()`, so a *hard* loaderror on a zone/offlimit could still reload-storm (masked for now by P0.1 #1 + the in-flight guard); the load-churn root (≈250 resolves / 8 steps on GIVORS_V7) is reduced, not eliminated — why those zones overlap so heavily is a P1.5 follow-up.
+Known follow-ups: ~~`PlayerSimple` has no `hasError()`~~ **fixed 2026-06-07** (one-liner added — Zone/Offlimit hard-loaderror protection now active); the load-churn root (≈250 resolves / 8 steps on GIVORS_V7) is reduced, not eliminated — why those zones overlap so heavily is a P1.5 follow-up.
+
+---
+
+## 2026-06-07 addendum — codebase audit + two webapp/container fixes
+
+Full-codebase audit against mobile-audit.md (webapp + FlanerieCordova + four forks). Awaiting next telemetry batch post-2026-06-06 deployment.
+
+### Audit findings
+
+- **All P0 webapp fixes confirmed live in source:** P0.1 churn (`UNLOAD_DEBOUNCE_MS`, in-flight guard), P0.2 battery blocked-help, P0.2b GPS fallback (`RDV_STARTUP_FALLBACK_MS=90000` + `#rdv-force-start`), P1.4 simulation hygiene.
+- **P0.1 SW-decoder fix confirmed in plugin source but not yet on any device:** `audio-simple` 0.3.4's `softwarePreferredRenderersFactory()` + `setEnableDecoderFallback(true)` are in `ExoPlayerInstance.java` (and applied to the `ExoPlayerService` silent player), installed in FlanerieCordova's plugins dir. No apk 28 yet — the fix reaches devices only after a container rebuild.
+- **Plugin versions in FlanerieCordova (confirmed):** bg-geo 2.14.12, audio-simple 0.3.4, audiofocus 1.9.1, power-opt 0.3.1.
+- **`PlayerSimple.hasError()` gap found and fixed** (see B below). Zone/Offlimit hard-loaderror reload protection was silently inert; the spot.js guard correctly used `typeof this.player.hasError === 'function'` but `PlayerSimple` never exposed the method — only `PlayerStep` did.
+- **P0.3 launcher backoff implemented** (see C below). Still open: staged-reachability probe, beacon queue.
+- **B4/R27 GPS startup gate still uncalibrated:** `STARTUP_FIX_MAX_ACCURACY_M=15` unchanged. The P0.2b 90 s force-start is a UI escape, not a gate fix. Calibration gates on VILLEURBANNE multi-device data.
+- **Architecture D Fused fallback** and **iOS locked-pocket walk** remain unvalidated (no field data yet).
+- **Dual AVAudioSession** (audiofocus + audio-simple both call `setActive` on iOS): acknowledged redundancy, intentional until audio-simple iOS is fully validated as sole owner.
+- **bg-geo `MOTIONDBG` verbose NSLogs** (added v2.14.8 for the motion saga): still in native code. Cosmetic; strip in a future pass once the saga is fully confirmed closed.
+
+### B — `PlayerSimple.hasError()` [SAFE-TODAY, webapp]
+
+Added `hasError() { return !!this._loadError }` to `PlayerSimple` (player.js). The existing guard in `spot.js:305` (`typeof this.player.hasError === 'function' && this.player.hasError()`) was always `false` for Zone and Offlimit players (they use `PlayerSimple`, not `PlayerStep`). With this fix, a hard loaderror on a Zone or Offlimit player correctly suppresses reload attempts via the `hasError` branch, in addition to the in-flight guard from P0.1. One-liner, no native dependency.
+
+### C — Launcher backoff retry + error detail [SAFE-TODAY, container]
+
+**`FlanerieCordova/www/launcher.js`** — new `fetchInfoWithRetry([5000, 15000, 30000])` wraps the `/update/info` XHR: on failure it waits 5 s, retries; on second failure waits 15 s, retries; on third failure waits 30 s, retries; only then rejects. Total: 4 attempts, up to 50 s. Addresses hypothesis #3 (thundering-herd on hotspot — all phones hit the single 12 s shot before the upstream 4G link is ready; a 30 s wait clears it). New `showLauncherError(stage, err)` replaces the bare `element.style.display='block'` calls: populates `#launcher-error-msg` with stage + error kind (network / délai dépassé) + `navigator.onLine` state, then surfaces `#launcher-detail` with a **"Réessayer"** button (`window.location.reload()`).
+
+**`FlanerieCordova/www/index.html`** — added `#launcher-detail` section inside `#launcherOne` (after `#deviceoffline`): a `#launcher-error-msg` span + styled "Réessayer" button (purple `#6F3CFF`, hidden until an error fires).
+
+**Still open (P0.3 remainder):** staged-reachability probe (HTTP vs HTTPS-to-host vs HTTPS-to-IP-literal to localize DNS/TLS/routing), beacon queue to localStorage (so the next failure finally reaches the server). These need a real tethering-failure capture to verify.
+
+**Needs container rebuild** (apk 28) to reach devices — rides alongside the audio-simple 0.3.4 SW-decoder build.
 
 ---
 

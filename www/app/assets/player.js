@@ -582,6 +582,10 @@ class PlayerSimple extends EventEmitter
         return this.loadState() === 'loaded' || (this._media && this._media.src == '-')
     }
 
+    hasError() {
+        return !!this._loadError
+    }
+
     _logAudioTelemetry(type, error, extra = {}) {
         let src = this._src()
         // C1 — extract a numeric code first (MediaError on iOS, Howler errors on
