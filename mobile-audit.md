@@ -410,25 +410,27 @@ The 2026-06-05 report attributes `nlrc` (Fairphone 4, Android 15, noon setup) to
 
 ---
 
-### P0.3 (deferred) — launcher tethering connectivity: diagnose first, then fix
+### P0.3 — launcher tethering connectivity: ROOT CAUSE FOUND (2026-06-07) = server AAAA / IPv6
 
-**Decision:** do NOT add a launch-from-cache workaround; fix the real connectivity path. But it can't be picked blind — the failure produces no telemetry (the launcher beacon posts to the same unreachable server). So the first deliverable is **on-screen diagnostics**; the fix follows from what they show.
+**SOLVED — it was hypothesis #2 (IPv6/IPv4 mismatch), field-confirmed on an iPhone.** Repro: iPhone joined a **4G phone's WiFi hotspot** → launcher blocks at "Liaison internet nécessaire", **retries did NOT help**, then **switching to domestic WiFi worked immediately**. On the same tethered connection, **Brave browser reached `flanerie.bloffique-theatre.com` fine**.
 
-**The check (FlanerieCordova `launcher.js` → `apputils.js`):** `onDeviceReady` → `app_prepare` → `fetchRemote('/update/info')` — a single `XMLHttpRequest`, `xhr.timeout = 12000`, **no retry** — then `app_run`. On a fresh install (no cached zip) a failed fetch dead-ends at the "Liaison internet nécessaire" screen; the real error only reaches `console.warn`, and `sendLauncherBeacon` can't escape the broken network.
+**Root cause:** the server publishes **both** an A record (`185.125.27.88`) **and an AAAA record (`2001:1600:4:11::63b`)**. Both are reachable from a real dual-stack network (verified: HTTPS 200 over each). French 4G carriers run NAT64/DNS64; a 4G-tethered client gets an environment where the resolver returns the AAAA and iOS (RFC 6724) **prefers IPv6**, but the IPv6 route doesn't exist for the tethered client → connection fails. **The Cordova WebView XHR does not perform the aggressive Happy-Eyeballs A/AAAA fallback that Brave's Chromium stack does**, so it fails hard and **identically on every retry** (which is why backoff didn't help). Domestic WiFi has a working/clean path → success. This is NOT a timing race (#3) — that's why the retry round we shipped first didn't fix it (kept, still useful for transient cases).
 
-**Ranked hypotheses (tethering-specific, fresh install):**
-1. **DNS via the hotspot relay not up / fails** → instant `onerror` (status 0). Most common "works on 4G/WiFi, not tethering".
-2. **IPv6/IPv4 mismatch** — hotspots hand clients IPv4-only; if the host has an AAAA record and the resolver prefers it → unreachable v6 → `ontimeout`. (Server-side checkable now: does the host have an AAAA reachable over v4 from CG-NAT?)
-3. **Thundering herd during hotspot NAT setup** — all phones hit the single 12 s shot in the uplink-reestablish window → all fail; a 30 s retry succeeds. (Fits "3 of 4".)
-4. **TLS failure from a wrong clock** on a factory-fresh phone → `onerror` even though "internet works".
-5. **Double-NAT / MTU drop** of the TLS handshake → intermittent `ontimeout`.
+**The fix is two-part:**
 
-**Plan when picked up:**
-- On-screen failure detail (not console): stage (`info`/download/`app_run`), `onerror` vs `ontimeout`, URL, `navigator.onLine`, `connection.type`, device clock, model/platform — under "Réessayer".
-- Backoff retry before failing (5→15→30 s) — fixes #3 and transient #1/#5; safe to ship regardless.
-- Staged reachability probe to localize the fault: HTTP-to-host vs HTTPS-to-host vs HTTPS-to-IP-literal (bypasses DNS) → DNS vs TLS vs routing.
-- Queue the beacon (localStorage) to fire when any network returns, so the next failure is finally captured.
-- **Fast field narrowing:** on the next failure, open a browser on a blocked phone to `https://flanerie.bloffique-theatre.com` → loads / cert-warning / spins / can't-resolve eliminates 3 of the 5.
+1. **Server (DNS) — the real fix, no rebuild, reaches all deployed phones:** **remove the AAAA record** for `flanerie.bloffique-theatre.com`. All clients then resolve only the A record and use IPv4, which routes everywhere (including 4G tethering). Downside is negligible — dual-stack clients fall back to IPv4 anyway, and the app gains nothing from IPv6. **This is the action that actually unblocks tethered fresh installs.** ⏳ *Owner: operator DNS change.*
+2. **Client (launcher diagnostics) — ✅ shipped 2026-06-07, needs container rebuild:** so a future network failure is self-diagnosing instead of a black box. `gatherNetDiag()` adds `{online, conn_type, conn_effective, downlink, clock}` to **every** beacon. On terminal failure `reportConnectivityFailure()` runs a cache-busted `/version` re-probe via `probeUrl()` (resolves `{ok, status, kind∈ok/http_error/neterror/timeout/exception, elapsed_ms}`) and queues a **`connectivity_failed`** beacon. The IPv6 fingerprint to look for: `net.online=true` + `probe_host.kind=neterror` (host unreachable while the device thinks it's online), correlated with "works on domestic WiFi." Combined with the beacon queue (above), the failure now reaches the server on the next successful launch. **Note:** an IP-literal probe to bypass DNS is NOT useful in a WebView XHR (hostname TLS cert won't validate against an IP, and the CSP `connect-src` wildcard wouldn't cover it) — host probe + error-kind is the signal.
+
+**Still open (P0.3 remainder, low priority once AAAA is dropped):** the staged HTTP-vs-HTTPS-vs-external-host probe to fully localise DNS-vs-TLS-vs-routing (CSP-constrained); a cross-origin reachability check to separate "no internet" from "can't reach our host" (needs CSP additions). Not needed if the AAAA removal holds.
+
+**Original ranked hypotheses (for the record — #2 won):**
+1. DNS via the hotspot relay not up → instant `onerror`.
+2. **IPv6/IPv4 mismatch ✅ CONFIRMED** — host has an AAAA, tethered client can't route v6, WebView won't fall back.
+3. Thundering herd during hotspot NAT setup → a 30 s retry succeeds. (Disproven here: retries didn't help.)
+4. TLS failure from a wrong clock → `onerror`. (`clock` now in the diag if it recurs.)
+5. Double-NAT / MTU drop of the TLS handshake → `ontimeout`.
+
+**Fast field narrowing (still valid):** on a blocked phone open a browser to `https://flanerie.bloffique-theatre.com` → it loads (as observed) ⇒ DNS+TLS+server fine, the fault is IPv6 routing + WebView fallback ⇒ AAAA removal is the fix.
 
 ### P0 fixes implemented (2026-06-06, post-analysis) — needs builds / field validation
 
@@ -470,11 +472,13 @@ Added `hasError() { return !!this._loadError }` to `PlayerSimple` (player.js). T
 
 **`FlanerieCordova/www/launcher.js`** — new `fetchInfoWithRetry([5000, 15000, 30000])` wraps the `/update/info` XHR: on failure it waits 5 s, retries; on second failure waits 15 s, retries; on third failure waits 30 s, retries; only then rejects. Total: 4 attempts, up to 50 s. Addresses hypothesis #3 (thundering-herd on hotspot — all phones hit the single 12 s shot before the upstream 4G link is ready; a 30 s wait clears it). New `showLauncherError(stage, err)` replaces the bare `element.style.display='block'` calls: populates `#launcher-error-msg` with stage + error kind (network / délai dépassé) + `navigator.onLine` state, then surfaces `#launcher-detail` with a **"Réessayer"** button (`window.location.reload()`).
 
-**`FlanerieCordova/www/index.html`** — added `#launcher-detail` section inside `#launcherOne` (after `#deviceoffline`): a `#launcher-error-msg` span + styled "Réessayer" button (purple `#6F3CFF`, hidden until an error fires).
+**`FlanerieCordova/www/index.html`** — added a `#launcher-error-msg` paragraph (shown during retries with a "Reconnexion en cours (n/3)…" counter, and on terminal failure with the error detail) + a `#launcher-detail` section with the "Réessayer" button (purple `#6F3CFF`, `window.location.reload()`), both hidden until first failure.
 
-**Still open (P0.3 remainder):** staged-reachability probe (HTTP vs HTTPS-to-host vs HTTPS-to-IP-literal to localize DNS/TLS/routing). The beacon queue is now in — see above.
+**Beacon queue + connectivity diagnostics (added same round):** `sendLauncherBeacon` now also `queueBeacon()`s every payload to `localStorage` (`launcher_beacon_queue`, cap 20); `flushBeaconQueue()` drains it the moment the info fetch succeeds. `gatherNetDiag()` adds `{online, conn_type, conn_effective, downlink, clock}` to every beacon. On terminal failure `reportConnectivityFailure()` re-probes `/version` (cache-busted) via `probeUrl()` and queues a **`connectivity_failed`** beacon — so the failure that previously vanished (beacon posted to the same unreachable server) now reaches the server on the next successful launch.
 
-**Needs container rebuild** (apk 28) to reach devices — rides alongside the audio-simple 0.3.4 SW-decoder build.
+**ROOT CAUSE FOUND same day (see the P0.3 section above):** the tethering failure is the **server's AAAA / IPv6 record** being unroutable from 4G-tethered clients while the WebView XHR won't fall back to IPv4 (Brave does). Field-confirmed on an iPhone. **The actual fix is server-side: drop the AAAA record (operator DNS change, no rebuild, fixes all deployed phones).** The launcher retry/queue/diagnostics here are belt-and-braces + future-proofing, NOT the cure for this specific bug.
+
+**Needs container rebuild** (apk 28) to reach devices — rides alongside the audio-simple 0.3.4 SW-decoder build. The AAAA removal is independent and immediate.
 
 ---
 
