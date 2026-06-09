@@ -137,3 +137,21 @@ This is the **single most important item for VILLEURBANNE** and likely a launch 
 ---
 
 *Generated from telemetry (`telemetry:analyze` + per-session drill-downs, 48 sessions). Tester UX feedback pending — will refine "experienced vs caught-up" notes when it arrives.*
+
+---
+
+## Fixes shipped (2026-06-09, post-report) — code in tree, awaiting apk 29 + re-test
+
+Mechanism confirmed in source: the ExoPlayer/audio-simple migration moved the silent keepalive **native**, so no in-renderer Web Audio context keeps the Chromium renderer scheduled → Android freezes the JS loop locked-in-pocket (also why telemetry truncates at ~1 min — the flush timer is JS).
+
+**Android JS-suspension P0 — keepalive, all three levers:**
+- **Lever 1 [webapp, live]** — `RENDERER_KEEPALIVE` plays the silent `flanerie.mp3` through Howler `html5:false` (in-renderer Web Audio) for the walk; Android-gated; `poke()` on visibility. Restores the property the Howler era had for free.
+- **Lever 2 [container]** — `KeepRunning=true` in `config.xml`.
+- **Lever 3 [native, power-opt 0.3.2 PO-10]** — `setRendererPriorityPolicy(IMPORTANT, waivedWhenNotVisible=false)`, toggled on the parcours lifecycle.
+- Levers 2–3 need **apk 29**. Validate with the desk test (lock screen 15 min, confirm `real_callback_freshness` every 30 s + `renderer_keepalive`) then the backpack re-test.
+
+**18-phones telemetry-tracking gap — same root cause, NOT the GL.iNet/no-SIM network.** Census: ~17–19 phones reached the server (≈18); the gap was *truncation* (8 Android walks stop at ~60 s) from the JS freeze, not missing phones. AAAA/IPv6 already dropped (A-record only), zero `connectivity_failed`. Robustness shipped anyway: durable `telemetry_pending` buffer (re-sent next launch) + `fetch` abort timeout.
+
+**Five follow-up fixes [webapp/analyzer]:** (#1) `is_loan` auto-set on first devmode entry, manual toggle removed; (#2) analyzer "Device re-use" now groups by `deviceUuid` (revealed the "SM-A515F ×6" = 6 distinct phones); (#3) iOS static-scene "GPS LOST" = the `frozen` indicator firing before CMMotionActivity catches up — escalation now debounced behind `GPS_FROZEN_SUSTAIN_MS` so narration isn't interrupted; (#4) `checkaudio` single retry + `backend`/`native_error_code` now logged; (#5) devmode restart now releases native audio before reload.
+
+Full detail: `mobile-audit.md` → 2026-06-09 addendum (fix-plan + "Follow-up fixes").
