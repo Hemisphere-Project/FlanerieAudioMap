@@ -531,6 +531,14 @@ Five issues raised post-test. All webapp/tooling:
 4. **Loan-device identity [webapp, pages.js/telemetry.js].** Removed the manual `is_loan` devmode toggle; `is_loan` is now **auto-set + persisted the first time a phone enters devmode** (`loan_auto_marked`) — visitors' BYOD phones never see devmode, so this cleanly tags the staff/loan fleet. (Decision: aggregate by the existing auto-UUID; no custom human label.)
 5. **Telemetry aggregation by physical phone [analyzer, analyze.mjs].** "Device re-use" now groups by **`deviceUuid`** (was by model), with a per-device rollup (loan / completed / frozen-min / step_voice errors / resumes). Confirmed on 2026-06-09 data: the "SM-A515F ×6" line was **6 distinct physical phones**, now shown individually.
 
+### "Telemetry didn't track all 18 backpack phones" — diagnosis + robustness fixes
+
+**Diagnosis: it is the Android JS-suspension (above), not the network.** The tester walked 18 phones (all SIM-less, internet via a GL.iNet 4G travel router). Telemetry census: ~17–19 distinct phones *did* reach the server (consistent with 18) — phones weren't missing, their sessions were **truncated**. 8 backpack Android walks stop at ~60 s (last event = the 60 s flush; `app_visibility:background` ~10 s in; the 30 s JS heartbeat fires only twice then stops) — the WebView JS froze in the bag, and since the flush timer is JS, **delivery stopped**. The full 49–56 min sessions are the same freeze but their JS resumed (bag opened) and flushed. Ruled out network: every phone delivered `session_diag` + its first minute (connectivity worked at start), **zero `connectivity_failed` beacons**, and the server now publishes **only the A record — the AAAA/IPv6 record is already dropped** (the `launcher-ipv6-tethering` fix is live), so NAT64/4G-tethering is not in play. → The keepalive fix (levers 1–3) fixes telemetry tracking too: keep JS scheduled → the 30 s flush keeps running → all phones deliver continuously.
+
+**Robustness fixes shipped anyway (webapp, telemetry.js) so telemetry survives a freeze/offline phone:**
+6. **Durable pending buffer** — undelivered events are persisted to `localStorage` (`telemetry_pending`) on flush-failure and on `visibilitychange`-hidden, and **re-sent on the next launch** (`_drainPending`, posted under the original `sessionId`) instead of dying with the app. A clean `end()` clears it (no re-send of completed sessions); a `savedAt` guard avoids wiping the live session's pending. Recovers an offline/killed phone's data (the launcher already had this via its beacon queue; the walk telemetry didn't).
+7. **Flush POST timeout** — `_postTelemetry` now wraps native `fetch` in an `AbortController` (`POST_TIMEOUT_MS=12000`, < the 30 s interval) so a stalled shared-uplink connection fails fast and the buffer is retained for the next interval instead of hanging indefinitely (no default `fetch` timeout).
+
 ---
 
 ## Telemetry events (current code)

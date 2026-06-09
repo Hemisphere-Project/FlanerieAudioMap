@@ -25,6 +25,9 @@ var TELEMETRY = (function() {
     var BUFFER_CAP = 500;
     var PRE_BUFFER_CAP = 120;   // cap for pre-session stash (onboarding burst)
     var STORAGE_KEY = 'telemetry_session';
+    var PENDING_KEY = 'telemetry_pending';  // durable copy of undelivered events (survives app kill/freeze)
+    var POST_TIMEOUT_MS = 12000;            // bound a flush POST so a stalled uplink fails fast (< FLUSH_INTERVAL)
+    var _pendingDrained = false;            // re-send leftover events once per app launch
     var RESUME_MAX_AGE = 4 * 60 * 60 * 1000;
     var SCHEMA_VERSION = 2;
 
@@ -182,6 +185,70 @@ var TELEMETRY = (function() {
         }));
     }
 
+    // Durable telemetry buffer. Persists UNDELIVERED events to localStorage so a
+    // phone killed or frozen mid-walk (Android WebView suspension, or an app kill
+    // on a flaky shared router) re-sends them on the next launch instead of
+    // losing them. Kept in sync by flush() (success → leftover; failure →
+    // retained) and the visibility-hidden handler. A clean end() clears it, so
+    // only an abnormal death leaves it populated. mobile-audit.md 2026-06-09.
+    function _persistPending(events) {
+        try {
+            if (!sessionId || !events || events.length === 0) { localStorage.removeItem(PENDING_KEY); return; }
+            var slice = events.length > BUFFER_CAP ? events.slice(-BUFFER_CAP) : events;
+            localStorage.setItem(PENDING_KEY, JSON.stringify({
+                sessionId: sessionId,
+                parcoursId: parcoursId,
+                parcoursName: parcoursName,
+                schemaVersion: SCHEMA_VERSION,
+                client: sessionMeta,
+                events: slice,
+                savedAt: Date.now()
+            }));
+        } catch (e) { /* localStorage full / unavailable — best effort */ }
+    }
+
+    // On launch, re-send the leftover events of a session that didn't close
+    // cleanly. Posted under the ORIGINAL sessionId so the server appends them to
+    // the right session file. Runs once per app launch; non-blocking.
+    function _drainPending() {
+        if (_pendingDrained) return;
+        _pendingDrained = true;
+        if (typeof PLATFORM !== 'undefined' && PLATFORM === 'browser') return;
+        var raw;
+        try { raw = localStorage.getItem(PENDING_KEY); } catch (e) { return; }
+        if (!raw) return;
+        var rec;
+        try { rec = JSON.parse(raw); } catch (e) { try { localStorage.removeItem(PENDING_KEY); } catch (_) {} return; }
+        if (!rec || !rec.sessionId || !rec.events || !rec.events.length) {
+            try { localStorage.removeItem(PENDING_KEY); } catch (e) {}
+            return;
+        }
+        var url = (typeof prep === 'function') ? prep('/telemetry-push') : '/telemetry-push';
+        console.log('[TELEMETRY] draining', rec.events.length, 'pending events from prior session', rec.sessionId);
+        _postTelemetry(url, {
+            sessionId: rec.sessionId,
+            parcoursId: rec.parcoursId,
+            parcoursName: rec.parcoursName,
+            schemaVersion: rec.schemaVersion || SCHEMA_VERSION,
+            client: rec.client,
+            events: rec.events
+        }).then(function (response) {
+            if (response && response.status === 200) {
+                // Only clear if the live session hasn't overwritten PENDING with
+                // newer data in the meantime (drain POST is async).
+                try {
+                    var cur = JSON.parse(localStorage.getItem(PENDING_KEY) || 'null');
+                    if (!cur || cur.savedAt === rec.savedAt) localStorage.removeItem(PENDING_KEY);
+                } catch (e) {}
+                console.log('[TELEMETRY] pending drain OK');
+            } else {
+                console.warn('[TELEMETRY] pending drain HTTP', response && response.status, '(will retry next launch)');
+            }
+        }).catch(function (e) {
+            console.warn('[TELEMETRY] pending drain failed (will retry next launch):', (e && e.message) || String(e));
+        });
+    }
+
     // A5 — persistent device identity. UUID is generated once per app install and
     // never rotated; lets analyze.mjs tell "Xiaomi 2201117TY used twice" apart
     // from "two different visitors' phones that share a model number" (GIVORS
@@ -259,12 +326,26 @@ var TELEMETRY = (function() {
         var hasNativeFetch = typeof fetch === 'function';
         var transport = hasNativeFetch ? fetch : fetchRemote;
         console.log('[TELEMETRY] transport:', hasNativeFetch ? 'fetch' : 'fetchRemote');
-        return transport(url, {
+        var opts = {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
             redirect: 'follow'
-        });
+        };
+        // Bound the request: a stalled uplink (saturated shared router, half-open
+        // connection, NAT black-hole) otherwise hangs `fetch` indefinitely (no
+        // default timeout), so the buffer is neither delivered nor freed for the
+        // next interval. AbortController fails it fast → flush() retains + retries.
+        if (hasNativeFetch && typeof AbortController === 'function') {
+            var ctrl = new AbortController();
+            opts.signal = ctrl.signal;
+            var to = setTimeout(function () { try { ctrl.abort(); } catch (e) {} }, POST_TIMEOUT_MS);
+            return transport(url, opts).then(
+                function (r) { clearTimeout(to); return r; },
+                function (e) { clearTimeout(to); throw e; }
+            );
+        }
+        return transport(url, opts);
     }
 
     function _generateId() {
@@ -277,6 +358,7 @@ var TELEMETRY = (function() {
 
     function start(pId, pName, options) {
         try {
+            _drainPending();   // re-send any leftover events from a session killed/frozen before this launch
             options = options || {};
             // options.extra (object): merged into the session_start/resume payload.
             // Used by the parcours page to attach restored state (resume_seek_pos,
@@ -374,6 +456,7 @@ var TELEMETRY = (function() {
     // endOnboarding() closes it right before the walk session starts.
     function startOnboarding(pId, pName) {
         try {
+            _drainPending();   // onboarding usually opens first — recover a prior session's leftover here
             pId = pId || '';
             // Don't clobber a resumable WALK session (mid-walk crash resume for this
             // same parcours): the walk page must still be able to resume it. A stored
@@ -498,11 +581,13 @@ var TELEMETRY = (function() {
             }).then(function(r) {
                 sessionHasFlushed = true;
                 _writeStored();
+                _persistPending(buffer);   // delivered events are gone; persist any that arrived mid-POST (usually clears)
                 console.log('[TELEMETRY] flush OK:', r);
                 return { ok: true, responseText: r };
             }).catch(function(e) {
                 buffer = events.concat(buffer);
                 if (buffer.length > BUFFER_CAP) buffer = buffer.slice(-BUFFER_CAP);
+                _persistPending(buffer);   // delivery failed — keep undelivered events on disk for next-launch drain
                 console.warn('[TELEMETRY] flush FAILED:', (e && e.message) ? e.message : String(e));
                 return { ok: false, skipped: false, error: (e && e.message) ? e.message : String(e) };
             });
@@ -519,6 +604,10 @@ var TELEMETRY = (function() {
             _log('session_end', opts.data || {});
             if (flushTimer) { clearInterval(flushTimer); flushTimer = null; }
             localStorage.removeItem(STORAGE_KEY);
+            // Clean close — drop the durable pending copy so a completed session
+            // is never re-sent on the next launch (the final batch goes via
+            // _flushFinal/sendBeacon below).
+            try { localStorage.removeItem(PENDING_KEY); } catch (e) {}
             // F-R1 — stamp when this session ended so the next session_start can
             // log inter_session_idle_ms. Lets analyze.mjs correlate P7 (silent
             // audio on loan-phone re-arm) with time-since-last-walk: if the
@@ -562,7 +651,13 @@ var TELEMETRY = (function() {
     // Flush on page hide / unload (mobile: visibilitychange is more reliable)
     try {
         document.addEventListener('visibilitychange', function() {
-            if (document.visibilityState === 'hidden' && sessionId) flush();
+            if (document.visibilityState === 'hidden' && sessionId) {
+                // Persist synchronously BEFORE the async flush: going hidden is the
+                // moment right before a backpack freeze / OS renderer kill, so get
+                // the buffer onto disk even if the in-flight flush never resolves.
+                _persistPending(buffer);
+                flush();
+            }
         });
         window.addEventListener('beforeunload', function() {
             if (sessionId) _flushFinal();
