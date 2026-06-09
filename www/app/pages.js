@@ -3329,6 +3329,10 @@ DEFAULT_AFTERPLAY_PLAYER.on('play', () => {
 
 // RESUME cue: short one-shot played on app relaunch so the walker hears
 // something while GPS warms up / they walk back into the active zone.
+// PAUSED FEATURE (decided 2026-06-09): not in use yet — no resume.mp3 is
+// bundled, so isLoaded() is false and every call site no-ops (the play sites
+// are isLoaded()-guarded). The player stays wired so re-enabling is a one-file
+// drop (images/resume.mp3) with no code change. Do not treat as "shipped".
 // Silently silent if images/resume.mp3 isn't bundled.
 var RESUME_PLAYER = new PlayerSimple(false, 0);
 RESUME_PLAYER.load(BASEURL+'/images/', {src: 'resume.mp3', master: 1}, false);

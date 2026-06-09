@@ -399,21 +399,38 @@ app.post('/telemetry-push', (req, res, next) => {
 
   const filePath = path.join(telemetryDir, safeId + '.json');
 
-  let session;
-  if (fs.existsSync(filePath)) {
-    session = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-  } else {
-    // Use first event's client timestamp for accurate startTime
-    const firstEventTime = validEvents[0].t;
-    session = {
+  // Fresh session skeleton — used for new sessions and as the recovery target
+  // when an existing file is unreadable/corrupt.
+  function freshSession() {
+    return {
       sessionId: safeId,
       parcoursId: parcoursId || '',
       parcoursName: parcoursName || '',
       schemaVersion: Number.isInteger(schemaVersion) ? schemaVersion : 1,
       client: (typeof client === 'object' && client !== null) ? client : {},
-      startTime: new Date(firstEventTime).toISOString(),
+      // Use first event's client timestamp for accurate startTime
+      startTime: new Date(validEvents[0].t).toISOString(),
       events: []
     };
+  }
+
+  let session;
+  if (fs.existsSync(filePath)) {
+    // Guard the read+parse. A non-atomic writer crash (OOM kill / deploy /
+    // power blip) can leave a truncated JSON file; without this guard every
+    // later POST for that session would throw 500, and the client would retry
+    // it forever from its durable buffer — permanently blackholing the walk.
+    // On corruption, quarantine the bad file and start fresh so ingest survives.
+    try {
+      session = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    } catch (e) {
+      const quarantine = filePath + '.corrupt-' + Date.now();
+      try { fs.renameSync(filePath, quarantine); } catch (re) {}
+      console.warn('[Telemetry] Corrupt session file for', safeId, '— quarantined to', path.basename(quarantine), '(', e.message, ')');
+      session = freshSession();
+    }
+  } else {
+    session = freshSession();
   }
 
   if (!session.parcoursId && parcoursId) session.parcoursId = parcoursId;
@@ -424,7 +441,19 @@ app.post('/telemetry-push', (req, res, next) => {
   }
 
   session.events = session.events.concat(validEvents);
-  fs.writeFileSync(filePath, JSON.stringify(session));
+  // Atomic write: a direct writeFileSync truncates the target in place, so a
+  // crash mid-write corrupts the session. Write to a temp file on the same
+  // filesystem, then rename (atomic on POSIX) so readers only ever observe a
+  // complete file.
+  const tmpPath = filePath + '.tmp-' + process.pid + '-' + Date.now();
+  try {
+    fs.writeFileSync(tmpPath, JSON.stringify(session));
+    fs.renameSync(tmpPath, filePath);
+  } catch (e) {
+    try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath); } catch (ce) {}
+    console.error('[Telemetry] Write failed for', safeId, ':', e.message);
+    return res.status(500).send('Write failed');
+  }
   console.log('[Telemetry] Saved', validEvents.length, 'events for session', safeId, '(total:', session.events.length + ')');
   res.status(200).send('OK');
 });
