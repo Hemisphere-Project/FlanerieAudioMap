@@ -920,6 +920,17 @@ class GeoLoc extends EventEmitter {
         // (bg-geo native callbacks that don't tag a source) IS real.
         if (source !== 'heartbeat' && source !== 'simulate' && source !== 'keepalive') {
             this.lastRealCallbackTime = Date.now();
+            // D1 (v2.15.0, Android) — JS-liveness heartbeat to the native
+            // watchdog. This dispatch only runs when the JS event loop is alive;
+            // when a locked-pocket walk freezes the renderer, these acks stop and
+            // the AlarmManager-backed watchdog escalates. Fire-and-forget; iOS
+            // errbacks (JS stays alive via the location bg-mode).
+            if (PLATFORM === 'android') {
+                let bgGeo = getBackgroundGeolocationPlugin()
+                if (bgGeo && typeof bgGeo.ackAlive === 'function') {
+                    try { bgGeo.ackAlive(function(){}, function(){}) } catch (e) {}
+                }
+            }
         }
         this._applySignalState(this._signalStateSnapshot(now))
         if (typeof TELEMETRY !== 'undefined') TELEMETRY.gps(position, telemetryMeta);

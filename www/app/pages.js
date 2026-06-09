@@ -308,6 +308,23 @@ PAGES_CLEANUP['parcours']           = () => {
             if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_rail_clear_error', { error: String(err) });
         });
     }
+
+    // D1/D2 (v2.15.0, Android): disarm the JS-liveness watchdog and tear down
+    // the geofence wake-rail when leaving the walk. Geofences persist at the OS
+    // level even after the app is killed, so clearing here (the iOS-rail mirror)
+    // prevents orphan wake-ups after the walk ends.
+    if (typeof PLATFORM !== 'undefined' && PLATFORM === 'android' && bgGeo) {
+        if (typeof bgGeo.setWalkActive === 'function') {
+            try { bgGeo.setWalkActive(false, function(){}, function(){}) } catch (e) {}
+        }
+        if (typeof bgGeo.clearAndroidRail === 'function') {
+            bgGeo.clearAndroidRail(function() {
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_rail_cleared', { platform: 'android' });
+            }, function(err) {
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_rail_clear_error', { error: String(err), platform: 'android' });
+            });
+        }
+    }
 };
 PAGES_CLEANUP['checknotifications'] = () => clearNotificationPermissionCheck();
 PAGES_CLEANUP['checkbatteryopt']    = () => clearBatteryOptCheck();
@@ -2588,6 +2605,15 @@ PAGES['parcours'] = async () => {
 
     SILENT_PLAYER.play(); // Play silent track to keep audio session alive
     RENDERER_KEEPALIVE.start(); // Android: keep the WebView JS loop scheduled (in-renderer Web Audio)
+    // D1 (v2.15.0, Android): arm the native JS-liveness watchdog for this walk.
+    // It escalates (renderer nudge → vibrate + recovery notification) only if
+    // the JS ack heartbeat stalls during an active walk. Disarmed at walk-end.
+    if (PLATFORM === 'android') {
+        let wdGeo = getBackgroundGeolocationPlugin();
+        if (wdGeo && typeof wdGeo.setWalkActive === 'function') {
+            try { wdGeo.setWalkActive(true, function(){}, function(){}) } catch (e) {}
+        }
+    }
     scheduleWakeupNotification();
     // The #gps-status / #gps-precision badges live in this page's DOM, so the
     // painter has to run here. checkgeo also starts it for its own gating, but
@@ -2668,6 +2694,36 @@ PAGES['parcours'] = async () => {
         } catch (e) {
             console.warn('[R23] computeGpsRail failed:', e);
             if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_rail_configure_error', { error: String(e) });
+        }
+    }
+
+    // D2 (v2.15.0, Android): register the geofence wake-rail — the Android
+    // analog of the iOS rail above, reusing the same computeGpsRail() geometry.
+    // A crossing wakes the process + re-asserts renderer priority so a frozen
+    // JS loop resumes and runs the polygon trigger. Wakeup-only (never audio).
+    let androidRailGeo = (typeof getBackgroundGeolocationPlugin === 'function') ? getBackgroundGeolocationPlugin() : null;
+    if (PLATFORM === 'android'
+        && androidRailGeo
+        && typeof androidRailGeo.configureAndroidRail === 'function'
+        && typeof computeGpsRail === 'function') {
+        try {
+            let rail = computeGpsRail(PARCOURS);
+            if (rail.length === 0) {
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_rail_configure_skipped', { reason: 'no_steps', platform: 'android' });
+            } else {
+                if (rail.length > 100) rail = rail.slice(0, 100); // Android geofence cap
+                androidRailGeo.configureAndroidRail(rail, function(count) {
+                    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_rail_configured', {
+                        region_count: count, rail_radius_m: 100, platform: 'android',
+                        step_count: PARCOURS && PARCOURS.spots && PARCOURS.spots.steps ? PARCOURS.spots.steps.length : 0,
+                    });
+                }, function(err) {
+                    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_rail_configure_error', { error: String(err), platform: 'android' });
+                });
+            }
+        } catch (e) {
+            console.warn('[D2] Android computeGpsRail failed:', e);
+            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_rail_configure_error', { error: String(e), platform: 'android' });
         }
     }
 
@@ -4038,6 +4094,26 @@ setInterval(() => {
             bgGeoAW.getLocationDispatchStats().then(function(stats) {
                 if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('location_dispatch_stats', Object.assign({}, stats, {
                     real_age_ms: lastReal != null ? Date.now() - lastReal : null,
+                    step: (typeof PARCOURS !== 'undefined' && PARCOURS.state) ? PARCOURS.state.stepIndex : null,
+                }));
+            }).catch(function(e) { /* non-fatal */ });
+        }
+        // D1 (v2.15.0) — JS-liveness watchdog stats. notifyCount > 0 means the
+        // net fired during a freeze (renderer froze despite levers 1–3); a
+        // growing lastAckAgeMs with the alarm still firing is the freeze itself.
+        if (bgGeoAW && typeof bgGeoAW.getWatchdogStats === 'function') {
+            bgGeoAW.getWatchdogStats().then(function(stats) {
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('watchdog_stats', Object.assign({}, stats, {
+                    real_age_ms: lastReal != null ? Date.now() - lastReal : null,
+                    step: (typeof PARCOURS !== 'undefined' && PARCOURS.state) ? PARCOURS.state.stepIndex : null,
+                }));
+            }).catch(function(e) { /* non-fatal */ });
+        }
+        // D2 (v2.15.0) — geofence rail wake stats. wakeCount climbing across a
+        // walk = the rail is firing at zone approaches as designed.
+        if (bgGeoAW && typeof bgGeoAW.getRailStats === 'function') {
+            bgGeoAW.getRailStats().then(function(stats) {
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_rail_wake_stats', Object.assign({}, stats, {
                     step: (typeof PARCOURS !== 'undefined' && PARCOURS.state) ? PARCOURS.state.stepIndex : null,
                 }));
             }).catch(function(e) { /* non-fatal */ });
