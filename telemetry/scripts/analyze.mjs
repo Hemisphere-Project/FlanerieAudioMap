@@ -154,13 +154,28 @@ P(`  completed:  ${completed.length}`);
 P(`  incomplete: ${incomplete.length}  [${incomplete.map(s => s.shortId).join(', ')}]`);
 P(`  aborted (<=step0, <5min): ${aborted.length}  [${aborted.map(s => s.shortId).join(', ')}]`);
 
-// --- device re-use ---------------------------------------------------------
-P('\n## Device re-use  (model -> sessions; * = completed)');
-const byModel = {};
-for (const s of main) (byModel[s.deviceModel] ||= []).push(s);
-for (const [model, ss] of Object.entries(byModel).sort((a, b) => b[1].length - a[1].length)) {
-  P(`  ${model.padEnd(14)} x${String(ss.length).padEnd(3)} `
-    + `[${ss.map(s => s.localClock.slice(0, 5) + (isCompleted(s, stepMax) ? '*' : '')).join(', ')}]`);
+// --- device re-use (by persistent UUID; A5) --------------------------------
+// Grouped by deviceUuid so the SAME physical phone's sessions aggregate (a model
+// like SM-A515F can be six different phones — backpack test 2026-06-09). Per
+// device: loan flag, completed walks, total GPS-frozen time, step_voice errors,
+// resumes. Pre-A5 sessions (deviceUuid=null) fall back to a per-model bucket.
+P('\n## Device re-use  (physical device via persistent UUID; * = completed walk)');
+const byDevice = {};
+for (const s of main) {
+  const key = s.deviceUuid || ('model:' + s.deviceModel);
+  (byDevice[key] ||= []).push(s);
+}
+for (const [, ss] of Object.entries(byDevice).sort((a, b) => b[1].length - a[1].length)) {
+  const model = ss[0].deviceModel || '?';
+  const uuid8 = ss[0].deviceUuid ? ss[0].deviceUuid.slice(0, 8) : 'no-uuid ';
+  const loan = ss.some(s => s.isLoanDevice) ? 'loan' : '·   ';
+  const done = ss.filter(s => isCompleted(s, stepMax)).length;
+  const frozenMin = Math.round(ss.reduce((a, s) => a + (s.gpsGapTotalMs || 0), 0) / 60000);
+  const voiceErr = ss.reduce((a, s) => a + (s.audioErrByKind ? s.audioErrByKind.step_voice : 0), 0);
+  const resumes = ss.reduce((a, s) => a + (s.resumes || 0), 0);
+  const clocks = ss.map(s => s.localClock.slice(0, 5) + (isCompleted(s, stepMax) ? '*' : '')).join(', ');
+  P(`  ${model.padEnd(13)} ${uuid8} ${loan} x${String(ss.length).padEnd(2)} `
+    + `done ${done}/${ss.length}  frozen ${String(frozenMin).padStart(2)}min  voiceErr ${voiceErr}  res ${resumes}  [${clocks}]`);
 }
 
 // --- GPS gap scan ----------------------------------------------------------

@@ -1191,28 +1191,13 @@ PAGES['tools'] = () => {
         appendOutput(JSON.stringify(snap, null, 2));
     });
 
-    // A5 — toggle the device's loan flag. Sticky in localStorage; echoed in
-    // every subsequent session_diag and POST /devices. Also displays the
-    // device's persistent UUID so the operator can read it back during support.
-    function refreshLoanLabel() {
-        var v = (typeof TELEMETRY !== 'undefined' && typeof TELEMETRY.isLoanDevice === 'function') ? TELEMETRY.isLoanDevice() : false;
-        $('#tools-toggle-loan').text('Téléphone de prêt: ' + (v ? 'OUI' : 'non'));
-    }
-    refreshLoanLabel();
+    // A5 — is_loan is now auto-set the moment a phone first enters devmode (see
+    // devmode()); no manual toggle. Just display the persistent UUID + loan flag
+    // so the operator can read them back during support.
     if (typeof TELEMETRY !== 'undefined' && typeof TELEMETRY.deviceUuid === 'function') {
         appendOutput('device_uuid: ' + TELEMETRY.deviceUuid());
         appendOutput('is_loan: ' + TELEMETRY.isLoanDevice());
     }
-    $('#tools-toggle-loan').off().on('click', () => {
-        if (typeof TELEMETRY === 'undefined' || typeof TELEMETRY.setLoanDevice !== 'function') {
-            appendOutput('toggle-loan: TELEMETRY.setLoanDevice unavailable'); return;
-        }
-        var newVal = !TELEMETRY.isLoanDevice();
-        TELEMETRY.setLoanDevice(newVal);
-        refreshLoanLabel();
-        TELEMETRY.log('tools_set_loan_device', {is_loan: newVal});
-        appendOutput('loan-device: ' + (newVal ? 'OUI' : 'non'));
-    });
 
     $('#tools-back').off().on('click', () => PAGE('select'));
 }
@@ -2287,16 +2272,14 @@ PAGES['checkaudio'] = () => {
     if (testplayer) { testplayer.stop(); testplayer.clear(); testplayer = null; }
 
     let ok = true;
-
-    // Use PlayerSimple so the test exercises the same backend (NativeMediaPlayer on iOS,
-    // Howler on Android/browser) that will be used during the walk.
-    testplayer = new PlayerSimple(true, 0)
     var fatalReason = null;
     let typewriterInstance = null;
     let playObserved = false;
     let playWatchdog = null;
     let revealButtonsTimer = null;
-    function failAudio(reason, html) {
+    let audioRetried = false;   // C4-style single retry before hard-failing onboarding
+
+    function failAudio(reason, html, errInfo) {
         ok = false;
         fatalReason = reason;
         if (playWatchdog) { clearTimeout(playWatchdog); playWatchdog = null; }
@@ -2308,35 +2291,99 @@ PAGES['checkaudio'] = () => {
         $('#checkaudio-accept').hide();
         $('#checkaudio-help').show();
         $('#checkaudio-desc').html(html).css('color', 'red');
-        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('checkaudio_fail', {reason});
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('checkaudio_fail', Object.assign({reason}, errInfo || {}));
     }
+
+    // Capture backend + native error code so the fail/retry is finally
+    // telemetered (the 2026-06-09 #4 devmode failure was invisible because
+    // checkaudio_fail carried only `reason`, never the native code / backend).
+    function errMeta(error) {
+        var m = {backend: testplayer ? testplayer._backend : null};
+        if (error && typeof error === 'object') {
+            if (error.native_error_code != null) m.native_error_code = error.native_error_code;
+            if (error.code != null) m.error_code = error.code;
+        } else if (error != null) {
+            m.error = String(error);
+        }
+        return m;
+    }
+
+    // A single transient loaderror/playerror/timeout (e.g. ExoPlayer
+    // FILE_NOT_FOUND before the file layer is ready, or a confused native player
+    // after a devmode mode-toggle — mobile-audit.md 2026-06-09 #4) should not
+    // hard-fail onboarding. Rebuild the probe once before giving up; mirrors the
+    // in-walk C4 playerror retry.
+    function probeError(reason, errInfo) {
+        if (fatalReason) return;
+        if (!audioRetried) {
+            audioRetried = true;
+            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('checkaudio_retry', Object.assign({reason}, errInfo || {}));
+            startAudioProbe();
+            return;
+        }
+        failAudio(reason, "Erreur de lecture audio. Votre appareil ne semble pas compatible...", errInfo);
+    }
+
     // Hard-block: the accept button only unlocks after a real `play` event
     // (or DEVMODE). A silent-start backend that never errors but also never
     // plays would otherwise pass onboarding — exactly the failure mode that
-    // burns loan phones in the field. Timeout below paints the red gate so
-    // the operator can't move forward.
-    testplayer.on('loaderror', (src, error) => {
-        console.log('[AUDIO] loaderror', src, error);
-        failAudio('loaderror', "Erreur de lecture audio. Votre appareil ne semble pas compatible...");
-    })
-    testplayer.on('playerror', (src, error) => {
-        console.log('[AUDIO] playerror', src, error);
-        failAudio('playerror', "Erreur de lecture audio. Votre appareil ne semble pas compatible...");
-    })
-    testplayer.on('play', (src) => {
-        console.log('[AUDIO] OK!', src);
-        playObserved = true;
+    // burns loan phones in the field. The watchdog paints the red gate so the
+    // operator can't move forward. Reusable so the single retry can rebuild it.
+    function startAudioProbe() {
+        if (testplayer) { try { testplayer.stop(); testplayer.clear(); } catch (e) {} testplayer = null; }
+        playObserved = false;
         if (playWatchdog) { clearTimeout(playWatchdog); playWatchdog = null; }
-        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('checkaudio_play_ok', {});
-        if (revealButtonsTimer) return;
-        revealButtonsTimer = setTimeout(() => {
-            revealButtonsTimer = null;
-            if (ok && !fatalReason) {
-                $('#checkaudio-accept').show();
-                $('#checkaudio-help').show();
-            }
-        }, CHECKAUDIO_BUTTON_DELAY_MS);
-    })
+
+        // PlayerSimple exercises the same backend (audio-simple on iOS, ExoPlayer
+        // on Android) used during the walk.
+        testplayer = new PlayerSimple(true, 0)
+        testplayer.on('loaderror', (src, error) => {
+            console.log('[AUDIO] loaderror', src, error);
+            probeError('loaderror', errMeta(error));
+        })
+        testplayer.on('playerror', (src, error) => {
+            console.log('[AUDIO] playerror', src, error);
+            probeError('playerror', errMeta(error));
+        })
+        testplayer.on('play', (src) => {
+            console.log('[AUDIO] OK!', src);
+            playObserved = true;
+            if (playWatchdog) { clearTimeout(playWatchdog); playWatchdog = null; }
+            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('checkaudio_play_ok', {backend: testplayer ? testplayer._backend : null, retried: audioRetried});
+            if (revealButtonsTimer) return;
+            revealButtonsTimer = setTimeout(() => {
+                revealButtonsTimer = null;
+                if (ok && !fatalReason) {
+                    $('#checkaudio-accept').show();
+                    $('#checkaudio-help').show();
+                }
+            }, CHECKAUDIO_BUTTON_DELAY_MS);
+        })
+
+        testplayer.load(BASEURL+'/images/', {src: 'test.mp3', master: 1}, false)
+
+        // Gate 2 (iOS only): the test player fell back to Howler because
+        // httpToNativePath returned null — Howler can't start playback from a
+        // background GPS callback on a locked iPhone. _isNativeFallback is set
+        // during the load() call above. Terminal — no retry.
+        if (ok && !fatalReason && PLATFORM === 'ios' && (testplayer._isNativeFallback || IOS_NATIVE_FALLBACK_DETECTED)) {
+            failAudio('ios_native_fallback',
+                "Erreur de compatibilité audio (iOS).<br /><br />" +
+                "Demandez à un membre de l'équipe.",
+                {backend: testplayer._backend}
+            );
+            return;
+        }
+        if (fatalReason) return;
+
+        testplayer.play(0)
+        // Watchdog: if neither `play` nor an error event fires within 8 s, treat
+        // as a transient probe failure (retry once, then hard-fail).
+        playWatchdog = setTimeout(() => {
+            if (playObserved || fatalReason) return;
+            probeError('play_timeout', {backend: testplayer ? testplayer._backend : null});
+        }, 8000);
+    }
 
     // Gate 1: AudioFocus plugin failed to initialize. Without it, Android can lose
     // audio routing silently mid-walk; on iOS the AVAudioSession category is also
@@ -2348,42 +2395,17 @@ PAGES['checkaudio'] = () => {
         );
     }
 
-    // All probe activity is guarded so a terminal Gate 1 failure prevents
-    // load() from firing — a subsequent loaderror/playerror on a partially
-    // loaded player would otherwise overwrite the specific gate message and
-    // telemetry reason with the generic fallback. Gate 2 must remain after
-    // load() because _isNativeFallback is set during the load call.
     if (!fatalReason) {
         console.log('[AUDIO] testing via PlayerSimple, basepath:', BASEURL+'/images/');
-        testplayer.load(BASEURL+'/images/', {src: 'test.mp3', master: 1}, false)
-
-        // Gate 2 (iOS only): the test player fell back to Howler because httpToNativePath
-        // returned null — usually because LOCALMEDIA_PATH_NATIVE / LOCALAPP_PATH_NATIVE
-        // weren't captured. Howler cannot start playback from a background GPS callback
-        // on a locked iPhone, so the walk would die silently in the pocket.
-        if (ok && PLATFORM === 'ios' && (testplayer._isNativeFallback || IOS_NATIVE_FALLBACK_DETECTED)) {
-            failAudio('ios_native_fallback',
-                "Erreur de compatibilité audio (iOS).<br /><br />" +
-                "Demandez à un membre de l'équipe."
-            );
-        }
-
+        startAudioProbe();
         if (!fatalReason) {
-            testplayer.play(0)
-            // Watchdog: if neither `play` nor an error event fires within 8 s, hard-fail.
-            playWatchdog = setTimeout(() => {
-                if (playObserved || fatalReason) return;
-                failAudio('play_timeout', "Erreur de lecture audio. Votre appareil ne semble pas compatible...");
-            }, 8000);
             typewriterInstance = TYPEWRITE('checkaudio-desc').pauseFor(4000);
         }
     }
 
     $('#checkaudio-accept').off().on('click', () => {
         if (revealButtonsTimer) { clearTimeout(revealButtonsTimer); revealButtonsTimer = null; }
-        testplayer.stop();
-        testplayer.clear()
-        testplayer = null;
+        if (testplayer) { testplayer.stop(); testplayer.clear(); testplayer = null; }
         PAGE('checkbattery')
     })
 
@@ -3169,6 +3191,17 @@ function devmode(dev)
     if (DEVMODE) {
         $('body').css('border-color', 'pink');
         $('.dev').show();
+        // A5 — any phone that has ever entered devmode is, by definition, a
+        // staff/loan device (visitors' BYOD phones never see devmode). Mark it
+        // is_loan once and persist, so loan sessions are distinguishable in
+        // telemetry without a manual toggle. Sticky: stays true on later launches.
+        if (typeof TELEMETRY !== 'undefined' &&
+            typeof TELEMETRY.setLoanDevice === 'function' &&
+            typeof TELEMETRY.isLoanDevice === 'function' &&
+            !TELEMETRY.isLoanDevice()) {
+            TELEMETRY.setLoanDevice(true);
+            TELEMETRY.log('loan_auto_marked', {reason: 'devmode_entered'});
+        }
     }
     else {
         $('body').css('border-color', 'black');
@@ -3239,10 +3272,21 @@ $('#parcours-rearm').click(async () => {
     }
 })
 
-$('#parcours-restart').click(() => {
+$('#parcours-restart').click(async () => {
     console.log('RESTART');
     PARCOURS.stopTracking();
     TELEMETRY.log('session_restart_click', {reason: 'restart_button'});
+    // location.reload() only resets the WebView/JS — the native ExoPlayer
+    // (FG id 7375) and audiofocus (7374) services live independently of the
+    // WebView, so without an explicit teardown the current track keeps playing
+    // across the reload AND the native players leak (a devmode restart then
+    // re-enters onboarding on top of orphaned native instances). Mirror the
+    // walk-end (A1) teardown before reloading. See mobile-audit.md 2026-06-09 #5.
+    try { PARCOURS.stopAudio(); } catch (e) {}
+    try { RENDERER_KEEPALIVE.stop(); } catch (e) {}
+    try { if (typeof SILENT_PLAYER !== 'undefined' && SILENT_PLAYER) SILENT_PLAYER.stop(); } catch (e) {}
+    try { await releaseAudioPluginAll('restart'); } catch (e) {}
+    try { await releaseAudiofocusSession('restart'); } catch (e) {}
     TELEMETRY.end();
     setTimeout(() => { PARCOURS.clearStore(); alert('Application réinitialisée'); location.reload(); }, 300);
 });
@@ -3580,6 +3624,18 @@ const GPSLOST_TEXT_DOZE =
     'Déverrouillez l\'écran quelques secondes — la progression reprend automatiquement.';
 var GPS_DOZE_TIMER = null;
 
+// #3 (2026-06-09): a stationary walker (a static listening scene) makes iOS stop
+// emitting fresh fixes, so `frozen` fires ~10–30 s before CMMotionActivity's
+// `motionIsStationary` catches up — flashing the GPS-lost UI and, worse, pausing
+// the narration mid-scene (iOS26 `0x7o`). Since `frozen` means keepalive
+// callbacks are still alive (it is NOT `lost`), don't disrupt on the first tick:
+// only escalate (pause + jingle + overlay) if frozen persists this long, and
+// re-check `motionIsStationary` then (by which point the motion flag has caught
+// up). Transient stationary gaps recover well inside this window. Tunable — ties
+// to the B4/R27 calibration item.
+const GPS_FROZEN_SUSTAIN_MS = 20000;
+var GPS_FROZEN_SUSTAIN_TIMER = null;
+
 // Returns a "Précision GPS: <Xm>" prefix when we have a recent fix, otherwise ''.
 // Helps the walker correlate "no signal" with the last known accuracy.
 function gpsPrecisionPrefix() {
@@ -3699,6 +3755,13 @@ GEO.on('stateUpdate', (state, meta) => {
     let previousSignalState = GPSSIGNAL_STATE;
     GPSSIGNAL_STATE = state;
 
+    // #3 — leaving 'frozen' (recovered / acquiring / lost) cancels the pending
+    // escalation so a transient stationary gap never disrupts the walk.
+    if (state !== 'frozen' && GPS_FROZEN_SUSTAIN_TIMER) {
+        clearTimeout(GPS_FROZEN_SUSTAIN_TIMER);
+        GPS_FROZEN_SUSTAIN_TIMER = null;
+    }
+
     if (state == 'acquiring' || state == 'frozen' || state == 'lost') {
         GPSSIGNAL_OK = false;
         if (PARCOURS.state.lost) {
@@ -3743,11 +3806,26 @@ GEO.on('stateUpdate', (state, meta) => {
             any_age_ms: meta && typeof meta.anyAgeMs === 'number' ? meta.anyAgeMs : null,
             real_age_ms: meta && typeof meta.realAgeMs === 'number' ? meta.realAgeMs : null,
         });
-        if (navigator.vibrate) navigator.vibrate([250, 120, 250]);
-        pauseAllPlayers();
-        GPSLOST_PLAYER.play();
-        setGpsLostOverlay({html: gpsPrecisionPrefix() + GPSFROZEN_TEXT_DEFAULT});
-        probeGpsHealth();
+        // #3 — do NOT disrupt on the first frozen tick. Frozen means keepalive
+        // callbacks are still arriving (not 'lost'); a stationary walker recovers
+        // within seconds once CMMotionActivity flips to stationary (then the
+        // re-check below suppresses) or a fresh fix lands. Only escalate to the
+        // pause + jingle + overlay if frozen genuinely persists. Cancelled on any
+        // non-frozen state (top of handler).
+        if (GPS_FROZEN_SUSTAIN_TIMER) return;
+        GPS_FROZEN_SUSTAIN_TIMER = setTimeout(() => {
+            GPS_FROZEN_SUSTAIN_TIMER = null;
+            if (GPSSIGNAL_STATE !== 'frozen') return;          // recovered/changed meanwhile
+            if (currentPage != 'parcours' || GEO.mode() == 'simulate' || AUDIOFOCUS == 0) return;
+            if (GEO.motionIsStationary) return;                // motion flag has caught up = standing still, fine
+            if (PARCOURS.currentStep() == PARCOURS.spots.steps.length - 1) return;
+            TELEMETRY.log('gps_frozen_escalated', {step: PARCOURS.currentStep(), sustained_ms: GPS_FROZEN_SUSTAIN_MS});
+            if (navigator.vibrate) navigator.vibrate([250, 120, 250]);
+            pauseAllPlayers();
+            GPSLOST_PLAYER.play();
+            setGpsLostOverlay({html: gpsPrecisionPrefix() + GPSFROZEN_TEXT_DEFAULT});
+            probeGpsHealth();
+        }, GPS_FROZEN_SUSTAIN_MS);
         return;
     }
 
