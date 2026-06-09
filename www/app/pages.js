@@ -2225,17 +2225,23 @@ PAGES['rdv'] = () => {
                 let status = typeof GEO.startupStatus === 'function' ? GEO.startupStatus() : null
                 let acc = status && typeof status.lastAccuracy === 'number' ? Math.round(status.lastAccuracy) : null
                 let accTxt = acc != null ? ('meilleure précision obtenue : ' + acc + ' m') : 'précision insuffisante'
+                // #2 (2026-06-09, operator decision): weak-GPS devices stay BLOCKED
+                // → loan phone. We do NOT offer a "démarrer quand même" escape — a
+                // phone that can't reach the (already-relaxed) accuracy ceiling would
+                // walk a bad walk. The adaptive gate has by now relaxed to its
+                // ceiling (geoloc.js), so reaching here means the device's GPS floor
+                // is genuinely below what the parcours needs.
                 $('#rdv-startup-fallback').show().html(
-                    'Le GPS de ce téléphone n\'atteint pas la précision requise (' + accTxt + ').<br /><br />'
-                    + 'Vous pouvez <b>démarrer quand même</b> (le déclenchement des premières étapes peut être moins précis), '
-                    + 'ou demander un <b>téléphone de prêt</b> à l\'équipe à l\'accueil.'
+                    'Le GPS de ce téléphone n\'atteint pas la précision nécessaire pour le parcours (' + accTxt + ').<br /><br />'
+                    + 'Merci de demander un <b>téléphone de prêt</b> à l\'équipe à l\'accueil — '
+                    + 'la marche ne peut pas démarrer de façon fiable sur cet appareil.'
                 )
-                $('#rdv-force-start').show()
-                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_startup_fallback_offered', {
+                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_startup_blocked', {
                     waited_ms: Date.now() - rdvWaitStartMs,
                     last_accuracy: status ? status.lastAccuracy : null,
                     last_reason: status ? status.lastReason : null,
                     max_accuracy_m: status ? status.maxAccuracyM : null,
+                    ceiling_m: 25,
                 })
             }
             return;
@@ -2262,17 +2268,12 @@ PAGES['rdv'] = () => {
         PAGE('checkaudio')
     })
 
-    // P0.2b — informed best-effort start when the GPS gate can't be met on this device.
-    $('#rdv-force-start').hide().off().on('click', () => {
-        clearInterval(checkpos);
-        let status = typeof GEO.startupStatus === 'function' ? GEO.startupStatus() : null
-        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_startup_fallback_used', {
-            waited_ms: Date.now() - rdvWaitStartMs,
-            last_accuracy: status ? status.lastAccuracy : null,
-            last_reason: status ? status.lastReason : null,
-        })
-        PAGE('checkaudio')
-    })
+    // #2 (2026-06-09): the P0.2b "démarrer quand même" force-start is retired — a
+    // weak-GPS device stays blocked → loan phone (operator decision). The button is
+    // kept hidden + its bypass handler removed so there is no path to walk a
+    // sub-ceiling-accuracy parcours. (Re-enable = restore a click→PAGE('checkaudio')
+    // handler here if a staff override is ever wanted.)
+    $('#rdv-force-start').hide().off()
 
     if (DEVMODE) PAGE('checkaudio')
 }

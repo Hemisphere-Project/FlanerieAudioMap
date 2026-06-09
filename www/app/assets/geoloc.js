@@ -18,6 +18,20 @@ var STARTUP_FIX_MAX_ACCURACY_M = 15
 var STARTUP_REQUIRED_FIXES = 2
 var STARTUP_SECOND_FIX_MIN_GAP_MS = 5000
 var STARTUP_SECOND_FIX_MIN_MOVEMENT_M = 8
+// Adaptive accuracy gate (2026-06-09 #2 fix). The fixed 15 m bar permanently
+// strands a device whose GPS floor is worse than 15 m (field: nlrc / Fairphone 4,
+// avgAcc ~21 m, never cleared rdv in 74 min — every fresh fix rejected on
+// accuracy). Once the device is provably delivering FRESH fixes that only fail on
+// accuracy, relax the bar in small steps toward the device's floor, capped at a
+// low ceiling — a device that cannot reach the ceiling stays BLOCKED on purpose
+// (operator decision: hand the visitor a loan phone rather than walk a bad walk).
+// Good devices are unaffected (they clear ≤15 m before the relax clock starts).
+// Freshness stays strict — only accuracy relaxes (a stale fix means GPS is not
+// delivering, which relaxing accuracy must never paper over).
+var STARTUP_ACCURACY_RELAX_AFTER_MS = 30000     // hold 15 m for the first 30 s
+var STARTUP_ACCURACY_RELAX_STEP_M = 5           // then +5 m per step
+var STARTUP_ACCURACY_RELAX_INTERVAL_MS = 20000  // a step every 20 s
+var STARTUP_ACCURACY_MAX_M = 25                 // ceiling — worse than this stays blocked (loan phone)
 
 function gpsAccuracyBucket(acc) {
     if (typeof acc !== 'number' || isNaN(acc)) return 'unknown'
@@ -395,12 +409,14 @@ class GeoLoc extends EventEmitter {
             // B4 watchdog — if real GPS callbacks have stalled for >60 s on iOS,
             // trigger a CLLocationManager stop/restart via forceReacquire (bg-geo v2.6.0 BG-2).
             // iOS-only: Android is covered natively by the AlarmManager keepalive (BG-5).
-            // Rate-limited: max 3 per session, no more than once per 90 s.
+            // Rate-limited: max 10 per session (#6b — aligned with the native rail
+            // cap; a 45-min walk with several iOS-26 blackouts can legitimately need
+            // more than the old 3), no more than once per 90 s.
             if (PLATFORM === 'ios' &&
                 this.runMode === 'gps' &&
                 this.lastRealCallbackTime !== null &&
                 (Date.now() - this.lastRealCallbackTime) > 60000 &&
-                this._forceReacquireCount < 3 &&
+                this._forceReacquireCount < 10 &&
                 (Date.now() - this._lastForceReacquireTime) >= 90000) {
                 let bgGeo = getBackgroundGeolocationPlugin();
                 if (bgGeo && typeof bgGeo.forceReacquire === 'function') {
@@ -422,7 +438,7 @@ class GeoLoc extends EventEmitter {
         this._lastHeartbeatTime = 0;
 
         // B4 watchdog (BG-2 / Round 13) — iOS forceReacquire counter + throttle.
-        // Resets on each new GPS session (init()). Max 3 triggers per session.
+        // Resets on each new GPS session (init()). Max 10 triggers per session (#6b).
         this._forceReacquireCount = 0;
         this._lastForceReacquireTime = 0;
     }
@@ -433,6 +449,7 @@ class GeoLoc extends EventEmitter {
             fixCount: 0,
             requiredFixCount: this.startupRequiredFixes,
             maxAccuracyM: this.startupFixMaxAccuracyM,
+            accuracyRelaxStartMs: null,
             maxAgeMs: this.startupFixMaxAgeMs,
             lastReason: 'waiting_first_fix',
             lastSource: null,
@@ -445,6 +462,19 @@ class GeoLoc extends EventEmitter {
         }
     }
 
+    // Effective accuracy bar at this instant. Holds the strict base (15 m) until
+    // the device has been delivering fresh-but-imprecise fixes for RELAX_AFTER_MS,
+    // then steps up toward the device's floor, capped at the ceiling. Returns the
+    // base when the relax clock hasn't started (good devices never relax).
+    _effectiveAccuracyBar() {
+        let t = this.startupReadiness
+        if (!t || t.accuracyRelaxStartMs == null) return STARTUP_FIX_MAX_ACCURACY_M
+        let elapsed = Date.now() - t.accuracyRelaxStartMs
+        if (elapsed < STARTUP_ACCURACY_RELAX_AFTER_MS) return STARTUP_FIX_MAX_ACCURACY_M
+        let steps = Math.floor((elapsed - STARTUP_ACCURACY_RELAX_AFTER_MS) / STARTUP_ACCURACY_RELAX_INTERVAL_MS) + 1
+        return Math.min(STARTUP_FIX_MAX_ACCURACY_M + steps * STARTUP_ACCURACY_RELAX_STEP_M, STARTUP_ACCURACY_MAX_M)
+    }
+
     _updateStartupReadiness(position, info = {}) {
         if (!this.startupReadiness) this._resetStartupReadiness()
 
@@ -454,12 +484,21 @@ class GeoLoc extends EventEmitter {
         let usableFixTime = info.usableFixTime
         let source = info.source || 'unknown'
         let reason = null
+        let effectiveBar = STARTUP_FIX_MAX_ACCURACY_M
 
         if (position.simulate) reason = 'simulate'
         else if (typeof ageMs !== 'number' || isNaN(ageMs)) reason = 'unknown_age'
         else if (ageMs > this.startupFixMaxAgeMs) reason = 'stale'
         else if (typeof accuracy !== 'number' || isNaN(accuracy)) reason = 'no_accuracy'
-        else if (accuracy > this.startupFixMaxAccuracyM) reason = 'accuracy'
+        else if (accuracy > STARTUP_FIX_MAX_ACCURACY_M) {
+            // Fresh fix failing only on precision — the relaxable case (#2 fix).
+            // Anchor the relax clock on first occurrence, then judge against the
+            // time-relaxed bar so a weak-GPS device clears at its own floor (up to
+            // the ceiling). Worse than the ceiling stays 'accuracy'-rejected = blocked.
+            if (tracker.accuracyRelaxStartMs == null) tracker.accuracyRelaxStartMs = Date.now()
+            effectiveBar = this._effectiveAccuracyBar()
+            if (accuracy > effectiveBar) reason = 'accuracy'
+        }
 
         let next = Object.assign({}, tracker, {
             lastSource: source,
@@ -469,6 +508,18 @@ class GeoLoc extends EventEmitter {
             lastMovementM: null,
         })
 
+        // Surface the (possibly relaxed) bar to the rdv UI label + telemetry, and
+        // log each upward step once so the relaxation is auditable post-hoc.
+        if (effectiveBar > tracker.maxAccuracyM && typeof TELEMETRY !== 'undefined') {
+            TELEMETRY.log('gps_startup_relaxed', {
+                from_m: tracker.maxAccuracyM,
+                to_m: effectiveBar,
+                acc: accuracy,
+                waited_ms: tracker.accuracyRelaxStartMs ? Date.now() - tracker.accuracyRelaxStartMs : null,
+            })
+        }
+        next.maxAccuracyM = effectiveBar
+
         if (reason) {
             next.lastReason = reason
             this.startupReadiness = next
@@ -477,7 +528,8 @@ class GeoLoc extends EventEmitter {
                     reason: reason,
                     fix_count: tracker.fixCount,
                     required_fix_count: this.startupRequiredFixes,
-                    max_accuracy_m: this.startupFixMaxAccuracyM,
+                    max_accuracy_m: effectiveBar,
+                    base_accuracy_m: STARTUP_FIX_MAX_ACCURACY_M,
                     age_ms: ageMs,
                     acc: accuracy,
                     source: source,
