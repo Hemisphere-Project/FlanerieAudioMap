@@ -2475,6 +2475,81 @@ PAGES['sas'] = () => {
 var SILENT_PLAYER = new PlayerSimple(true, 0);
 SILENT_PLAYER.load(BASEURL+'/images/', {src: 'flanerie.mp3', master: 1}, false);
 
+// --- Android WebView renderer keepalive --------------------------------------
+// The whole walk (zone-trigger math + audio selection) runs in the WebView's JS
+// event loop. On Android, when the screen is locked and the app is backgrounded,
+// Chromium freezes the renderer's JS loop — even with a foreground service and
+// battery-opt exemption — so steps stop firing while the phone is in a pocket
+// (field test 2026-06-09: 40+ min frozen on EVERY Android in the backpack, while
+// the native bg-geo stream kept delivering thousands of fixes underneath).
+//
+// A renderer that is actively playing Web Audio is exempt from that freeze. In
+// the Howler era this came for free because SILENT_PLAYER itself ran through Web
+// Audio. The ExoPlayer/audio-simple migration moved the silent keepalive to a
+// NATIVE service: it keeps the process + audio session alive but plays OUTSIDE
+// the renderer, so nothing keeps the JS loop scheduled anymore.
+//
+// This restores an in-renderer Web Audio loop — the silent flanerie.mp3 via
+// Howler with html5:false (Web Audio API, NOT an <audio> element). Volume 1.0 is
+// safe because the asset's content is silence. iOS is excluded: it keeps the JS
+// loop alive via the location background mode (validated 2026-06-09: a 54-min
+// locked-pocket walk never suspended JS), and a second graph would contend with
+// audio-simple.
+var RENDERER_KEEPALIVE = {
+    _howl: null,
+    // Native lever (power-opt PO-10): keep the WebView renderer at IMPORTANT
+    // priority even when hidden, so Android doesn't deprioritise/freeze it when
+    // the screen locks. Toggled with the Web Audio loop on the same lifecycle.
+    _setNativePriority(keep) {
+        if (PLATFORM === 'ios') return;
+        try {
+            var po = (typeof cordova !== 'undefined' && cordova.plugins && cordova.plugins.PowerOptimization)
+                ? cordova.plugins.PowerOptimization : null;
+            if (po && typeof po.SetRendererPriority === 'function') {
+                po.SetRendererPriority(keep)
+                    .then((r) => { if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('renderer_priority', {keep: keep, result: r}); })
+                    .catch((e) => { if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('renderer_priority_error', {keep: keep, error: String(e)}); });
+            }
+        } catch (e) {}
+    },
+    start() {
+        if (PLATFORM === 'ios') return;
+        this._setNativePriority(true);
+        if (typeof Howl === 'undefined') return;
+        try {
+            if (!this._howl) {
+                this._howl = new Howl({
+                    src: [BASEURL + '/images/flanerie.mp3'],
+                    loop: true, autoplay: true, volume: 1.0, html5: false,
+                });
+            } else if (!this._howl.playing()) {
+                this._howl.play();
+            }
+            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('renderer_keepalive', {
+                action: 'start',
+                ctx_state: (typeof Howler !== 'undefined' && Howler.ctx) ? Howler.ctx.state : null,
+            });
+        } catch (e) {
+            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('renderer_keepalive_error', {phase: 'start', error: String(e)});
+        }
+    },
+    stop() {
+        this._setNativePriority(false);
+        if (!this._howl) return;
+        try { this._howl.stop(); } catch (e) {}
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('renderer_keepalive', {action: 'stop'});
+    },
+    // Recover if Chromium suspended the AudioContext across a hide/show cycle.
+    poke() {
+        if (PLATFORM === 'ios' || !this._howl) return;
+        try {
+            if (typeof Howler !== 'undefined' && Howler.ctx && Howler.ctx.state === 'suspended') Howler.ctx.resume();
+            if (!this._howl.playing()) this._howl.play();
+        } catch (e) {}
+    },
+};
+document.addEventListener('visibilitychange', () => RENDERER_KEEPALIVE.poke(), false);
+
 PAGES['parcours'] = async () => {
 
     var parcoursBootToken = ++PARCOURS_BOOT_TOKEN;
@@ -2490,6 +2565,7 @@ PAGES['parcours'] = async () => {
     }
 
     SILENT_PLAYER.play(); // Play silent track to keep audio session alive
+    RENDERER_KEEPALIVE.start(); // Android: keep the WebView JS loop scheduled (in-renderer Web Audio)
     scheduleWakeupNotification();
     // The #gps-status / #gps-precision badges live in this page's DOM, so the
     // painter has to run here. checkgeo also starts it for its own gating, but
@@ -2964,6 +3040,7 @@ PAGES['end'] = () => {
     PARCOURS.stopAudio();
     GPSLOST_PLAYER.stop();
     SILENT_PLAYER.stop();
+    RENDERER_KEEPALIVE.stop();
     LOST_PLAYER.stop();
     RESUME_PLAYER.stop();
     clearLostUI();

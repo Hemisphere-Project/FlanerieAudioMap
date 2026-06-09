@@ -1,9 +1,9 @@
 # Mobile Audit & Remediation Plan
 
 **Original:** 2026-04-27
-**Last updated:** 2026-06-03 (Motion prompt SOLVED & CONFIRMED ON DEVICE — addendum 14: fresh install started the DistanceFilter provider, not Raw, so `MAURRawLocationProvider.onStart` where motion is requested never ran; root cause = unsynchronised `_config` race between native `configure:`/`start:`; fixed by awaiting configure before start (webapp) + re-applying config before start (native v2.14.9). Addendum 15: Location-first/Motion-second ordering removes the double Motion prompt (bg-geo v2.14.10))
+**Last updated:** 2026-06-09 (backpack multi-device test, apk 28 — see 2026-06-09 addendum. **iOS native plan validated end-to-end** on real locked-pocket walks: rail wake 38×, audio-simple under load 0 errors, motion grant. **Android background WebView JS-suspension is a new P0** (likely launch blocker): locked-pocket walks freeze the JS event loop 40+ min while native GPS stays alive — ExoPlayer-migration regression, fix plan attached.)
 **Scope:** Cordova launcher (FlanerieCordova) + downloaded local webapp (FlanerieAudioMap) + four forked native plugins
-**Field tests so far:** ELYSEE (multiple), FRAPPAZ, GUILLOTIÈRE (2024-12), GIVORS (2026-05-20, archived). Next: VILLEURBANNE.
+**Field tests so far:** ELYSEE (multiple), FRAPPAZ, GUILLOTIÈRE (2024-12), GIVORS (2026-05-20, archived), FRAPPAZ+ST-BONNET (2026-06-05), iOS-GIVORS-V7 (2026-06-06), backpack multi-device (2026-06-09). Next: VILLEURBANNE.
 
 ## Field Safety Legend
 
@@ -89,14 +89,15 @@ Each onboarding gate hard-blocks until its check passes.
 | iOS native plan (H/I/J/K/L) | See §[iOS native plan (R22–R26) — settled design decisions](#ios-native-plan-r22r26--settled-design-decisions) below. All five workstreams shipped between R22 and R26. **L (CLMonitor iOS 17+)** scope reduced to visit events only via legacy `startMonitoringVisits` (CLMonitor proper deferred indefinitely). |
 
 **Open items requiring next field test data:**
+- **🔴 P0 — Android background WebView JS-suspension (NEW, 2026-06-09).** Locked-pocket Android walks freeze the WebView JS event loop for 40+ min (zone-triggering + audio selection stall) while the native bg-geo stream stays fully alive — confirmed across Samsung/Sony/Xiaomi/Fairphone, Android 8→15, battery-opt exempt. Root cause: the ExoPlayer/audio-simple migration moved the silent keepalive native, so no in-renderer AudioContext keeps the Chromium renderer scheduled. **Likely Android launch blocker.** See 2026-06-09 addendum for the confirmed mechanism + 4-step fix plan (promote P0.5 Fix 1e to a real fix).
 - **B4 / R27 startup + stalled-signal calibration** — Android startup gate confirmed comfortable on a GOOD-GPS device (8giw: `fixes=2 ready=1 rejected=3`, no stuck startup). **But `nlrc` (Fairphone 4, avgAcc ~21 m) never cleared the gate in 74 min** — `gps_startup_rejected reason=accuracy`/`stale` ×dozens; the `STARTUP_FIX_MAX_ACCURACY_M=15` + 2-distinct-fix gate strands poor-GPS / stationary onboarding at `rdv` (see 2026-06-06 addendum, correction 2). Calibration must soften the accuracy gate and/or add a time-boxed best-effort fallback. iOS still needs data.
 - **E1/E2/E3 zone-overshoot gates** — 300 `accuracy_near_border` events collected from 8giw (SM-A515F, avgAcc=7m): p75=−3m inside, p95=+3.2m outside. Single high-accuracy device only; need a session with avgAcc 20–30m before setting production thresholds.
 - **H1 ExoPlayer backend validation** — ⚠️ **SECOND DEVICE FAILED** (2026-06-06, `y9ns` SM-A528B / Galaxy A52s 5G / GIVORS_V7_CBR): **38 `step_voice` playerrors** = `MediaCodecAudioRenderer` hardware-decoder exhaustion under instance churn (`format_supported=YES`, transient). The 8giw "0 errors" result was one device + one parcours only. **Howler retirement POSTPONED** until the exhaustion class is fixed and re-validated on this device. See 2026-06-06 addendum.
-- **R21 / R22 iOS validation** — ✅ **configure-level validated** (2026-06-06, `imug` apk 27): `audio_uri_resolved backend=audio-simple`, `nowplaying_setup`. Walk-level (BLOC narration under load) still pending.
-- **R27 iOS foreground-stream validation** — ✅ **configure-level validated** (`imug`): `ios_stream_health` + `cl_state` ×25, healthy stream (0 gaps ≥90 s). Background-blackout behaviour still pending (no blackout occurred).
-- **R23 iOS rail validation** — ✅ **configure validated** (`imug`): `gps_rail_configured`×2 (the dead-code fix works). **Rail wake still pending** (`gps_rail_wake`=0 — no blackout to trigger it).
-- **R26 iOS visit validation** — ✅ **validated** (`imug`): `gps_visit_event`×1 fired.
-- **Architecture D (Fused fallback) end-to-end** — `fusedAvailable=false` on the dev SM-A515F (GMS issue on this ROM). Not yet validated on any device. Need a GMS-enabled Android that experiences a real GPS gap.
+- **R21 / R22 iOS validation** — ✅ **WALK-LEVEL VALIDATED (2026-06-09, `0x7o`/`4a7m`, apk 28):** audio-simple 0 errors across 42+54 min of BLOC narration under load. (Was configure-level only on `imug` apk 27.)
+- **R27 iOS foreground/background-stream validation** — ✅ **VALIDATED (2026-06-09):** `ios_stream_health`+`cl_state` 82–105×; real-fix freshness up to 311 s correctly flagged `frozen→recovered` (12×/5×), keepalive masking no longer reads as healthy. Background-blackout behaviour now exercised on a real locked-pocket walk.
+- **R23 iOS rail validation** — ✅ **RAIL WAKE VALIDATED (2026-06-09):** `gps_rail_wake=38` on both iPhones during real blackouts (was `=0, no blackout to trigger it`). The region-wake rail fires and recovers the live stream in the field.
+- **R26 iOS visit validation** — ✅ **validated** (`imug` 2026-06-06; reconfirmed 2026-06-09: `gps_visit_event` 3–6× per walk).
+- **Architecture D (Fused fallback) availability** — ✅ **`fusedAvailable=true` on 4 real Android devices (2026-06-09)** with native dedupe suppressing fused as designed. (Was `false` only on the dev SM-A515F GMS-broken ROM.) End-to-end *fallback during a gap* is moot for now — the 2026-06-09 Android failure is upstream in the JS layer, not in native location delivery.
 
 **Recommended next moves (post-2026-06-07 audit):**
 - **Next build is apk 28 (A):** `audio-simple` 0.3.4 with SW-preferred decoders is in the fork and installed in FlanerieCordova but has not been built. One `cordova build android` + TestFlight bump. The launcher HTML/JS changes (C, below) ride in the same container build. ExoPlayer Howler-retirement path opens once SM-A528B re-tests clean.
@@ -479,6 +480,46 @@ Added `hasError() { return !!this._loadError }` to `PlayerSimple` (player.js). T
 **ROOT CAUSE FOUND same day (see the P0.3 section above):** the tethering failure is the **server's AAAA / IPv6 record** being unroutable from 4G-tethered clients while the WebView XHR won't fall back to IPv4 (Brave does). Field-confirmed on an iPhone. **The actual fix is server-side: drop the AAAA record (operator DNS change, no rebuild, fixes all deployed phones).** The launcher retry/queue/diagnostics here are belt-and-braces + future-proofing, NOT the cure for this specific bug.
 
 **Needs container rebuild** (apk 28) to reach devices — rides alongside the audio-simple 0.3.4 SW-decoder build. The AAAA removal is independent and immediate.
+
+---
+
+## 2026-06-09 addendum — backpack multi-device test: iOS native plan validated end-to-end; Android background JS-suspension is a P0
+
+**48 sessions, single uniform build** — apk **28** / webapp `6cda72bf` / bg-geo **2.14.12** / audio-simple **0.3.4** / audiofocus **1.9.1** / power-opt **0.3.1**; zero skew; single parcours `FLANERIE_INVITES_V3` (21 steps). **First field run of apk 28.** Full report: [`docs/archive/20260609-BACKPACK-MULTIDEVICE-report.md`](docs/archive/20260609-BACKPACK-MULTIDEVICE-report.md).
+
+**Method (operator):** staff testing *as real users*; **most phones carried together, locked, in one tester's backpack** on the same walk (the ~11:17–11:24 start cluster) → a controlled same-conditions platform comparison — identical route/bag/timing, only the device differs.
+
+### 🟢 iOS — first real locked-pocket walks; closes a stack of pending validations
+
+Two iPhones onboarded + walked the full route locked away: `0x7o` (iPhone SE 3, iOS 26.4.2, 42 min, **all 21 steps contiguous → completed**) and `4a7m` (iPhone 8, iOS 16.7.10, 54 min, steps 0–19 bar 17). Both:
+- **`gps_rail_wake=38`** during real blackouts — the long-pending rail-wake validation (was `=0, no blackout to trigger it`). The iOS region-wake rail fires and recovers the live stream in the field. `gps_state` flipped `frozen→recovered` (12×/5×); R27 freshness correctly flagged stale-keepalive masking (`4a7m` real-fix freshness 311 s) as `frozen`, not healthy.
+- **audio-simple 0 errors** across 54+42 min of BLOC narration (first under-load validation). **CLVisit** 3–6×, **ios_stream_health+cl_state** 82–105×, **Motion granted on fresh install** on both (saga §14/§15 holds, iOS 16 *and* 26).
+
+→ Flips to ✅: R21/R22 iOS audio walk-level, R27 background-stream, R23 rail **wake**, R26 visit, full locked-pocket iOS walk. **No iOS defects today.**
+
+### 🔴 Android — WebView JS event loop suspended in background; native GPS stays alive (P0, likely launch blocker)
+
+Every Android in the bag logged a **40+ min GPS gap**, route frozen at step 0, catching up only when the bag was opened at the end — `s906`/`h52i` (48 min), `detx` (Sony F5121, Android 8, 42 min), `pzsl`/`8acr` (41–42 min, SM-A515F), shorter on `v6f5` (Xiaomi, 10 min) and `1u05`/`8dvc` (FP4). Across Samsung/Sony/Xiaomi/Fairphone, Android 8→15. (`8acr` reports "completed" *misleadingly* — it teleported to step 20 at min 42; the walker heard nothing for 41 min.)
+
+**Root cause — confirmed, and it is NOT GPS or battery-opt:** during the gaps the 30 s JS timers (`real_callback_freshness`, `alarm_wake_stats`, `voice_snapshot`) fired ~3–9× instead of ~100× → **the WebView JS event loop was suspended.** Meanwhile the native bg-geo service stayed fully alive: AlarmManager fired 110–154× (BG-5), `rawDelivered` 2553–4169 fixes, **`fusedAvailable=true`** with native dedupe suppressing fused as designed (Architecture D validated *available* on real devices). Battery-opt exempt on all (`standby_bucket=EXEMPTED`, `ignoring_batt_opt=true`). The healthy native location stream has nowhere to land because the JS that runs zone-triggering + audio selection is frozen. This is the audit's P0.5 Fix 1e "JS-suspended-despite-alarm" scenario — now **confirmed at scale**, made unambiguous by the iPhones in the same bag working.
+
+**Mechanism (confirmed in source):** the keepalive that *used* to hold the Chromium renderer awake was the JS `SILENT_PLAYER` playing through Howler/WebAudio (an active in-renderer AudioContext keeps a background renderer scheduled). Post-ExoPlayer migration (R21/H1), `SILENT_PLAYER` (`pages.js:2475`) loads through the ExoPlayer branch (`player.js:718`) → it plays via the **native** `cordova.plugins.audio.Player` service, so **no audio context runs inside the WebView renderer**. `Howler.autoSuspend=false` (`player.js:44`) is moot; NoSleep only holds the screen wake-lock (released when locked). Net: on the ExoPlayer Android path nothing keeps the JS loop alive in a locked pocket. **This is an ExoPlayer-migration regression in disguise** — the old Howler path kept the renderer alive for free; `8giw` (2026-06-05) didn't suspend only because it was a single phone walked/handled, not deep in a locked bag.
+
+### Android background JS-suspension — fix plan (layered; keep the JS loop alive, do NOT port the walk to native)
+
+The fix is to **keep the WebView renderer's JS event loop scheduled when locked**, not to rewrite the walk logic. Layered, cheapest-first:
+
+1. **✅ SHIPPED [webapp] — in-renderer Web Audio keepalive.** `RENDERER_KEEPALIVE` (`pages.js`) plays the silent `flanerie.mp3` through **Howler with `html5:false` (Web Audio API, not an `<audio>` element)** for the duration of a parcours — the exact mechanism the Howler era had for free. Android-gated (iOS keeps JS alive via the location bg-mode). Started at parcours start, stopped at walk-end, `poke()`d on `visibilitychange` to recover a suspended AudioContext. Telemetry: `renderer_keepalive` (+`_error`). Volume 1.0 is safe (asset content is silence).
+2. **✅ SHIPPED [container] — `KeepRunning=true`.** Added to `FlanerieCordova/config.xml` (was unset → relying on the default) so Cordova never pauses the WebView on background. Belt-and-braces; insufficient alone (renderer freeze is Chromium-internal, below the KeepRunning layer). Needs container rebuild.
+3. **NEXT [container, small native] — `WebView.setRendererPriorityPolicy(RENDERER_PRIORITY_IMPORTANT, waivedWhenNotVisible=false)`.** The most *direct* lever: by default WebView drops the renderer to WAIVED priority when not visible → eligible for freeze/kill; setting `waivedWhenNotVisible=false` keeps the renderer IMPORTANT (un-frozen) while the screen is off. Reaches the WebView in the Activity via a small `after_prepare` hook or a tiny plugin. Pairs with the FG service (process not cached) → renderer stays scheduled. Implement if the desk test (below) still shows any throttling after 1+2.
+4. **Validation — desk test, NO walk needed.** The freeze is screen-off + backgrounded, not motion-dependent: start a parcours (or reach the parcours page in devmode), lock the screen on a desk 15 min, unlock, confirm `real_callback_freshness` fired every ~30 s with **no multi-minute gap** + `renderer_keepalive action=start` present. Watch that narration is **not** ducked/interrupted by the keepalive stream (the one coexistence risk: Web-Audio keepalive + native ExoPlayer narration playing simultaneously).
+5. **Only if 1–3 fail — native geofence wake-rail [RESEARCH-FIRST].** Android `GeofencingClient` registers coarse circular geofences at zone boundaries; a crossing wakes the app via PendingIntent → plugin nudges the renderer / delivers a fix → **JS still does the precise polygon trigger** (wakeup-only, mirrors the iOS rail; audit Decision 2.B). This is the Android analog of the iOS rail — NOT a logic port.
+6. **REJECTED — porting spot.js polygon math + audio orchestration to native.** That doubles the most complex, highest-churn code in the app across *two* native platforms to solve what is a *scheduling* problem, not a compute problem. The JS isn't too slow; it just isn't being run. Layers 1–3 (and 5 if needed) make it run. Revisit only if Android proves it will not keep a WebView renderer scheduled under any of these levers.
+
+→ Promotes B4 / P0.5 Fix 1e from telemetry-diagnostic to a real P0 fix; reproducing set = `8acr`/`detx`/`s906`/`h52i`.
+
+### Audio — clean fleet-wide
+Zero real narration failures (no `step_voice_failed`, no `BLOC_*` errors) across all 48 sessions. 124 ExoPlayer + 79 audio-simple resolves, **0 errors on either**; apk 28's SW-decoder fix held across 5 Android models. **Caveat:** the SM-A528B that failed 2026-06-06 was **not present** — the targeted Howler-retirement re-test is still owed; today is supporting evidence, not the confirmation.
 
 ---
 
