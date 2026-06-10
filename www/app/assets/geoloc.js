@@ -427,10 +427,34 @@ class GeoLoc extends EventEmitter {
                     });
                 }
             }
+
+            // D1 hardening (#2, 2026-06-10) — timer-based JS-liveness ack,
+            // decoupled from GPS delivery: a GPS blackout with a live JS loop
+            // must not read as a frozen renderer to the native watchdog (which
+            // would vibrate "Flânerie en pause" mid-blackout). ~25 s cadence;
+            // Chromium intensive throttling clamps background timers to 1/min,
+            // still inside the native 90 s stall bar. Per-fix acks in
+            // _callbackPosition stay as belt-and-braces (bridge callbacks keep
+            // flowing when timers are throttled).
+            if (PLATFORM === 'android' &&
+                (Date.now() - this._lastWatchdogAckTime) >= 25000) {
+                this._lastWatchdogAckTime = Date.now();
+                let ackGeo = getBackgroundGeolocationPlugin();
+                if (ackGeo && typeof ackGeo.ackAlive === 'function') {
+                    try { ackGeo.ackAlive(function(){}, function(){}) } catch (e) {}
+                }
+                // #4 — same cadence: re-poke the in-renderer Web Audio keepalive
+                // in case Chromium suspended the AudioContext after the one-shot
+                // visibilitychange poke (the lock-time race the audit flagged).
+                if (typeof RENDERER_KEEPALIVE !== 'undefined') {
+                    try { RENDERER_KEEPALIVE.poke() } catch (e) {}
+                }
+            }
         }, 1000);
 
         this._heartbeatInProgress = false;
         this._lastHeartbeatTime = 0;
+        this._lastWatchdogAckTime = 0;
 
         // B4 watchdog (BG-2 / Round 13) — iOS forceReacquire counter + throttle.
         // Resets on each new GPS session (init()). Max 10 triggers per session (#6b).
@@ -942,6 +966,14 @@ class GeoLoc extends EventEmitter {
                 let bgGeo = getBackgroundGeolocationPlugin()
                 if (bgGeo && typeof bgGeo.ackAlive === 'function') {
                     try { bgGeo.ackAlive(function(){}, function(){}) } catch (e) {}
+                }
+                // #4 (2026-06-10) — bridge-delivered fixes keep arriving during
+                // the soft-throttle phase even when JS timers stall, so this is
+                // the most reliable place to resurrect a suspended AudioContext
+                // before the hard freeze lands. poke() is a cheap no-op when the
+                // keepalive is inactive or already playing.
+                if (typeof RENDERER_KEEPALIVE !== 'undefined') {
+                    try { RENDERER_KEEPALIVE.poke() } catch (e) {}
                 }
             }
         }

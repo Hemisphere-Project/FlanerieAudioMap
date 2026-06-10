@@ -1216,6 +1216,50 @@ PAGES['tools'] = () => {
         appendOutput('is_loan: ' + TELEMETRY.isLoanDevice());
     }
 
+    // Loan-phone setup (2026-06-10, D1 tier 1.5) — "Affichage par-dessus"
+    // (SYSTEM_ALERT_WINDOW). The grant is what lets the native watchdog
+    // auto-foreground its recovery activity when the renderer freezes in a
+    // locked pocket: silent un-freeze, no walker tap. Settings-toggle only
+    // (Android exposes no runtime dialog), so the flow is: read state →
+    // open the per-app Settings screen → re-read when the operator returns.
+    // Without the grant the watchdog falls back to vibration + notification.
+    let toolsPo = (typeof cordova !== 'undefined' && cordova.plugins && cordova.plugins.PowerOptimization)
+        ? cordova.plugins.PowerOptimization : null;
+    function refreshOverlayGrant(prefix) {
+        if (!toolsPo || typeof toolsPo.IsOverlayGranted !== 'function') {
+            appendOutput('overlay-grant: plugin indisponible (apk 30+ requis)');
+            return;
+        }
+        toolsPo.IsOverlayGranted().then(function(granted) {
+            appendOutput(prefix + ': ' + (granted
+                ? 'ACCORDÉ — récupération auto de gel active'
+                : 'NON accordé — récupération de gel par notification seulement'));
+            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('overlay_grant_state', {granted: granted});
+        }).catch(function(e) { appendOutput('overlay-grant: erreur ' + e); });
+    }
+    if (PLATFORM === 'android') refreshOverlayGrant('overlay-grant (état)');
+    $('#tools-overlay-grant').off().on('click', () => {
+        if (PLATFORM !== 'android') { appendOutput('overlay-grant: Android uniquement'); return; }
+        if (!toolsPo || typeof toolsPo.RequestOverlay !== 'function') {
+            appendOutput('overlay-grant: plugin indisponible (apk 30+ requis)');
+            return;
+        }
+        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('overlay_grant_requested', {});
+        toolsPo.RequestOverlay().then(function() {
+            appendOutput('overlay-grant: réglages ouverts — activez "Affichage par-dessus les autres applis" pour Flânerie, puis revenez ici');
+        }).catch(function(e) { appendOutput('overlay-grant: erreur ' + e); });
+    });
+    // Re-read the state when the operator comes back from Settings. The
+    // listener removes itself once we're off the tools page, so repeated
+    // page entries don't stack handlers.
+    document.addEventListener('visibilitychange', function onToolsVis() {
+        if (currentPage !== 'tools') {
+            document.removeEventListener('visibilitychange', onToolsVis);
+            return;
+        }
+        if (!document.hidden && PLATFORM === 'android') refreshOverlayGrant('overlay-grant (retour réglages)');
+    });
+
     $('#tools-back').off().on('click', () => PAGE('select'));
 }
 
@@ -2535,6 +2579,10 @@ SILENT_PLAYER.load(BASEURL+'/images/', {src: 'flanerie.mp3', master: 1}, false);
 // audio-simple.
 var RENDERER_KEEPALIVE = {
     _howl: null,
+    // Lifecycle gate: poke() is now also called from geoloc's per-fix path and
+    // 25 s timer (#4, 2026-06-10), which keep running after a walk ends — without
+    // this flag those pokes would silently restart the keepalive loop post-stop().
+    _active: false,
     // Native lever (power-opt PO-10): keep the WebView renderer at IMPORTANT
     // priority even when hidden, so Android doesn't deprioritise/freeze it when
     // the screen locks. Toggled with the Web Audio loop on the same lifecycle.
@@ -2552,6 +2600,7 @@ var RENDERER_KEEPALIVE = {
     },
     start() {
         if (PLATFORM === 'ios') return;
+        this._active = true;
         this._setNativePriority(true);
         if (typeof Howl === 'undefined') return;
         try {
@@ -2572,6 +2621,7 @@ var RENDERER_KEEPALIVE = {
         }
     },
     stop() {
+        this._active = false;
         this._setNativePriority(false);
         if (!this._howl) return;
         try { this._howl.stop(); } catch (e) {}
@@ -2579,7 +2629,7 @@ var RENDERER_KEEPALIVE = {
     },
     // Recover if Chromium suspended the AudioContext across a hide/show cycle.
     poke() {
-        if (PLATFORM === 'ios' || !this._howl) return;
+        if (PLATFORM === 'ios' || !this._active || !this._howl) return;
         try {
             if (typeof Howler !== 'undefined' && Howler.ctx && Howler.ctx.state === 'suspended') Howler.ctx.resume();
             if (!this._howl.playing()) this._howl.play();
@@ -3025,7 +3075,11 @@ PAGES['parcours'] = async () => {
         // auto-revoke; a false here means a long-idle device may have already
         // stripped permissions before the visitor's walk.
         var arw = (typeof po.IsAutoRevokeWhitelisted  === 'function') ? po.IsAutoRevokeWhitelisted().catch(function(e)  { return 'error:'+e; }) : Promise.resolve('n/a');
-        Promise.all([ps, br, ig, sb, ler, arw]).then(function(r) {
+        // PO-11 (2026-06-10) — overlay grant = D1 tier-1.5 auto-foreground armed.
+        // Loan phones should report true (devmode setup flow); visitor BYOD
+        // false is expected (notification fallback).
+        var ovl = (typeof po.IsOverlayGranted         === 'function') ? po.IsOverlayGranted().catch(function(e)         { return 'error:'+e; }) : Promise.resolve('n/a');
+        Promise.all([ps, br, ig, sb, ler, arw, ovl]).then(function(r) {
             TELEMETRY.log('power_state_at_parcours', {
                 power_save:           r[0],
                 bg_restricted:        r[1],
@@ -3033,6 +3087,7 @@ PAGES['parcours'] = async () => {
                 standby_bucket:       r[3],
                 last_exit_reasons:    r[4],
                 auto_revoke_whitelisted: r[5],
+                overlay_granted:      r[6],
             });
         });
     })();
