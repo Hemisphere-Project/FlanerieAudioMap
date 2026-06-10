@@ -2163,11 +2163,10 @@ PAGES['rdv'] = () => {
     // walker is somewhere GPS can't reach (indoors), and continuing to
     // hammer getCurrentLocation won't help either case.
     const RDV_WARMUP_MAX_ATTEMPTS = 5
-    // Time-boxed best-effort fallback: on weak-GPS / stationary devices the startup
-    // gate (<=15 m, 2 distinct fresh fixes) can never pass — field 2026-06-05 nlrc
-    // (Fairphone 4) was stranded 74 min on "En attente du GPS". After this long
-    // failing the gate, offer an informed "Démarrer quand même" (best accuracy
-    // shown) plus loan-phone guidance, rather than trapping the walker.
+    // Time-boxed wall: on weak-GPS / stationary devices the startup gate (<=20 m,
+    // 2 distinct fresh fixes) can never pass — field 2026-06-05 nlrc (Fairphone 4)
+    // was stranded 74 min on "En attente du GPS". After this long failing the gate,
+    // surface loan-phone guidance rather than trapping the walker on a blank wait.
     const RDV_STARTUP_FALLBACK_MS = 90000
     var rdvWaitStartMs = Date.now()
     var startupFallbackShown = false
@@ -2176,7 +2175,7 @@ PAGES['rdv'] = () => {
     }
     function startupWarmupLabel(passive) {
         let status = typeof GEO.startupStatus === 'function' ? GEO.startupStatus() : null
-        let maxAcc = status && status.maxAccuracyM ? status.maxAccuracyM : 15
+        let maxAcc = status && status.maxAccuracyM ? status.maxAccuracyM : 20
         let fixCount = status && typeof status.fixCount === 'number' ? status.fixCount : 0
         let requiredFixCount = status && typeof status.requiredFixCount === 'number' ? status.requiredFixCount : 2
 
@@ -2225,12 +2224,11 @@ PAGES['rdv'] = () => {
                 let status = typeof GEO.startupStatus === 'function' ? GEO.startupStatus() : null
                 let acc = status && typeof status.lastAccuracy === 'number' ? Math.round(status.lastAccuracy) : null
                 let accTxt = acc != null ? ('meilleure précision obtenue : ' + acc + ' m') : 'précision insuffisante'
-                // #2 (2026-06-09, operator decision): weak-GPS devices stay BLOCKED
-                // → loan phone. We do NOT offer a "démarrer quand même" escape — a
-                // phone that can't reach the (already-relaxed) accuracy ceiling would
-                // walk a bad walk. The adaptive gate has by now relaxed to its
-                // ceiling (geoloc.js), so reaching here means the device's GPS floor
-                // is genuinely below what the parcours needs.
+                // Operator decision: weak-GPS devices stay BLOCKED → loan phone. We
+                // do NOT offer a "démarrer quand même" escape — a phone that can't
+                // hold a fix at the flat 20 m startup bar (geoloc.js) would walk a
+                // bad walk. Reaching here means the device's GPS floor is genuinely
+                // below what the parcours needs.
                 $('#rdv-startup-fallback').show().html(
                     'Le GPS de ce téléphone n\'atteint pas la précision nécessaire pour le parcours (' + accTxt + ').<br /><br />'
                     + 'Merci de demander un <b>téléphone de prêt</b> à l\'équipe à l\'accueil — '
@@ -2241,7 +2239,7 @@ PAGES['rdv'] = () => {
                     last_accuracy: status ? status.lastAccuracy : null,
                     last_reason: status ? status.lastReason : null,
                     max_accuracy_m: status ? status.maxAccuracyM : null,
-                    ceiling_m: 25,
+                    bar_m: 20,
                 })
             }
             return;
@@ -2268,11 +2266,11 @@ PAGES['rdv'] = () => {
         PAGE('checkaudio')
     })
 
-    // #2 (2026-06-09): the P0.2b "démarrer quand même" force-start is retired — a
-    // weak-GPS device stays blocked → loan phone (operator decision). The button is
-    // kept hidden + its bypass handler removed so there is no path to walk a
-    // sub-ceiling-accuracy parcours. (Re-enable = restore a click→PAGE('checkaudio')
-    // handler here if a staff override is ever wanted.)
+    // The P0.2b "démarrer quand même" force-start is retired — a weak-GPS device
+    // stays blocked → loan phone (operator decision). The button is kept hidden +
+    // its bypass handler removed so there is no path to walk below the flat 20 m
+    // startup bar. (Re-enable = restore a click→PAGE('checkaudio') handler here if
+    // a staff override is ever wanted.)
     $('#rdv-force-start').hide().off()
 
     if (DEVMODE) PAGE('checkaudio')

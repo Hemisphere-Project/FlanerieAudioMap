@@ -19,6 +19,24 @@ if (!fs.existsSync(GUEST_PASSWORD_FILE)) {
   fs.writeFileSync(GUEST_PASSWORD_FILE, JSON.stringify({ password: 'guest' }));
 }
 
+// Constant-time string compare that tolerates differing lengths (timingSafeEqual
+// throws on length mismatch and leaks length otherwise). Hashing both sides to a
+// fixed-width digest first removes the length side-channel.
+function safeEqual(a, b) {
+  const ha = crypto.createHash('sha256').update(String(a)).digest();
+  const hb = crypto.createHash('sha256').update(String(b)).digest();
+  return crypto.timingSafeEqual(ha, hb);
+}
+
+// Only allow same-origin relative paths as a post-login redirect target, so
+// /login?next=https://evil.com (or a protocol-relative //evil.com) can't bounce
+// an authenticated user off-site.
+function safeNext(next) {
+  if (typeof next !== 'string') return '/control';
+  if (!next.startsWith('/') || next.startsWith('//') || next.startsWith('/\\')) return '/control';
+  return next;
+}
+
 function signRole(role) {
   let data = role;
   if (role === 'guest') data += ':' + getGuestPassword();
@@ -91,18 +109,18 @@ export function handleLogin(req, res) {
       const params = new URLSearchParams(body);
       const password = params.get('password');
       let role = null;
-      if (password === ADMIN_PASSWORD) {
+      if (ADMIN_PASSWORD && safeEqual(password, ADMIN_PASSWORD)) {
         role = 'admin';
       } else {
         const guestPwd = getGuestPassword();
-        if (guestPwd && password === guestPwd) {
+        if (guestPwd && safeEqual(password, guestPwd)) {
           role = 'guest';
         }
       }
       if (role) {
-        res.cookie(COOKIE_NAME, signRole(role), { httpOnly: true, sameSite: 'Lax' });
-        const nextUrl = req.query.next || '/control';
-        res.redirect(nextUrl);
+        const secure = req.secure || req.headers['x-forwarded-proto'] === 'https';
+        res.cookie(COOKIE_NAME, signRole(role), { httpOnly: true, sameSite: 'Lax', secure });
+        res.redirect(safeNext(req.query.next));
       } else {
         res.send(loginForm('Mot de passe incorrect'));
       }

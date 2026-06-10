@@ -14,24 +14,19 @@ var GPS_SLEEP_SUSPECT_THRESHOLD = 30000
 var ACTIVE_GEO_BACKGROUND_TASK = null
 var IOS_GEO_BACKGROUND_TASK_TIMEOUT = 8000
 var STARTUP_FIX_MAX_AGE_MS = 12000
-var STARTUP_FIX_MAX_ACCURACY_M = 15
+// Flat startup accuracy bar (2026-06-10). A single 20 m threshold, no time-based
+// relaxation. Replaces the 15 m base + 15→25 m adaptive relax (2026-06-09 #2):
+// that relax set `ready` against a widening bar while the gate's own re-check
+// (startupReady) still applied the strict 15 m, so the two diverged and a
+// weak-GPS device was reported ready yet stayed stranded at rdv. With one flat
+// bar, acceptance and the gate agree by construction. A device that cannot hold a
+// fix at 20 m stays BLOCKED → loan phone (operator decision: don't walk a bad
+// walk). Freshness stays strict — a stale fix means GPS isn't delivering, which a
+// wider accuracy bar must never mask.
+var STARTUP_FIX_MAX_ACCURACY_M = 20
 var STARTUP_REQUIRED_FIXES = 2
 var STARTUP_SECOND_FIX_MIN_GAP_MS = 5000
 var STARTUP_SECOND_FIX_MIN_MOVEMENT_M = 8
-// Adaptive accuracy gate (2026-06-09 #2 fix). The fixed 15 m bar permanently
-// strands a device whose GPS floor is worse than 15 m (field: nlrc / Fairphone 4,
-// avgAcc ~21 m, never cleared rdv in 74 min — every fresh fix rejected on
-// accuracy). Once the device is provably delivering FRESH fixes that only fail on
-// accuracy, relax the bar in small steps toward the device's floor, capped at a
-// low ceiling — a device that cannot reach the ceiling stays BLOCKED on purpose
-// (operator decision: hand the visitor a loan phone rather than walk a bad walk).
-// Good devices are unaffected (they clear ≤15 m before the relax clock starts).
-// Freshness stays strict — only accuracy relaxes (a stale fix means GPS is not
-// delivering, which relaxing accuracy must never paper over).
-var STARTUP_ACCURACY_RELAX_AFTER_MS = 30000     // hold 15 m for the first 30 s
-var STARTUP_ACCURACY_RELAX_STEP_M = 5           // then +5 m per step
-var STARTUP_ACCURACY_RELAX_INTERVAL_MS = 20000  // a step every 20 s
-var STARTUP_ACCURACY_MAX_M = 25                 // ceiling — worse than this stays blocked (loan phone)
 
 function gpsAccuracyBucket(acc) {
     if (typeof acc !== 'number' || isNaN(acc)) return 'unknown'
@@ -449,7 +444,6 @@ class GeoLoc extends EventEmitter {
             fixCount: 0,
             requiredFixCount: this.startupRequiredFixes,
             maxAccuracyM: this.startupFixMaxAccuracyM,
-            accuracyRelaxStartMs: null,
             maxAgeMs: this.startupFixMaxAgeMs,
             lastReason: 'waiting_first_fix',
             lastSource: null,
@@ -462,19 +456,6 @@ class GeoLoc extends EventEmitter {
         }
     }
 
-    // Effective accuracy bar at this instant. Holds the strict base (15 m) until
-    // the device has been delivering fresh-but-imprecise fixes for RELAX_AFTER_MS,
-    // then steps up toward the device's floor, capped at the ceiling. Returns the
-    // base when the relax clock hasn't started (good devices never relax).
-    _effectiveAccuracyBar() {
-        let t = this.startupReadiness
-        if (!t || t.accuracyRelaxStartMs == null) return STARTUP_FIX_MAX_ACCURACY_M
-        let elapsed = Date.now() - t.accuracyRelaxStartMs
-        if (elapsed < STARTUP_ACCURACY_RELAX_AFTER_MS) return STARTUP_FIX_MAX_ACCURACY_M
-        let steps = Math.floor((elapsed - STARTUP_ACCURACY_RELAX_AFTER_MS) / STARTUP_ACCURACY_RELAX_INTERVAL_MS) + 1
-        return Math.min(STARTUP_FIX_MAX_ACCURACY_M + steps * STARTUP_ACCURACY_RELAX_STEP_M, STARTUP_ACCURACY_MAX_M)
-    }
-
     _updateStartupReadiness(position, info = {}) {
         if (!this.startupReadiness) this._resetStartupReadiness()
 
@@ -484,21 +465,12 @@ class GeoLoc extends EventEmitter {
         let usableFixTime = info.usableFixTime
         let source = info.source || 'unknown'
         let reason = null
-        let effectiveBar = STARTUP_FIX_MAX_ACCURACY_M
 
         if (position.simulate) reason = 'simulate'
         else if (typeof ageMs !== 'number' || isNaN(ageMs)) reason = 'unknown_age'
         else if (ageMs > this.startupFixMaxAgeMs) reason = 'stale'
         else if (typeof accuracy !== 'number' || isNaN(accuracy)) reason = 'no_accuracy'
-        else if (accuracy > STARTUP_FIX_MAX_ACCURACY_M) {
-            // Fresh fix failing only on precision — the relaxable case (#2 fix).
-            // Anchor the relax clock on first occurrence, then judge against the
-            // time-relaxed bar so a weak-GPS device clears at its own floor (up to
-            // the ceiling). Worse than the ceiling stays 'accuracy'-rejected = blocked.
-            if (tracker.accuracyRelaxStartMs == null) tracker.accuracyRelaxStartMs = Date.now()
-            effectiveBar = this._effectiveAccuracyBar()
-            if (accuracy > effectiveBar) reason = 'accuracy'
-        }
+        else if (accuracy > STARTUP_FIX_MAX_ACCURACY_M) reason = 'accuracy'
 
         let next = Object.assign({}, tracker, {
             lastSource: source,
@@ -508,17 +480,7 @@ class GeoLoc extends EventEmitter {
             lastMovementM: null,
         })
 
-        // Surface the (possibly relaxed) bar to the rdv UI label + telemetry, and
-        // log each upward step once so the relaxation is auditable post-hoc.
-        if (effectiveBar > tracker.maxAccuracyM && typeof TELEMETRY !== 'undefined') {
-            TELEMETRY.log('gps_startup_relaxed', {
-                from_m: tracker.maxAccuracyM,
-                to_m: effectiveBar,
-                acc: accuracy,
-                waited_ms: tracker.accuracyRelaxStartMs ? Date.now() - tracker.accuracyRelaxStartMs : null,
-            })
-        }
-        next.maxAccuracyM = effectiveBar
+        next.maxAccuracyM = STARTUP_FIX_MAX_ACCURACY_M
 
         if (reason) {
             next.lastReason = reason
@@ -528,8 +490,7 @@ class GeoLoc extends EventEmitter {
                     reason: reason,
                     fix_count: tracker.fixCount,
                     required_fix_count: this.startupRequiredFixes,
-                    max_accuracy_m: effectiveBar,
-                    base_accuracy_m: STARTUP_FIX_MAX_ACCURACY_M,
+                    max_accuracy_m: STARTUP_FIX_MAX_ACCURACY_M,
                     age_ms: ageMs,
                     acc: accuracy,
                     source: source,
