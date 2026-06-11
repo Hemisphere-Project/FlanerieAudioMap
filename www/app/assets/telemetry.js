@@ -27,7 +27,9 @@ var TELEMETRY = (function() {
     var STORAGE_KEY = 'telemetry_session';
     var PENDING_KEY = 'telemetry_pending';  // durable copy of undelivered events (survives app kill/freeze)
     var POST_TIMEOUT_MS = 12000;            // bound a flush POST so a stalled uplink fails fast (< FLUSH_INTERVAL)
+    var DRAIN_CHUNK = 200;                  // events per drain POST — bounds body size when re-sending a long-offline backlog
     var _pendingDrained = false;            // re-send leftover events once per app launch
+    var _drainInFlight = false;             // one drain at a time (launch + online event can race)
     var RESUME_MAX_AGE = 4 * 60 * 60 * 1000;
     var SCHEMA_VERSION = 2;
 
@@ -191,16 +193,22 @@ var TELEMETRY = (function() {
     // losing them. Kept in sync by flush() (success → leftover; failure →
     // retained) and the visibility-hidden handler. A clean end() clears it, so
     // only an abnormal death leaves it populated. mobile-audit.md 2026-06-09.
-    function _persistPending(events) {
+    // `ctx` (optional) pins the session identity at the moment the events were
+    // captured — needed by async flush callbacks that resolve AFTER end() has
+    // nulled the module state (A3, 2026-06-11): without it a failed final flush
+    // would fall into the !sessionId branch and DELETE the durable copy it was
+    // supposed to protect.
+    function _persistPending(events, ctx) {
         try {
-            if (!sessionId || !events || events.length === 0) { localStorage.removeItem(PENDING_KEY); return; }
+            var sid = (ctx && ctx.sessionId) || sessionId;
+            if (!sid || !events || events.length === 0) { localStorage.removeItem(PENDING_KEY); return; }
             var slice = events.length > BUFFER_CAP ? events.slice(-BUFFER_CAP) : events;
             localStorage.setItem(PENDING_KEY, JSON.stringify({
-                sessionId: sessionId,
-                parcoursId: parcoursId,
-                parcoursName: parcoursName,
+                sessionId: sid,
+                parcoursId: (ctx && ctx.parcoursId) || parcoursId,
+                parcoursName: (ctx && ctx.parcoursName) || parcoursName,
                 schemaVersion: SCHEMA_VERSION,
-                client: sessionMeta,
+                client: (ctx && ctx.client) || sessionMeta,
                 events: slice,
                 savedAt: Date.now()
             }));
@@ -208,11 +216,24 @@ var TELEMETRY = (function() {
     }
 
     // On launch, re-send the leftover events of a session that didn't close
-    // cleanly. Posted under the ORIGINAL sessionId so the server appends them to
-    // the right session file. Runs once per app launch; non-blocking.
+    // cleanly. Runs once per app launch; non-blocking. (The online-event hook
+    // below can re-attempt via _drainPendingNow when this attempt was offline.)
     function _drainPending() {
         if (_pendingDrained) return;
         _pendingDrained = true;
+        _drainPendingNow();
+    }
+
+    // A3 (2026-06-11) — re-send the leftover events of a session that didn't
+    // close cleanly: killed, frozen, or ENDED WHILE OFFLINE (the Wi-Fi-only
+    // loaner `fkpp`: walk completed in the field, final flush had no network).
+    // Posted under the ORIGINAL sessionId so the server appends to the right
+    // session file, in bounded chunks so a long-offline backlog never produces
+    // one oversized POST. The durable copy is cleared only after every chunk is
+    // confirmed delivered; a partial failure rewrites the remainder so the next
+    // attempt resumes instead of re-sending delivered chunks.
+    function _drainPendingNow() {
+        if (_drainInFlight) return;
         if (typeof PLATFORM !== 'undefined' && PLATFORM === 'browser') return;
         var raw;
         try { raw = localStorage.getItem(PENDING_KEY); } catch (e) { return; }
@@ -225,28 +246,54 @@ var TELEMETRY = (function() {
         }
         var url = (typeof prep === 'function') ? prep('/telemetry-push') : '/telemetry-push';
         console.log('[TELEMETRY] draining', rec.events.length, 'pending events from prior session', rec.sessionId);
-        _postTelemetry(url, {
-            sessionId: rec.sessionId,
-            parcoursId: rec.parcoursId,
-            parcoursName: rec.parcoursName,
-            schemaVersion: rec.schemaVersion || SCHEMA_VERSION,
-            client: rec.client,
-            events: rec.events
-        }).then(function (response) {
-            if (response && response.status === 200) {
-                // Only clear if the live session hasn't overwritten PENDING with
-                // newer data in the meantime (drain POST is async).
-                try {
-                    var cur = JSON.parse(localStorage.getItem(PENDING_KEY) || 'null');
-                    if (!cur || cur.savedAt === rec.savedAt) localStorage.removeItem(PENDING_KEY);
-                } catch (e) {}
+        _drainInFlight = true;
+        var queue = rec.events.slice();
+
+        function rewriteRemainder() {
+            // Keep savedAt unchanged: it is the "is this slot still mine?" guard —
+            // a live session that overwrote PENDING in the meantime must not have
+            // its record cleared or clobbered by this (async) drain.
+            try {
+                var cur = JSON.parse(localStorage.getItem(PENDING_KEY) || 'null');
+                if (cur && cur.savedAt !== rec.savedAt) return;
+                if (!queue.length) { localStorage.removeItem(PENDING_KEY); return; }
+                rec.events = queue;
+                localStorage.setItem(PENDING_KEY, JSON.stringify(rec));
+            } catch (e) {}
+        }
+
+        function next() {
+            if (!queue.length) {
+                rewriteRemainder();
+                _drainInFlight = false;
                 console.log('[TELEMETRY] pending drain OK');
-            } else {
-                console.warn('[TELEMETRY] pending drain HTTP', response && response.status, '(will retry next launch)');
+                return;
             }
-        }).catch(function (e) {
-            console.warn('[TELEMETRY] pending drain failed (will retry next launch):', (e && e.message) || String(e));
-        });
+            var chunk = queue.slice(0, DRAIN_CHUNK);
+            _postTelemetry(url, {
+                sessionId: rec.sessionId,
+                parcoursId: rec.parcoursId,
+                parcoursName: rec.parcoursName,
+                schemaVersion: rec.schemaVersion || SCHEMA_VERSION,
+                client: rec.client,
+                events: chunk
+            }).then(function (response) {
+                if (response && response.status === 200) {
+                    queue = queue.slice(chunk.length);
+                    rewriteRemainder();
+                    next();
+                } else {
+                    rewriteRemainder();
+                    _drainInFlight = false;
+                    console.warn('[TELEMETRY] pending drain HTTP', response && response.status, '(will retry on online/next launch)');
+                }
+            }).catch(function (e) {
+                rewriteRemainder();
+                _drainInFlight = false;
+                console.warn('[TELEMETRY] pending drain failed (will retry on online/next launch):', (e && e.message) || String(e));
+            });
+        }
+        next();
     }
 
     // A5 — persistent device identity. UUID is generated once per app install and
@@ -500,6 +547,35 @@ var TELEMETRY = (function() {
         for (var i = 0; i < pre.length; i++) buffer.push(pre[i]);
     }
 
+    // A3 (2026-06-11) — when the buffer hits its cap (only happens while flushes
+    // are failing, i.e. a long offline stretch), evict high-frequency diagnostics
+    // first so the walk NARRATIVE — steps, audio errors, signal states, session
+    // lifecycle — survives far longer than the blind oldest-10% drop did
+    // (~2.5 min of mixed traffic at walk event rates). Normal operation never
+    // reaches the cap.
+    var EVICTABLE_TYPES = {
+        voice_snapshot: 1, route_probe: 1, parcours_store: 1, gps: 1,
+        accuracy_near_border: 1, gps_accuracy_bucket: 1, watchdog_stats: 1,
+        alarm_wake_stats: 1, location_dispatch_stats: 1, gps_rail_wake_stats: 1,
+        real_callback_freshness: 1, gps_quality_summary: 1, audio_session_state: 1
+    };
+
+    function _capBuffer() {
+        if (buffer.length < BUFFER_CAP) return;
+        var keep = [], evictable = [];
+        for (var i = 0; i < buffer.length; i++) {
+            (EVICTABLE_TYPES[buffer[i].type] ? evictable : keep).push(buffer[i]);
+        }
+        var room = BUFFER_CAP - 1 - keep.length;
+        if (room > 0) {
+            buffer = keep.concat(evictable.slice(-room));
+            buffer.sort(function (a, b) { return a.t - b.t; });
+        } else {
+            // Narrative events alone exceed the cap — drop their oldest too.
+            buffer = keep.slice(keep.length - (BUFFER_CAP - 1));
+        }
+    }
+
     function _log(type, data) {
         if (!sessionId) {
             // No session yet — stash (capped) for replay on the next start().
@@ -507,9 +583,7 @@ var TELEMETRY = (function() {
             preSessionBuffer.push({ t: Date.now(), type: type, data: data || {} });
             return;
         }
-        if (buffer.length >= BUFFER_CAP) {
-            buffer = buffer.slice(Math.floor(BUFFER_CAP * 0.1));
-        }
+        _capBuffer();
         buffer.push({ t: Date.now(), type: type, data: data || {} });
         _writeStored();
         console.log('[TELEMETRY] buffered event:', type, 'buffer size:', buffer.length);
@@ -562,12 +636,15 @@ var TELEMETRY = (function() {
             var events = buffer.splice(0, buffer.length);
             var url = (typeof prep === 'function') ? prep('/telemetry-push') : '/telemetry-push';
             console.log('[TELEMETRY] flushing', events.length, 'events to', url);
+            // A3 — pin the session identity now: the callbacks below may resolve
+            // after end() nulled the module state (final flush of an offline walk).
+            var ctx = { sessionId: sessionId, parcoursId: parcoursId, parcoursName: parcoursName, client: sessionMeta };
             var payload = {
-                sessionId: sessionId,
-                parcoursId: parcoursId,
-                parcoursName: parcoursName,
+                sessionId: ctx.sessionId,
+                parcoursId: ctx.parcoursId,
+                parcoursName: ctx.parcoursName,
                 schemaVersion: SCHEMA_VERSION,
-                client: sessionMeta,
+                client: ctx.client,
                 events: events
             };
             return _postTelemetry(url, payload).then(function(response) {
@@ -585,9 +662,19 @@ var TELEMETRY = (function() {
                 console.log('[TELEMETRY] flush OK:', r);
                 return { ok: true, responseText: r };
             }).catch(function(e) {
-                buffer = events.concat(buffer);
-                if (buffer.length > BUFFER_CAP) buffer = buffer.slice(-BUFFER_CAP);
-                _persistPending(buffer);   // delivery failed — keep undelivered events on disk for next-launch drain
+                if (sessionId === ctx.sessionId) {
+                    // Same session still live — re-buffer for the next interval.
+                    buffer = events.concat(buffer);
+                    if (buffer.length > BUFFER_CAP) buffer = buffer.slice(-BUFFER_CAP);
+                    _persistPending(buffer);   // keep undelivered events on disk for the drain
+                } else if (!sessionId) {
+                    // The session ended while this flush was in flight (offline
+                    // end-of-walk). Keep the durable copy under the ORIGINAL
+                    // session identity for the online-event / next-launch drain.
+                    _persistPending(events, ctx);
+                }
+                // else: a NEW session is already live — never inject another
+                // session's events into its buffer or stomp its pending slot.
                 console.warn('[TELEMETRY] flush FAILED:', (e && e.message) ? e.message : String(e));
                 return { ok: false, skipped: false, error: (e && e.message) ? e.message : String(e) };
             });
@@ -604,10 +691,6 @@ var TELEMETRY = (function() {
             _log('session_end', opts.data || {});
             if (flushTimer) { clearInterval(flushTimer); flushTimer = null; }
             localStorage.removeItem(STORAGE_KEY);
-            // Clean close — drop the durable pending copy so a completed session
-            // is never re-sent on the next launch (the final batch goes via
-            // _flushFinal/sendBeacon below).
-            try { localStorage.removeItem(PENDING_KEY); } catch (e) {}
             // F-R1 — stamp when this session ended so the next session_start can
             // log inter_session_idle_ms. Lets analyze.mjs correlate P7 (silent
             // audio on loan-phone re-arm) with time-since-last-walk: if the
@@ -618,8 +701,15 @@ var TELEMETRY = (function() {
             if (!opts.skipIdleStamp) {
                 try { localStorage.setItem('last_session_end_ts', String(Date.now())); } catch (e) {}
             }
-            // Flush synchronously via sendBeacon if available, else async
-            _flushFinal();
+            // A3 (2026-06-11) — durable copy FIRST, then a CONFIRMED flush. The
+            // old path deleted PENDING and trusted a fire-and-forget sendBeacon
+            // for the final batch, so a walk that ENDED offline (Wi-Fi-only
+            // loaner `fkpp`, back in the field) lost both. Now: flush success
+            // clears PENDING (its post-end _persistPending sees no session and
+            // removes the key); failure keeps it under the original session id
+            // for the online-event / next-launch drain.
+            _persistPending(buffer);
+            flush();
             console.log('[TELEMETRY] Ended session', sessionId);
             sessionId = null;
             gpsSummary = null;
@@ -661,6 +751,14 @@ var TELEMETRY = (function() {
         });
         window.addEventListener('beforeunload', function() {
             if (sessionId) _flushFinal();
+        });
+        // A3 (2026-06-11) — connectivity returning is THE delivery trigger that
+        // matters on a Wi-Fi-only loaner walking back into range: deliver the
+        // live buffer, or — with no session open (walk already ended in the
+        // field) — the durable leftover of the last one.
+        window.addEventListener('online', function() {
+            if (sessionId) flush();
+            else _drainPendingNow();
         });
     } catch(e) { /* non-browser environment */ }
 

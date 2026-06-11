@@ -3750,6 +3750,13 @@ var GPS_DOZE_TIMER = null;
 const GPS_FROZEN_SUSTAIN_MS = 20000;
 var GPS_FROZEN_SUSTAIN_TIMER = null;
 
+// A1 (2026-06-11): true only while the walker has actually been disrupted by a
+// signal episode (pause + jingle + vibration fired: lost / frozen-escalated /
+// revoked / battery-kill). The recovery vibration is gated on this — a silent
+// sub-escalation freeze must stay silent end-to-end (iPhone SE 3 `0ay2` felt 6
+// recovery buzzes for episodes it was never told about).
+var GPSSIGNAL_DISRUPTED = false;
+
 // Returns a "Précision GPS: <Xm>" prefix when we have a recent fix, otherwise ''.
 // Helps the walker correlate "no signal" with the last known accuracy.
 function gpsPrecisionPrefix() {
@@ -3781,6 +3788,7 @@ function showGpsRevokedOverlay(reason) {
     }
     TELEMETRY.log('gps_revoked', {reason, step: PARCOURS.currentStep()});
     if (navigator.vibrate) navigator.vibrate([500, 200, 500, 200, 500]);
+    GPSSIGNAL_DISRUPTED = true;
     pauseAllPlayers();
     GPSLOST_PLAYER.play();
     setGpsLostOverlay({html, settings: true});
@@ -3850,6 +3858,7 @@ function showBatteryKillOverlay() {
                body;
     TELEMETRY.log('battery_kill_overlay', {family: batteryKillFamily(), manufacturer: (typeof device !== 'undefined' ? device.manufacturer : null), step: PARCOURS.currentStep()});
     if (navigator.vibrate) navigator.vibrate([500, 200, 500, 200, 500]);
+    GPSSIGNAL_DISRUPTED = true;
     pauseAllPlayers();
     GPSLOST_PLAYER.play();
     setGpsLostOverlay({html, settings: true});
@@ -3935,6 +3944,7 @@ GEO.on('stateUpdate', (state, meta) => {
             if (PARCOURS.currentStep() == PARCOURS.spots.steps.length - 1) return;
             TELEMETRY.log('gps_frozen_escalated', {step: PARCOURS.currentStep(), sustained_ms: GPS_FROZEN_SUSTAIN_MS});
             if (navigator.vibrate) navigator.vibrate([250, 120, 250]);
+            GPSSIGNAL_DISRUPTED = true;
             pauseAllPlayers();
             GPSLOST_PLAYER.play();
             setGpsLostOverlay({html: gpsPrecisionPrefix() + GPSFROZEN_TEXT_DEFAULT});
@@ -3955,6 +3965,7 @@ GEO.on('stateUpdate', (state, meta) => {
         console.warn('GEO lost position');
         TELEMETRY.log('gps_lost', {step: PARCOURS.currentStep()});
         if (navigator.vibrate) navigator.vibrate([500, 200, 500]);
+        GPSSIGNAL_DISRUPTED = true;
         pauseAllPlayers();
         GPSLOST_PLAYER.play();
         setGpsLostOverlay();
@@ -3984,8 +3995,11 @@ GEO.on('stateUpdate', (state, meta) => {
         if (currentPage != 'parcours') return; // only if on parcours page
         if (AUDIOFOCUS == 0) return;
         console.log('GEO position ok');
-        TELEMETRY.log('gps_recovered', {step: PARCOURS.currentStep(), from_state: previousSignalState});
-        if (navigator.vibrate) navigator.vibrate([200]);
+        TELEMETRY.log('gps_recovered', {step: PARCOURS.currentStep(), from_state: previousSignalState, was_disrupted: GPSSIGNAL_DISRUPTED});
+        // A1 — recovery feedback only when there was a walker-visible episode
+        // to recover FROM. Silent sub-escalation freezes get no buzz.
+        if (GPSSIGNAL_DISRUPTED && navigator.vibrate) navigator.vibrate([200]);
+        GPSSIGNAL_DISRUPTED = false;
         GPSREVOKED = false;
         GPSLOST_PLAYER.stop();
         resumeAllPlayers();

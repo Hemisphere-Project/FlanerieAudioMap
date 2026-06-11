@@ -264,6 +264,10 @@ export function summarize(session) {
     gpsAcquiring: types['gps_acquiring'] || 0,
     gpsRecovered: types['gps_recovered'] || 0,
     gpsRevoked: types['gps_revoked'] || 0,
+    // A4 (2026-06-11) — sustained accuracy-collapse episodes (fresh fixes, bad
+    // accuracy: invisible to the freshness state machine; iPhone-8 `4och` class)
+    gpsDegraded: types['gps_degraded'] || 0,
+    gpsDegradedRecovered: types['gps_degraded_recovered'] || 0,
     gpsTriggerRejected: types['gps_trigger_rejected'] || 0,
     gpsStale: types['gps_stale_callback'] || 0,
     gpsSleepSuspect: types['gps_sleep_suspect'] || 0,

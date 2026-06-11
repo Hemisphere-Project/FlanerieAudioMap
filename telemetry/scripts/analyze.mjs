@@ -204,6 +204,7 @@ for (const s of main) {
   if (s.audioTimeout) f.push(`audioTimeout=${s.audioTimeout}`);
   if (s.audioStuck) f.push(`audioStuck=${s.audioStuck}`);
   if (s.userLost) f.push(`lost=${s.userLost}/rec=${s.userRecovered}`);
+  if (s.gpsDegraded) f.push(`gpsDegraded=${s.gpsDegraded}/rec=${s.gpsDegradedRecovered}`);
   if (s.gpsRevoked) f.push(`gpsRevoked=${s.gpsRevoked}`);
   if (s.bgStopRepeated) f.push(`bgStopRepeated=${s.bgStopRepeated}`);
   if (s.batteryKill) f.push(`batteryKill=${s.batteryKill}`);

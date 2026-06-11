@@ -25,6 +25,12 @@ var STARTUP_FIX_MAX_AGE_MS = 12000
 // wider accuracy bar must never mask.
 var STARTUP_FIX_MAX_ACCURACY_M = 20
 var STARTUP_REQUIRED_FIXES = 2
+// A4 (2026-06-11) — accuracy-collapse detector thresholds (telemetry-only
+// phase 1). Calibrated from the iPhone-8 `4och` walk: normal segments held
+// p50 ≈ 10 m, the collapsed segment p50 ≈ 40 m / p95 ≈ 200 m — 35 m splits
+// them cleanly. Sustain filters single-blip noise (urban canyon corners).
+var DEGRADED_ACCURACY_M = 35
+var DEGRADED_SUSTAIN_MS = 60000
 var STARTUP_SECOND_FIX_MIN_GAP_MS = 5000
 var STARTUP_SECOND_FIX_MIN_MOVEMENT_M = 8
 
@@ -377,6 +383,12 @@ class GeoLoc extends EventEmitter {
         this.stateUpdateTimeout = 10000; // 10 seconds
         this.lastAccuracyBucket = null;
 
+        // A4 — accuracy-collapse episode tracker (see _trackAccuracyDegradation)
+        this._degradedSince = null;
+        this._degradedActive = false;
+        this._degradedWorstAcc = null;
+        this._degradedFixCount = 0;
+
         this.stateUpdateTimer = setInterval(() => {
             let snapshot = this._signalStateSnapshot(Date.now())
             this._applySignalState(snapshot)
@@ -509,7 +521,11 @@ class GeoLoc extends EventEmitter {
         if (reason) {
             next.lastReason = reason
             this.startupReadiness = next
-            if (tracker.lastReason !== reason && typeof TELEMETRY !== 'undefined') {
+            // A2 (2026-06-11): once the gate has been satisfied it never
+            // un-readies (startupReady() re-checks freshness separately), so a
+            // post-ready accuracy blip mid-walk must not re-emit rejections —
+            // they read as gate failures in B4 calibration queries (`hxgs` ×5).
+            if (!tracker.ready && tracker.lastReason !== reason && typeof TELEMETRY !== 'undefined') {
                 TELEMETRY.log('gps_startup_rejected', {
                     reason: reason,
                     fix_count: tracker.fixCount,
@@ -679,6 +695,61 @@ class GeoLoc extends EventEmitter {
             fixAgeMs,
             anyAgeMs,
             realAgeMs,
+        }
+    }
+
+    // A4 (2026-06-11) — accuracy-collapse detector, TELEMETRY-ONLY (phase 1).
+    // The freshness-based state machine cannot see a stream that delivers
+    // fresh but grossly inaccurate fixes (iPhone 8 `4och`: 8 min at p50=40 m /
+    // p95=200 m, position 137 m off → zones 2–3 never fired and the walker got
+    // no warning). Emits `gps_degraded` once the collapse sustains and
+    // `gps_degraded_recovered` when a good fix lands. No walker-facing
+    // behaviour — phase 2 (escalation UX, reusing the frozen-escalation path)
+    // is conditional on how often VILLEURBANNE telemetry shows this firing.
+    // NOT gated on motionIsStationary (the backpack walk read stationary
+    // mid-collapse); the flag is recorded so the analyzer can slice instead.
+    _trackAccuracyDegradation(accuracy, source, motionStationary, now) {
+        if (typeof accuracy !== 'number' || isNaN(accuracy)) return
+        if (this.runMode !== 'gps') return
+        if (accuracy <= DEGRADED_ACCURACY_M) {
+            if (this._degradedActive && typeof TELEMETRY !== 'undefined') {
+                TELEMETRY.log('gps_degraded_recovered', {
+                    duration_ms: this._degradedSince != null ? now - this._degradedSince : null,
+                    fix_count: this._degradedFixCount,
+                    worst_acc: this._degradedWorstAcc,
+                    acc: accuracy,
+                    motion_stationary: motionStationary,
+                    visibility: APP_VISIBILITY,
+                })
+            }
+            this._degradedSince = null
+            this._degradedActive = false
+            this._degradedWorstAcc = null
+            this._degradedFixCount = 0
+            return
+        }
+        if (this._degradedSince == null) {
+            this._degradedSince = now
+            this._degradedWorstAcc = accuracy
+            this._degradedFixCount = 0
+        }
+        this._degradedFixCount++
+        if (accuracy > this._degradedWorstAcc) this._degradedWorstAcc = accuracy
+        if (!this._degradedActive && (now - this._degradedSince) >= DEGRADED_SUSTAIN_MS) {
+            this._degradedActive = true
+            if (typeof TELEMETRY !== 'undefined') {
+                TELEMETRY.log('gps_degraded', {
+                    sustained_ms: now - this._degradedSince,
+                    fix_count: this._degradedFixCount,
+                    worst_acc: this._degradedWorstAcc,
+                    acc: accuracy,
+                    max_accuracy_m: DEGRADED_ACCURACY_M,
+                    source: source,
+                    motion_stationary: motionStationary,
+                    visibility: APP_VISIBILITY,
+                    step: (typeof PARCOURS !== 'undefined' && typeof PARCOURS.currentStep === 'function') ? PARCOURS.currentStep() : null,
+                })
+            }
         }
     }
 
@@ -952,6 +1023,12 @@ class GeoLoc extends EventEmitter {
             positionAgeMs: positionAgeMs,
             usableFixTime: usableFixTime,
         })
+        // A4 — judge accuracy collapse on REAL fixes only: a keepalive /
+        // heartbeat replay re-delivers the old fix's accuracy and would
+        // double-count the same measurement into the episode.
+        if (source !== 'heartbeat' && source !== 'simulate' && source !== 'keepalive' && !position.simulate) {
+            this._trackAccuracyDegradation(accuracy, source, motionStationary, now)
+        }
         // B4 diagnostic half — only count this as a "real" callback if the
         // source isn't heartbeat / simulate / keepalive. The 'unknown' default
         // (bg-geo native callbacks that don't tag a source) IS real.
@@ -1093,6 +1170,12 @@ class GeoLoc extends EventEmitter {
         this.stateUpdate = 'off';
         this.stateUpdateMeta = { state: 'off', reason: 'service_off' };
         this.lastAccuracyBucket = null;
+        // A4 — drop any open accuracy-collapse episode on mode change (no
+        // recovered event: this is a teardown, not a recovery).
+        this._degradedSince = null;
+        this._degradedActive = false;
+        this._degradedWorstAcc = null;
+        this._degradedFixCount = 0;
         this._resetStartupReadiness();
 
         this.runMode = mode;

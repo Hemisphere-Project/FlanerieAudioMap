@@ -194,7 +194,7 @@ console.log(`  afterplayFallback=${s.afterplayFallback} (no_src=${s.afterplayFal
 console.log(`  audiofocus: requestFail=${s.audiofocusRequestFail} requestOk=${s.audiofocusRequestOk} loss=${s.audiofocusLoss}`);
 console.log(`  map_opened sources: ${JSON.stringify(countBy(s.mapOpened))}`);
 console.log(`  gps: triggerRejected=${s.gpsTriggerRejected} stale=${s.gpsStale} `
-  + `sleepSuspect=${s.gpsSleepSuspect} revoked=${s.gpsRevoked} frozen=${s.gpsFrozen}  avgAcc=${s.gpsAvgAcc ? s.gpsAvgAcc.toFixed(1) : '-'}`);
+  + `sleepSuspect=${s.gpsSleepSuspect} revoked=${s.gpsRevoked} frozen=${s.gpsFrozen} degraded=${s.gpsDegraded}/rec=${s.gpsDegradedRecovered}  avgAcc=${s.gpsAvgAcc ? s.gpsAvgAcc.toFixed(1) : '-'}`);
 
 if (opts.types) {
   console.log('\n## Event-type histogram');
