@@ -621,6 +621,14 @@ class PlayerSimple extends EventEmitter
         this._lastTelemetryErrorSignature = signature
         this._lastTelemetryErrorAt = now
 
+        // B1 (2026-06-11) — audio-simple 0.3.5+ attaches a `diag` object to error
+        // payloads: decoder name/software flag/init count, AudioSink error trail,
+        // and the plugin-wide instance-population counts (players_total /
+        // players_prepared / players_playing). Decides codec-exhaustion vs
+        // AudioTrack-exhaustion (native_error_code 5001) per error. Spread into
+        // the telemetry event; absent on older plugin builds and other backends.
+        let diag = (error && typeof error === 'object' && error.diag && typeof error.diag === 'object') ? error.diag : null
+
         if (typeof TELEMETRY !== 'undefined') {
             TELEMETRY.log(type, Object.assign({
                 src: src,
@@ -631,7 +639,7 @@ class PlayerSimple extends EventEmitter
                 backend: this._backend || (this._isNativeFallback ? 'howler-fallback'
                     : (PLATFORM === 'ios' ? 'native' : 'howler')),
                 cleared: !this._player
-            }, extra))
+            }, diag || {}, extra))
         }
     }
 
