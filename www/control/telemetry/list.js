@@ -513,6 +513,11 @@ TM.list = (function() {
 
     function healthPopoverBody(summary) {
         var lines = [];
+        var fired = new Set(Array.isArray(summary.firedSteps) ? summary.firedSteps : []);
+        var reached = (Number.isInteger(summary.finalStep) ? summary.finalStep : -1) + 1;
+        var missed = 0;
+        for (var i = 0; i < reached; i++) if (!fired.has(i)) missed++;
+        if (missed > 0) lines.push([null, 'Missed steps ×' + missed + ' (content not delivered)']);
         if (summary.maxGapMs != null && Number(summary.maxGapMs) >= 8000) {
             lines.push(['gap', 'Worst callback gap ' + TM.util.formatGap(Number(summary.maxGapMs))]);
         }

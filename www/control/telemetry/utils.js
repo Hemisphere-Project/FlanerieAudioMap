@@ -100,31 +100,60 @@ TM.util = (function() {
         setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
     }
 
-    // Composite anomaly penalty (internal); 0 = clean walk.
+    // Health penalty, weighted by walker-perceived impact rather than raw
+    // anomaly counts. Calibration (2026-06-12, real field data):
+    //  >=85 great walk, nothing noticeable; ~45-84 ok walk with missing
+    //  content / mid-low GPS / recovered incidents; <45 device needs special
+    //  treatment or should not have taken the walk.
     function healthPenalty(s) {
-        var score = 0;
-        score += (Number(s.sleepSuspects) || 0) * 3;
-        score += (Number(s.staleCallbacks) || 0);
-        score += (Number(s.rejectedFixes) || 0) * 0.25;
-        score += (Number(s.audioErrors) || 0);
-        score += (Number(s.userLostCount) || 0) * 0.5;
-        var gap = Number(s.maxGapMs);
-        if (gap >= 30000) score += 3;
-        else if (gap >= 8000) score += 1;
+        var p = 0;
+
+        // Content delivery — the strongest signal: steps the walker reached
+        // but that never fired = show the audience did not hear.
+        var fired = new Set(Array.isArray(s.firedSteps) ? s.firedSteps : []);
+        var reached = (Number.isInteger(s.finalStep) ? s.finalStep : -1) + 1;
+        var missed = 0;
+        for (var i = 0; i < reached; i++) if (!fired.has(i)) missed++;
+        if (reached > 0) p += (missed / reached) * 80;
+        p += Math.min(12, (Number(s.audioErrors) || 0) * 3);
+        p += Math.min(9, (Number(s.voiceFailCount) || 0) * 3);
+
+        // Walker disruption — lost episodes weigh less when recovered fast.
+        var perLost = (s.lostRecoveryMedianMs != null && Number(s.lostRecoveryMedianMs) < 60000) ? 4 : 8;
+        p += Math.min(24, (Number(s.userLostCount) || 0) * perLost);
+        p += Math.min(12, (Number(s.gpsLostCount) || 0) * 4);
+
+        // GPS quality — sustained coarse accuracy is the real disqualifier;
+        // rejected fixes barely count (that is the sample filter working).
         var acc = Number(s.avgAccuracy);
-        if (acc > 20) score += 3;
-        else if (acc > 10) score += 1;
-        return score;
+        if (acc > 25) p += 55;
+        else if (acc > 18) p += 40;
+        else if (acc > 12) p += 15;
+        else if (acc > 9) p += 5;
+        else if (acc > 7) p += 2;
+        var gap = Number(s.maxGapMs) || 0;
+        if (gap >= 60000) p += 10;
+        else if (gap >= 30000) p += 6;
+        else if (gap >= 15000) p += 3;
+        else if (gap >= 8000) p += 1;
+        p += Math.min(24, (Number(s.sleepSuspects) || 0) * 8);
+        p += Math.min(10, (Number(s.staleCallbacks) || 0));
+        p += Math.min(5, (Number(s.rejectedFixes) || 0) * 0.05);
+
+        // Stability
+        p += Math.min(8, (Number(s.resumeCount) || 0) * 4);
+
+        return p;
     }
 
     // Public health score, normalized 0..100 where 100 = perfect session.
     function healthScore(s) {
-        return Math.max(0, Math.min(100, Math.round(100 - healthPenalty(s) * 10)));
+        return Math.max(0, Math.min(100, Math.round(100 - healthPenalty(s))));
     }
 
     function healthColor(score100) {
-        if (score100 >= 80) return '#198754';
-        if (score100 >= 40) return '#ffc107';
+        if (score100 >= 85) return '#198754';
+        if (score100 >= 45) return '#ffc107';
         return '#dc3545';
     }
 
