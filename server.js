@@ -571,6 +571,7 @@ function summarizeTelemetrySessionData(data) {
     endedAt,
     ended,
     resumeCount,
+    firedSteps: Array.from(uniqueSteps).sort((a, b) => a - b),
     uniqueStepCount: uniqueSteps.size,
     gpsCount: gpsEvents.length,
     avgAccuracy: gpsAccuracies.length > 0
@@ -681,6 +682,7 @@ function buildSessionSummary(data) {
     resumeCount: summary.resumeCount,
     totalSteps,
     progressPct,
+    firedSteps: summary.firedSteps,
     finalStep: summary.finalStep,
     uniqueStepCount: summary.uniqueStepCount,
     gpsCount: summary.gpsCount,

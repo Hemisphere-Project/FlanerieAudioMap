@@ -276,10 +276,22 @@ body.tm-body {
 }
 .tm-row:hover { background: rgba(255,255,255,0.04); }
 .tm-row.active { background: rgba(13, 202, 240, 0.09); }
+.tm-row-flash { animation: tm-row-flash 2.5s ease-out; }
+@keyframes tm-row-flash {
+    0%, 55% { background: rgba(13, 202, 240, 0.35); box-shadow: inset 3px 0 0 #0dcaf0; }
+    100% { background: transparent; box-shadow: none; }
+}
 
 .tm-row-time {
     font-variant-numeric: tabular-nums;
     color: rgba(255,255,255,0.85);
+}
+.tm-row-code {
+    display: block;
+    font-family: monospace;
+    font-size: 0.68rem;
+    color: rgba(255,255,255,0.4);
+    line-height: 1;
 }
 .tm-row-parcours {
     overflow: hidden;
@@ -306,6 +318,17 @@ body.tm-body {
     flex: 1;
     height: 7px;
     background: rgba(255,255,255,0.1);
+}
+.tm-stepbar {
+    flex: 1;
+    display: flex;
+    gap: 1px;
+    height: 8px;
+}
+.tm-stepbar span {
+    flex: 1;
+    border-radius: 1px;
+    min-width: 2px;
 }
 .tm-progress-label {
     font-size: 0.78rem;

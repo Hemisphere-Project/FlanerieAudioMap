@@ -1,5 +1,5 @@
 /* Telemetry page — expanded session detail panel.
- * Metric cards, accuracy map with prospect-mode layers, time scrubber,
+ * Metric cards, accuracy map with Progress/GPS-quality views, time scrubber,
  * sparkline charts, operator note, virtualized events table, exports,
  * archive/delete actions, live tail updates. */
 window.TM = window.TM || {};
@@ -77,8 +77,8 @@ TM.detail = (function() {
         ['AudioFocus retry', function(m) { return m.audiofocusRetry; }]
     ];
 
-    function renderMetricCards(metrics, prospect) {
-        var items = prospect ? GPS_METRICS : GPS_METRICS.concat(AUDIO_METRICS);
+    function renderMetricCards(metrics) {
+        var items = GPS_METRICS.concat(AUDIO_METRICS);
         return items.map(function(item) {
             return '<div class="metric-card"><span class="label">' + esc(item[0]) + '</span><span class="value">' + esc(item[1](metrics)) + '</span></div>';
         }).join('');
@@ -86,18 +86,24 @@ TM.detail = (function() {
 
     // ---- Sidebar ----
 
+    // Staleness must be judged against what was current AT WALK TIME, not now:
+    // apk is compared to the same-day fleet max; the webapp commit is only
+    // compared to the deployed /version for sessions started today.
     function deviceChips(data) {
         var client = data.client || {};
         var chips = [];
+        var sessionDay = TM.util.dayKey(data.startTime);
+        var isToday = sessionDay === TM.util.dayKey(Date.now());
+
         if (client.isLoanDevice) chips.push('<span class="badge text-bg-warning">loan</span>');
         if (client.appVersion != null) {
-            var maxApk = TM.api.maxApkVersion();
-            var stale = maxApk && Number(client.appVersion) < maxApk;
-            chips.push('<span class="badge text-bg-' + (stale ? 'danger' : 'secondary') + '">apk ' + esc(client.appVersion) + (stale ? ' (stale)' : '') + '</span>');
+            var dayMax = TM.list.dayMaxApk(sessionDay);
+            var stale = dayMax && Number(client.appVersion) < dayMax;
+            chips.push('<span class="badge text-bg-' + (stale ? 'danger' : 'secondary') + '">apk ' + esc(client.appVersion) + (stale ? ' < fleet ' + dayMax : '') + '</span>');
         }
         if (client.webappCommit) {
             var version = TM.api.getVersion();
-            var staleWebapp = version && version.commit && client.webappCommit !== version.commit;
+            var staleWebapp = isToday && version && version.commit && client.webappCommit !== version.commit;
             chips.push('<span class="badge text-bg-' + (staleWebapp ? 'danger' : 'secondary') + '">web ' + esc(client.webappCommit) + (staleWebapp ? ' (stale)' : '') + '</span>');
         }
         return chips.join(' ');
@@ -338,25 +344,38 @@ TM.detail = (function() {
 
     // ---- Panel ----
 
-    function mapToggleHtml(label, role, checked) {
-        return '<div class="form-check form-switch form-check-inline mb-0">' +
-            '<input class="form-check-input" type="checkbox" role="switch" data-role="' + role + '"' + (checked ? ' checked' : '') + '>' +
-            '<label class="form-check-label small">' + esc(label) + '</label></div>';
+    // Two map views (kept deliberately simple):
+    //  - prog: step fire-status zones + accuracy-coloured track + problem pins
+    //  - gps:  light step outlines + accuracy-coloured track + accuracy ribbon
+    function mapViewControls() {
+        var view = TM.state.mapView();
+        var allZones = TM.state.allZones();
+        return '<div class="btn-group btn-group-sm" role="group">' +
+                '<button type="button" class="btn btn-outline-info' + (view === 'prog' ? ' active' : '') + '" data-role="view-prog">Progress</button>' +
+                '<button type="button" class="btn btn-outline-info' + (view === 'gps' ? ' active' : '') + '" data-role="view-gps">GPS quality</button>' +
+            '</div>' +
+            '<div class="form-check form-switch form-check-inline mb-0 ms-2">' +
+                '<input class="form-check-input" type="checkbox" role="switch" data-role="opt-zones"' + (allZones ? ' checked' : '') + '>' +
+                '<label class="form-check-label small">All zones</label>' +
+            '</div>';
     }
 
-    function legendHtml(prospect) {
+    function legendHtml() {
+        var view = TM.state.mapView();
         var buckets = TM.maps.ACC_BUCKETS.map(function(bucket) {
             return '<span><span class="tm-legend-swatch" style="background:' + bucket.color + '"></span>' + esc(bucket.label) + '</span>';
         }).join('');
-        var problems = '';
-        if (prospect) {
-            problems = Object.keys(TM.maps.PROBLEM_STYLES).map(function(type) {
+        var extras = '';
+        if (view === 'prog') {
+            extras = Object.keys(TM.maps.PROBLEM_STYLES).map(function(type) {
                 var style = TM.maps.PROBLEM_STYLES[type];
                 return '<span><span class="tm-legend-swatch" style="background:' + style.color + ';border-radius:50%"></span>' + esc(style.label) + '</span>';
             }).join('');
-            problems += '<span><span class="tm-legend-swatch" style="background:transparent;border:1px dashed #dc3545"></span>step never fired</span>';
+            extras += '<span><span class="tm-legend-swatch" style="background:transparent;border:1px dashed #dc3545"></span>step never fired</span>';
+        } else {
+            extras = '<span><span class="tm-legend-swatch" style="background:rgba(13,202,240,0.25);border-radius:50%"></span>accuracy ribbon</span>';
         }
-        return '<div class="tm-map-legend">' + buckets + problems + '</div>';
+        return '<div class="tm-map-legend">' + buckets + extras + '</div>';
     }
 
     function statusPill(summary) {
@@ -367,7 +386,6 @@ TM.detail = (function() {
         var options = opts || {};
         var data = current.data;
         var metrics = computeMetrics(data);
-        var prospect = TM.state.isProspect();
         var summary = TM.api.getSession(data.sessionId, TM.state.archived());
         var archived = TM.state.archived();
         var gpsEvents = TM.maps.getGpsEvents(data.events || []);
@@ -386,18 +404,14 @@ TM.detail = (function() {
                     '<button class="btn btn-outline-danger btn-sm" data-action="delete-session">Delete</button>' +
                 '</div>' +
             '</div>' +
-            '<div class="metrics-grid">' + renderMetricCards(metrics, prospect) + '</div>' +
+            '<div class="metrics-grid">' + renderMetricCards(metrics) + '</div>' +
             '<div class="tm-detail-grid">' +
                 '<div>' +
-                    '<div class="d-flex gap-3 flex-wrap mb-2 align-items-center">' +
-                        mapToggleHtml('Prospect', 'opt-prospect', prospect) +
-                        mapToggleHtml('Acc colors', 'opt-colored', true) +
-                        mapToggleHtml('Acc ribbon', 'opt-ribbon', prospect) +
-                        mapToggleHtml('Problems', 'opt-problems', prospect) +
-                        mapToggleHtml('Step status', 'opt-firestatus', prospect) +
+                    '<div class="d-flex gap-2 flex-wrap mb-2 align-items-center">' +
+                        mapViewControls() +
                     '</div>' +
                     '<div id="tm-detail-map" class="tm-detail-map"></div>' +
-                    legendHtml(prospect) +
+                    legendHtml() +
                     '<div class="tm-scrub">' +
                         '<input type="range" class="form-range" data-role="scrub" min="0" max="' + Math.max(0, gpsEvents.length - 1) + '" value="0">' +
                         '<span class="tm-scrub-readout" data-role="scrub-readout">—</span>' +
@@ -423,15 +437,14 @@ TM.detail = (function() {
     }
 
     function currentMapOpts() {
-        function checked(role, fallback) {
-            var el = current.panelEl.querySelector('[data-role="' + role + '"]');
-            return el ? el.checked : fallback;
-        }
+        var view = TM.state.mapView();
         return {
-            colored: checked('opt-colored', true),
-            ribbon: checked('opt-ribbon', false),
-            problems: checked('opt-problems', false),
-            fireStatus: checked('opt-firestatus', false)
+            colored: true,
+            ribbon: view === 'gps',
+            problems: view === 'prog',
+            fireStatus: view === 'prog',
+            lightSteps: view === 'gps',
+            allZones: TM.state.allZones()
         };
     }
 
@@ -447,18 +460,33 @@ TM.detail = (function() {
         var data = current.data;
         var archived = TM.state.archived();
 
-        ['opt-colored', 'opt-ribbon', 'opt-problems', 'opt-firestatus'].forEach(function(role) {
-            var el = panel.querySelector('[data-role="' + role + '"]');
-            if (el) el.addEventListener('change', function() {
+        function rerenderMapControls() {
+            var controlsRow = panel.querySelector('.tm-detail-grid .d-flex');
+            if (controlsRow) controlsRow.innerHTML = mapViewControls();
+            var legend = panel.querySelector('.tm-map-legend');
+            if (legend) legend.outerHTML = legendHtml();
+            bindMapViewControls();
+            if (current.mapHandle) current.mapHandle.refresh(currentMapOpts());
+        }
+
+        function bindMapViewControls() {
+            var progBtn = panel.querySelector('[data-role="view-prog"]');
+            var gpsBtn = panel.querySelector('[data-role="view-gps"]');
+            var zonesToggle = panel.querySelector('[data-role="opt-zones"]');
+            if (progBtn) progBtn.addEventListener('click', function() {
+                TM.state.set({ view: 'prog' });
+                rerenderMapControls();
+            });
+            if (gpsBtn) gpsBtn.addEventListener('click', function() {
+                TM.state.set({ view: 'gps' });
+                rerenderMapControls();
+            });
+            if (zonesToggle) zonesToggle.addEventListener('change', function() {
+                TM.state.set({ zones: zonesToggle.checked ? '1' : '0' });
                 if (current.mapHandle) current.mapHandle.refresh(currentMapOpts());
             });
-        });
-
-        var prospectToggle = panel.querySelector('[data-role="opt-prospect"]');
-        if (prospectToggle) prospectToggle.addEventListener('change', function() {
-            TM.state.set({ prospect: prospectToggle.checked ? '1' : '0' });
-            renderPanel({ openEvents: panel.querySelector('.event-panel').classList.contains('active') });
-        });
+        }
+        bindMapViewControls();
 
         panel.querySelector('[data-role="scrub"]').addEventListener('input', function() {
             setScrub(Number(this.value));
@@ -601,7 +629,7 @@ TM.detail = (function() {
             if (!current || current.sessionId !== sessionId || !fresh.length) return false;
             var metrics = computeMetrics(current.data);
             var grid = current.panelEl.querySelector('.metrics-grid');
-            if (grid) grid.innerHTML = renderMetricCards(metrics, TM.state.isProspect());
+            if (grid) grid.innerHTML = renderMetricCards(metrics);
             if (current.mapHandle) current.mapHandle.appendEvents();
             var gpsEvents = TM.maps.getGpsEvents(current.data.events || []);
             var slider = current.panelEl.querySelector('[data-role="scrub"]');

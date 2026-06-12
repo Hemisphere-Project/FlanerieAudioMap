@@ -166,15 +166,6 @@ TM.api = (function() {
 
     function getDevice(uuid) { return (uuid && devices[uuid]) || null; }
 
-    function maxApkVersion() {
-        var max = 0;
-        Object.keys(devices).forEach(function(uuid) {
-            var v = Number(devices[uuid].apk_version);
-            if (Number.isFinite(v)) max = Math.max(max, v);
-        });
-        return max || null;
-    }
-
     function renameDevice(uuid, friendlyName) {
         return fetchJson('/devices/' + encodeURIComponent(uuid), {
             method: 'PATCH',
@@ -285,7 +276,6 @@ TM.api = (function() {
         saveNote: saveNote,
         loadDevices: loadDevices,
         getDevice: getDevice,
-        maxApkVersion: maxApkVersion,
         renameDevice: renameDevice,
         loadVersion: loadVersion,
         getVersion: getVersion,

@@ -83,15 +83,20 @@ TM.maps = (function() {
         return layer;
     }
 
-    // Step zones. When fireStatus is on, colour each step zone by outcome:
-    // fired = green, refired = amber, never fired = red dashed.
+    // Step zones. When fireCounts is given, colour each step zone by outcome:
+    // fired = green, refired = amber, never fired = red dashed. lightSteps
+    // renders them subdued (background context for the GPS-quality view).
+    // Ambiance zones + offlimits only appear with allZones.
     function addOverlayZones(group, overlay, opts) {
         if (!overlay || !overlay.data || !overlay.data.spots) return;
         var spots = overlay.data.spots;
-        var fireCounts = (opts && opts.fireCounts) || null;
+        var options = opts || {};
+        var fireCounts = options.fireCounts || null;
 
         (spots.steps || []).forEach(function(step, index) {
-            var style = { color: '#ffc107', weight: 2, fillOpacity: 0.08 };
+            var style = options.lightSteps
+                ? { color: '#ffc107', weight: 1, opacity: 0.45, fillOpacity: 0.03 }
+                : { color: '#ffc107', weight: 2, fillOpacity: 0.08 };
             var label = 'Step ' + index + ': ' + (step.name || '');
             if (fireCounts) {
                 var count = fireCounts.get(index) || 0;
@@ -108,12 +113,14 @@ TM.maps = (function() {
             }
             addSpotGeometry(group, step, style, label);
         });
-        (spots.offlimits || []).forEach(function(spot, index) {
-            addSpotGeometry(group, spot, { color: '#dc3545', weight: 2, fillOpacity: 0.12 }, 'Offlimit ' + index + ': ' + (spot.name || ''));
-        });
-        (spots.zones || []).forEach(function(spot, index) {
-            addSpotGeometry(group, spot, { color: '#20c997', weight: 2, fillOpacity: 0.05 }, 'Zone ' + index + ': ' + (spot.name || ''));
-        });
+        if (options.allZones) {
+            (spots.offlimits || []).forEach(function(spot, index) {
+                addSpotGeometry(group, spot, { color: '#dc3545', weight: 2, fillOpacity: 0.12 }, 'Offlimit ' + index + ': ' + (spot.name || ''));
+            });
+            (spots.zones || []).forEach(function(spot, index) {
+                addSpotGeometry(group, spot, { color: '#20c997', weight: 2, fillOpacity: 0.05 }, 'Zone ' + index + ': ' + (spot.name || ''));
+            });
+        }
     }
 
     // Accuracy-coloured track: batch consecutive fixes whose pair-bucket
@@ -161,8 +168,9 @@ TM.maps = (function() {
             group.addLayer(L.circle(point, {
                 radius: acc,
                 color: ACC_BUCKETS[accBucket(acc)].color,
-                weight: 0,
-                fillOpacity: 0.07,
+                weight: 1,
+                opacity: 0.35,
+                fillOpacity: 0.18,
                 interactive: false
             }));
         });
@@ -252,11 +260,12 @@ TM.maps = (function() {
 
     /**
      * Detail map handle.
-     * opts: { colored (default true), ribbon, problems, fireStatus, viewKey }
+     * opts: { colored (default true), ribbon, problems, fireStatus, lightSteps,
+     *         allZones, viewKey }
      * Returns { map, refresh(newOpts), appendEvents(), setScrub(gpsIndex), destroy() }.
      */
     function renderDetailMap(containerId, data, overlay, opts) {
-        var options = Object.assign({ colored: true, ribbon: false, problems: false, fireStatus: false }, opts || {});
+        var options = Object.assign({ colored: true, ribbon: false, problems: false, fireStatus: false, lightSteps: false, allZones: false }, opts || {});
         var viewKey = options.viewKey || ('detail:' + data.sessionId);
 
         var map = createBaseMap(containerId);
@@ -270,7 +279,11 @@ TM.maps = (function() {
             var events = data.events || [];
             var gpsEvents = getGpsEvents(events);
 
-            addOverlayZones(featureGroup, overlay, options.fireStatus ? { fireCounts: computeFireCounts(events) } : null);
+            addOverlayZones(featureGroup, overlay, {
+                fireCounts: options.fireStatus ? computeFireCounts(events) : null,
+                lightSteps: options.lightSteps,
+                allZones: options.allZones
+            });
             if (options.colored) addColoredTrack(featureGroup, gpsEvents);
             else addFlatTrack(featureGroup, gpsEvents);
             if (options.ribbon) addAccuracyRibbon(featureGroup, gpsEvents);
@@ -339,7 +352,8 @@ TM.maps = (function() {
         var map = createBaseMap(containerId);
         var featureGroup = L.featureGroup().addTo(map);
 
-        addOverlayZones(featureGroup, overlay, null);
+        // Multi-track comparison: steps only, subdued, to keep tracks readable.
+        addOverlayZones(featureGroup, overlay, { lightSteps: true });
 
         items.forEach(function(item, index) {
             var color = TRACK_PALETTE[index % TRACK_PALETTE.length];

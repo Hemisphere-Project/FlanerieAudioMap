@@ -16,7 +16,8 @@ TM.state = (function() {
         prog: '0-100',        // progress % range
         s: '',                // expanded sessionId
         live: '1',            // live auto-refresh
-        prospect: '0',        // prospect map preset
+        view: 'prog',         // detail map view: prog (step status) | gps (quality)
+        zones: '0',           // detail map: 1 = all zones, 0 = steps only
         sort: 'time',         // time | worst
         ndays: '7'            // day sections shown before "load more"
     };
@@ -102,7 +103,8 @@ TM.state = (function() {
     }
 
     function isLive() { return state.live === '1'; }
-    function isProspect() { return state.prospect === '1'; }
+    function mapView() { return state.view === 'gps' ? 'gps' : 'prog'; }
+    function allZones() { return state.zones === '1'; }
     function archived() { return state.tab === 'archive'; }
 
     function onChange(listener) { listeners.push(listener); }
@@ -121,7 +123,8 @@ TM.state = (function() {
         progRange: progRange,
         statusSet: statusSet,
         isLive: isLive,
-        isProspect: isProspect,
+        mapView: mapView,
+        allZones: allZones,
         archived: archived,
         onChange: onChange
     };

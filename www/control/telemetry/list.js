@@ -161,6 +161,18 @@ TM.list = (function() {
         return summary.deviceModel || summary.devicePlatform || 'unknown device';
     }
 
+    // Highest appVersion seen among same-day sessions — the reference for
+    // "this phone ran an older build than the rest of the fleet that day".
+    function dayMaxApk(dayKeyStr) {
+        var max = 0;
+        TM.api.getSessions(TM.state.archived()).forEach(function(summary) {
+            if (TM.util.dayKey(summary.startTime) !== dayKeyStr) return;
+            var v = Number(summary.appVersion);
+            if (Number.isFinite(v)) max = Math.max(max, v);
+        });
+        return max || null;
+    }
+
     function deviceOptions() {
         var byUuid = new Map();
         TM.api.getSessions(TM.state.archived()).forEach(function(summary) {
@@ -251,14 +263,27 @@ TM.list = (function() {
         return '<div class="gps-badges">' + badges.join('') + '</div>';
     }
 
+    // Per-step bar: green = fired, red = reached but never fired (missed),
+    // dark grey = not reached yet.
     function progressHtml(summary) {
-        if (summary.kind !== 'walk' || summary.progressPct == null) {
+        if (summary.kind !== 'walk' || !(summary.totalSteps > 0)) {
             return '<span class="tm-progress-label">' + (summary.finalStep != null ? 'step ' + esc(summary.finalStep) : '—') + '</span>';
         }
-        var status = TM.api.statusOf(summary);
-        var barColor = status === 'ended-complete' ? 'bg-success' : (status === 'live' ? 'bg-info' : 'bg-secondary');
+
+        var fired = new Set(Array.isArray(summary.firedSteps) ? summary.firedSteps : []);
+        var reachedUpTo = Number.isInteger(summary.finalStep) ? summary.finalStep : -1;
+        var segments = '';
+        for (var i = 0; i < summary.totalSteps; i++) {
+            var color;
+            var hint;
+            if (fired.has(i)) { color = '#198754'; hint = 'step ' + i + ' fired'; }
+            else if (i <= reachedUpTo) { color = '#dc3545'; hint = 'step ' + i + ' MISSED'; }
+            else { color = 'rgba(255,255,255,0.13)'; hint = 'step ' + i + ' not reached'; }
+            segments += '<span style="background:' + color + '" title="' + esc(hint) + '"></span>';
+        }
+
         return '<div class="tm-progress">' +
-            '<div class="progress"><div class="progress-bar ' + barColor + '" style="width:' + summary.progressPct + '%"></div></div>' +
+            '<div class="tm-stepbar">' + segments + '</div>' +
             '<span class="tm-progress-label">' + (summary.finalStep != null ? (summary.finalStep + 1) : '?') + '/' + esc(summary.totalSteps) + '</span>' +
         '</div>';
     }
@@ -279,8 +304,11 @@ TM.list = (function() {
             ? ' <span class="small text-info" data-role="ago" data-last="' + esc(summary.lastEvent || '') + '"></span>'
             : '';
 
+        var shortCode = String(summary.sessionId || '').split('_').pop();
+
         return '<div class="tm-row' + (expanded ? ' active' : '') + (summary.kind === 'onboarding' ? ' tm-row-onb' : '') + '" data-session-id="' + esc(summary.sessionId) + '">' +
-            '<div class="tm-row-time">' + esc(TM.util.formatTime(summary.startTime)) + '</div>' +
+            '<div class="tm-row-time">' + esc(TM.util.formatTime(summary.startTime)) +
+                '<span class="tm-row-code">' + esc(shortCode) + '</span></div>' +
             '<div class="tm-row-parcours" title="' + esc(summary.sessionId) + '">' + esc(parcoursLabel(summary) || '-') +
                 (summary.kind === 'onboarding' ? ' <span class="badge text-bg-dark">onb</span>' : '') +
                 (chips.length ? ' ' + chips.join(' ') : '') + '</div>' +
@@ -301,9 +329,9 @@ TM.list = (function() {
         var label = friendly || deviceLabelFor(first);
         var walks = group.sessions.filter(function(s) { return s.kind === 'walk'; });
         var onbs = group.sessions.filter(function(s) { return s.kind === 'onboarding'; });
-        var maxApk = TM.api.maxApkVersion();
+        var fleetApk = dayMaxApk(dayKey);
         var apk = first.appVersion != null ? Number(first.appVersion) : (device ? Number(device.apk_version) : null);
-        var apkStale = maxApk && Number.isFinite(apk) && apk < maxApk;
+        var apkStale = fleetApk && Number.isFinite(apk) && apk < fleetApk;
 
         var header = '<div class="tm-group-header">' +
             '<span class="tm-group-device">📱 ' + esc(label) + '</span>' +
@@ -380,7 +408,7 @@ TM.list = (function() {
 
     function isDayOpen(dayKey, index) {
         if (dayToggles.has(dayKey)) return dayToggles.get(dayKey);
-        return index < 2; // today + most recent previous day open by default
+        return dayKey === TM.util.dayKey(Date.now()); // only today open by default
     }
 
     function renderDay(day, index) {
@@ -723,6 +751,9 @@ TM.list = (function() {
             var action = actionEl.dataset.action;
 
             if (action === 'toggle-day') {
+                // Clicks on the header's action cluster (Map button, kebab menu)
+                // must not collapse the day.
+                if (event.target.closest('.tm-day-actions')) return;
                 var dayKey = actionEl.dataset.dayKey;
                 var dayEl = actionEl.closest('.tm-day');
                 var nowOpen = dayEl.classList.contains('collapsed');
@@ -785,7 +816,13 @@ TM.list = (function() {
             event.stopPropagation();
             var barSessionId = bar.dataset.timelineSession;
             var barRow = document.querySelector('.tm-row[data-session-id="' + CSS.escape(barSessionId) + '"]');
-            if (barRow) barRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            if (barRow) {
+                barRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                barRow.classList.remove('tm-row-flash');
+                void barRow.offsetWidth; // restart the animation on repeat clicks
+                barRow.classList.add('tm-row-flash');
+                setTimeout(function() { barRow.classList.remove('tm-row-flash'); }, 2600);
+            }
             return;
         }
 
@@ -820,6 +857,7 @@ TM.list = (function() {
         statusPill: statusPill,
         getFilteredSessions: getFilteredSessions,
         buildSummaryRow: buildSummaryRow,
+        dayMaxApk: dayMaxApk,
         parcoursOptions: parcoursOptions,
         deviceOptions: deviceOptions,
         openDetailFor: openDetailFor,
