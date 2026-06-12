@@ -696,6 +696,28 @@ Also banked: morning startup gate cleared in ~10–20 s on both good-GPS devices
 
 ---
 
+## 2026-06-12 addendum — media-pack transfer audit: server exonerated, client downloader rewritten (chunked Range + resume + pool)
+
+**Complaint: "media pack transfer feels slow" (1–20 concurrent users). Benchmark verdict: the server is NOT the bottleneck.** Production (Infomaniak managed Node, Pasika TLS gateway, HTTP/1.1-only ALPN, IPv4-only): single stream 22–32 MB/s, media TTFB 20–70 ms, aggregate **~73 MB/s at 20 parallel streams** (per-stream still 3.7–8.7 MB/s), API TTFB stable ~50–60 ms under 15-stream load. Packs are 130–210 MB / 30–75 files.
+
+**Root cause #1 — the 12 s whole-transfer XHR timeout** (`fetchRemote` default; `media_download2` passed none): any file needing >12 s aborts and restarts from byte 0 — a file > ~12 MB can NEVER land on a link slower than ~1 MB/s. Field-proof: 3 sessions on 2026-06-11 (`njhi`/`6cj6`/`wh46`) each failed on exactly the pack's biggest file (12.4 MB `FRAPPAZ26_P1_BLOC_11_Alex_secours_V3.mp3`), 43/44 others fine; `wh46` failed twice through the manual `nomedia` retry. **Root cause #2 — strictly sequential single-stream downloads** (promise-reduce chain in `loadmedia`): one TCP stream underuses a lossy 4G link and failures only surface after the whole pack.
+
+**Shipped (commits `FlanerieCordova 25965b2` + `FlanerieAudioMap c3f5584`):**
+- **apputils.js `media_download2` rewrite**: 4 MB Range chunks appended to a size-stamped `.part` (resume across retries AND app restarts), 20 s zero-progress **stall watchdog** (slow-but-moving is never killed), 3 tries/chunk with backoff, `If-Range` validator vs mid-download server-side file swaps, full-200 fallback if Range is stripped, 404/416 fast-fail. `app_download` (app.zip, 4.5 MB — same 12 s disease, stale-bundle risk) moved to the stall-based fetch too. New helpers `app_stat`/`app_append`/`app_remove`/`app_move`.
+- **parcours.js `loadmedia`**: 4-worker pool (WebView allows 6 conn/host; headroom for telemetry) + **final sequential retry sweep** (also helps old APKs), live byte progress in `loadprogress()`. New telemetry: `media_pack_loaded {files, bytes, ms, retried}` on every real load (field transfer-speed measurements), `ms` added to `media_download_partial`.
+- **server.js**: CORS+OPTIONS middleware on `/media` (Range/If-Range aren't CORS-safelisted; insurance for the iOS `app://localhost` WebView). **updater.js `fileCrowler`**: no longer `readFileSync`s the whole ~3.6 GB media tree when `SETMEDIAHASH=false` (blocked the event loop at startup + on every media change, stalling in-flight downloads).
+- **Desk tests `scripts/desktest-media/` (37 checks, green)**: real `apputils.js` vs the PRODUCTION server (sha256 byte-exact chunk assembly, resume, stale-part restart, 200 fallback, retry, 404, dryrun) + real `parcours.js` pool/sweep semantics. Run before any APK build touching the downloader.
+
+**Compat:** ancient APIs only (XHR+Range+`FileWriter.seek`); memory improves on old devices (4 MB chunk buffers vs 12 MB whole-file). Mixed versions safe both ways (old APK ignores the 4th `media_download` arg; sweep works regardless). **Deploy order: server first (webhook pull + node RESTART), then webapp, then apk 33.** Caveat: a preflight-enforcing WebView against a pre-CORS server would break chunked downloads — no fleet WebView preflights today (plain XHRs already work with zero ACAO on `/media`).
+
+**Validation (next pack download in the field):** `media_download_partial` disappears for the Alex_secours file; `media_pack_loaded.ms` gives real pack times; `.part` resume visible as `MEDIA: Resuming:` in adb logs after an interrupted first attempt.
+
+**Content audit (DISCUSSED, nothing re-encoded — decision pending):** flanerie_invites_v3 = 45 mp3, all CBR 44.1 kHz STEREO, mostly 256 kbps; 166 MB / 92 min (avg 240 kbps), voice alone 65 MB @ 256 k stereo. Scenarios: all-192k → 131 MB (−21 %); voice-128k + rest-192k → 115 MB (−30 %); voice-mono ~112k → ~100 MB (−40 %). Recommendation: NO server-side batch transcode (mp3→mp3 generation loss; CBR precedent from `givors_v7_cbr` = VBR seek trouble; any format change must be A/B'd on the F5121/SM-A528B class per H1-ter) — instead adopt an export standard for future packs (CBR 192k stereo music/ambiance, CBR 128k voice) and optionally A/B one re-encoded pack clone at the next desk test.
+
+**Pre-existing quirk noted (NOT fixed):** `buildMediaTree`'s `flatten()` mangles files at pack ROOT into `name.mp3/size` keys — harmless while packs keep files one folder deep (they all do), but an mp3 dropped at pack root would surface as a phantom 404 in the media list.
+
+---
+
 ## Telemetry events (current code)
 
 ### GPS / lifecycle
