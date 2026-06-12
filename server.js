@@ -552,8 +552,25 @@ function summarizeTelemetrySessionData(data) {
 
   const afterplayFallbackEvents = events.filter(event => event.type === 'step_afterplay_fallback');
 
+  // Session lifecycle: a session counts as ended only when the last
+  // session_end is not followed by a session_start/resume (a walk can be
+  // resumed after an end if the phone re-enters the parcours).
+  let endedAt = null;
+  let lastStartOrResumeT = null;
+  let resumeCount = 0;
+  for (const event of events) {
+    const t = Number(event.t);
+    if (event.type === 'session_end') { if (Number.isFinite(t)) endedAt = t; }
+    else if (event.type === 'session_resume') { resumeCount += 1; if (Number.isFinite(t)) lastStartOrResumeT = t; }
+    else if (event.type === 'session_start') { if (Number.isFinite(t)) lastStartOrResumeT = t; }
+  }
+  const ended = endedAt != null && (lastStartOrResumeT == null || endedAt >= lastStartOrResumeT);
+
   return {
     finalStep,
+    endedAt,
+    ended,
+    resumeCount,
     uniqueStepCount: uniqueSteps.size,
     gpsCount: gpsEvents.length,
     avgAccuracy: gpsAccuracies.length > 0
@@ -594,6 +611,31 @@ function getTelemetryDeviceLabel(client) {
   return parts.join(' ');
 }
 
+// Total step count per parcours, for session progress %. findParcoursByTelemetryId
+// scans every parcours file, so cache lookups briefly (parcours edits are rare).
+const parcoursStepsCache = new Map(); // normalizedKey -> { totalSteps, at }
+const PARCOURS_STEPS_TTL_MS = 60 * 1000;
+
+function getParcoursTotalSteps(parcoursId) {
+  const bareId = String(parcoursId || '').replace(/^onb:/, '');
+  const key = normalizeTelemetryKey(bareId);
+  if (!key) return null;
+
+  const cached = parcoursStepsCache.get(key);
+  if (cached && (Date.now() - cached.at) < PARCOURS_STEPS_TTL_MS) return cached.totalSteps;
+
+  let totalSteps = null;
+  try {
+    const match = findParcoursByTelemetryId(bareId);
+    if (match && match.data && match.data.spots && Array.isArray(match.data.spots.steps)) {
+      totalSteps = match.data.spots.steps.length;
+    }
+  } catch (e) { /* unreadable parcours dir/file — leave unknown */ }
+
+  parcoursStepsCache.set(key, { totalSteps, at: Date.now() });
+  return totalSteps;
+}
+
 const TELEMETRY_DIR = path.join(__dirname, 'telemetry');
 const TELEMETRY_ARCHIVE_DIR = path.join(TELEMETRY_DIR, 'archive');
 
@@ -612,17 +654,33 @@ function buildSessionSummary(data) {
   const lastEvent = events.length > 0 ? events[events.length - 1].t : null;
   const startMs = data.startTime ? new Date(data.startTime).getTime() : null;
   const durationMs = (lastEvent != null && Number.isFinite(startMs)) ? Math.max(0, lastEvent - startMs) : 0;
+  const client = (data.client && typeof data.client === 'object') ? data.client : {};
+  const kind = String(data.parcoursId || '').startsWith('onb:') ? 'onboarding' : 'walk';
+  const totalSteps = kind === 'walk' ? getParcoursTotalSteps(data.parcoursId || data.parcoursName) : null;
+  const progressPct = (totalSteps > 0 && Number.isInteger(summary.finalStep))
+    ? Math.max(0, Math.min(100, Math.round(((summary.finalStep + 1) / totalSteps) * 100)))
+    : null;
   return {
     sessionId: data.sessionId,
     parcoursId: data.parcoursId,
     parcoursName: data.parcoursName,
+    kind,
     deviceModel: getTelemetryDeviceLabel(data.client),
     devicePlatform: data.client && (data.client.devicePlatform || data.client.platform) ? (data.client.devicePlatform || data.client.platform) : '',
     deviceManufacturer: data.client && (data.client.deviceManufacturer || data.client.manufacturer) ? (data.client.deviceManufacturer || data.client.manufacturer) : '',
+    deviceUuid: client.deviceUuid || null,
+    isLoanDevice: !!client.isLoanDevice,
+    appVersion: client.appVersion != null ? client.appVersion : null,
+    webappCommit: client.webappCommit || null,
     startTime: data.startTime,
     eventCount: events.length,
     lastEvent,
     durationMs,
+    endedAt: summary.endedAt,
+    ended: summary.ended,
+    resumeCount: summary.resumeCount,
+    totalSteps,
+    progressPct,
     finalStep: summary.finalStep,
     uniqueStepCount: summary.uniqueStepCount,
     gpsCount: summary.gpsCount,
@@ -645,28 +703,88 @@ function buildSessionSummary(data) {
   };
 }
 
-// Telemetry: list sessions (active by default, ?archived=1 for archive)
-app.get('/telemetry/sessions', requireAdmin, (req, res) => {
-  const archived = isArchivedQuery(req);
+// Session files are timestamped ids (20260612_091529_o7xm.json); the telemetry
+// dir also holds devices.json / notes.json which must never be listed as sessions.
+const SESSION_FILE_RE = /^\d{8}_\d{6}_[A-Za-z0-9-]+\.json$/;
+
+// Summary cache: parsing every multi-MB session file on each list call is the
+// main cost of this endpoint. Key by path, validate by mtime+size so appends
+// from /telemetry-push are picked up automatically; warm polls are stat-only.
+const sessionSummaryCache = new Map(); // filePath -> { mtimeMs, size, summary }
+
+const TELEMETRY_LIVE_WINDOW_MS = 3 * 60 * 1000;
+
+function computeSessionStatus(summary, nowMs) {
+  if (summary.ended) {
+    if (summary.totalSteps > 0 && Number.isInteger(summary.finalStep) && summary.finalStep >= summary.totalSteps - 1) {
+      return 'ended-complete';
+    }
+    return 'ended-partial';
+  }
+  const last = Number(summary.lastEvent) || 0;
+  return (nowMs - last) < TELEMETRY_LIVE_WINDOW_MS ? 'live' : 'interrupted';
+}
+
+function listSessionSummaries(archived) {
   const dir = telemetryDirFor(archived);
-  if (!fs.existsSync(dir)) return res.json([]);
+  if (!fs.existsSync(dir)) return [];
 
   const sessions = [];
   fs.readdirSync(dir).forEach(file => {
-    if (!file.endsWith('.json')) return;
+    if (!SESSION_FILE_RE.test(file)) return;
+    const filePath = path.join(dir, file);
+    let stat;
+    try { stat = fs.statSync(filePath); } catch (e) { return; }
+
+    const cached = sessionSummaryCache.get(filePath);
+    if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+      sessions.push(cached.summary);
+      return;
+    }
     try {
-      const data = JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8'));
+      const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
       const summary = buildSessionSummary(data);
       summary.archived = archived;
+      sessionSummaryCache.set(filePath, { mtimeMs: stat.mtimeMs, size: stat.size, summary });
       sessions.push(summary);
     } catch(e) { /* skip corrupt files */ }
   });
+  return sessions;
+}
 
+function invalidateSessionSummary(filePath) {
+  sessionSummaryCache.delete(filePath);
+}
+
+// Telemetry: list sessions (active by default, ?archived=1 for archive).
+// ?since=<ms> returns only sessions with lastEvent > since (for live polling);
+// the ETag changes when any file changes OR a session crosses the live window,
+// so pollers sending If-None-Match get cheap 304s while nothing moves.
+app.get('/telemetry/sessions', requireAdmin, (req, res) => {
+  const archived = isArchivedQuery(req);
+  const now = Date.now();
+
+  let sessions = listSessionSummaries(archived).map(summary =>
+    Object.assign({}, summary, { status: computeSessionStatus(summary, now) }));
   sessions.sort((a, b) => (b.lastEvent || 0) - (a.lastEvent || 0));
+
+  const maxLast = sessions.reduce((max, s) => Math.max(max, Number(s.lastEvent) || 0), 0);
+  const liveCount = sessions.filter(s => s.status === 'live').length;
+  const etag = 'W/"tsess-' + (archived ? 'a' : 'c') + '-' + sessions.length + '-' + maxLast + '-' + liveCount + '"';
+  res.set('ETag', etag);
+  res.set('X-Server-Time', String(now));
+  if (req.headers['if-none-match'] === etag) return res.status(304).end();
+
+  const since = Number(req.query.since);
+  if (Number.isFinite(since) && since > 0) {
+    sessions = sessions.filter(s => (Number(s.lastEvent) || 0) > since);
+  }
   res.json(sessions);
 });
 
-// Telemetry: get session detail
+// Telemetry: get session detail. ?afterT=<ms> returns only events newer than
+// afterT (incremental tail for following a live walk without re-downloading
+// the whole multi-MB file each poll).
 app.get('/telemetry/session/:id', requireAdmin, (req, res) => {
   const safeId = req.params.id.replace(/[^a-zA-Z0-9_\-]/g, '');
   const archived = isArchivedQuery(req);
@@ -674,6 +792,11 @@ app.get('/telemetry/session/:id', requireAdmin, (req, res) => {
   if (!fs.existsSync(filePath)) return res.status(404).send('Not found');
 
   const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  const afterT = Number(req.query.afterT);
+  if (Number.isFinite(afterT) && afterT > 0) {
+    const events = (Array.isArray(data.events) ? data.events : []).filter(e => Number(e.t) > afterT);
+    return res.json({ sessionId: data.sessionId, afterT, events, incremental: true });
+  }
   res.json(data);
 });
 
@@ -691,6 +814,7 @@ app.delete('/telemetry/session/:id', requireAdmin, (req, res) => {
   if (!fs.existsSync(filePath)) return res.status(404).send('Not found');
 
   fs.unlinkSync(filePath);
+  invalidateSessionSummary(filePath);
   res.status(200).send('Deleted');
 });
 
@@ -705,6 +829,8 @@ app.post('/telemetry/session/:id/archive', requireAdmin, (req, res) => {
 
   const dest = path.join(TELEMETRY_ARCHIVE_DIR, safeId + '.json');
   fs.renameSync(src, dest);
+  invalidateSessionSummary(src);
+  invalidateSessionSummary(dest);
   res.status(200).json({ sessionId: safeId, archived: true });
 });
 
@@ -719,6 +845,8 @@ app.post('/telemetry/session/:id/unarchive', requireAdmin, (req, res) => {
 
   const dest = path.join(TELEMETRY_DIR, safeId + '.json');
   fs.renameSync(src, dest);
+  invalidateSessionSummary(src);
+  invalidateSessionSummary(dest);
   res.status(200).json({ sessionId: safeId, archived: false });
 });
 
@@ -734,7 +862,10 @@ app.post('/telemetry/archive-bulk', requireAdmin, express.json(), (req, res) => 
     if (!safeId) { skipped.push(rawId); return; }
     const src = path.join(TELEMETRY_DIR, safeId + '.json');
     if (!fs.existsSync(src)) { skipped.push(safeId); return; }
-    fs.renameSync(src, path.join(TELEMETRY_ARCHIVE_DIR, safeId + '.json'));
+    const dest = path.join(TELEMETRY_ARCHIVE_DIR, safeId + '.json');
+    fs.renameSync(src, dest);
+    invalidateSessionSummary(src);
+    invalidateSessionSummary(dest);
     archived.push(safeId);
   });
   res.json({ archived, skipped });
@@ -751,7 +882,7 @@ app.post('/telemetry/prune-short', requireAdmin, express.json(), (req, res) => {
 
   const deleted = [];
   fs.readdirSync(dir).forEach(file => {
-    if (!file.endsWith('.json')) return;
+    if (!SESSION_FILE_RE.test(file)) return;
     const filePath = path.join(dir, file);
     try {
       const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -762,6 +893,7 @@ app.post('/telemetry/prune-short', requireAdmin, express.json(), (req, res) => {
       const durationMs = lastEvent - startMs;
       if (durationMs < thresholdMs) {
         fs.unlinkSync(filePath);
+        invalidateSessionSummary(filePath);
         deleted.push(data.sessionId || file.replace(/\.json$/, ''));
       }
     } catch(e) { /* skip corrupt */ }
@@ -769,6 +901,74 @@ app.post('/telemetry/prune-short', requireAdmin, express.json(), (req, res) => {
   res.json({ deleted, thresholdMs, archived });
 });
 
+
+// Telemetry session notes — operator annotations ("wind, raining", "prospect
+// variant B") keyed by sessionId in a single JSON file next to the sessions.
+const TELEMETRY_NOTES_FILE = path.join(TELEMETRY_DIR, 'notes.json');
+
+function _readNotesFile() {
+  try {
+    if (!fs.existsSync(TELEMETRY_NOTES_FILE)) return {};
+    const data = JSON.parse(fs.readFileSync(TELEMETRY_NOTES_FILE, 'utf8'));
+    return (data && typeof data === 'object' && !Array.isArray(data)) ? data : {};
+  } catch (e) {
+    console.warn('[Telemetry] notes read failed, treating as empty:', e.message);
+    return {};
+  }
+}
+
+app.get('/telemetry/notes', requireAdmin, (req, res) => {
+  res.json({ notes: _readNotesFile() });
+});
+
+app.post('/telemetry/note/:id', requireAdmin, express.json({ limit: '16kb' }), (req, res) => {
+  const safeId = req.params.id.replace(/[^a-zA-Z0-9_\-]/g, '');
+  if (!safeId) return res.status(400).json({ error: 'Invalid session ID' });
+
+  const note = typeof (req.body && req.body.note) === 'string' ? req.body.note.trim().slice(0, 2000) : '';
+  const notes = _readNotesFile();
+  if (note) notes[safeId] = note;
+  else delete notes[safeId];
+
+  try {
+    if (!fs.existsSync(TELEMETRY_DIR)) fs.mkdirSync(TELEMETRY_DIR, { recursive: true });
+    fs.writeFileSync(TELEMETRY_NOTES_FILE, JSON.stringify(notes, null, 2));
+  } catch (e) {
+    console.error('[Telemetry] notes write failed:', e.message);
+    return res.status(500).json({ error: 'Write failed' });
+  }
+  res.json({ ok: true, sessionId: safeId, note: note || null });
+});
+
+// Auto-archive: move active sessions whose last event is older than N days into
+// archive/ so the active-dir scan (and the page's default view) stays small.
+// Disable with TELEMETRY_AUTOARCHIVE_DAYS=0.
+const TELEMETRY_AUTOARCHIVE_DAYS = Number(process.env.TELEMETRY_AUTOARCHIVE_DAYS != null ? process.env.TELEMETRY_AUTOARCHIVE_DAYS : 14);
+
+function autoArchiveOldSessions() {
+  if (!Number.isFinite(TELEMETRY_AUTOARCHIVE_DAYS) || TELEMETRY_AUTOARCHIVE_DAYS <= 0) return;
+  const cutoff = Date.now() - TELEMETRY_AUTOARCHIVE_DAYS * 24 * 3600 * 1000;
+  let moved = 0;
+  listSessionSummaries(false).forEach(summary => {
+    const last = Number(summary.lastEvent) || 0;
+    if (last === 0 || last >= cutoff) return;
+    const src = path.join(TELEMETRY_DIR, summary.sessionId + '.json');
+    const dest = path.join(TELEMETRY_ARCHIVE_DIR, summary.sessionId + '.json');
+    try {
+      if (!fs.existsSync(TELEMETRY_ARCHIVE_DIR)) fs.mkdirSync(TELEMETRY_ARCHIVE_DIR, { recursive: true });
+      fs.renameSync(src, dest);
+      invalidateSessionSummary(src);
+      invalidateSessionSummary(dest);
+      moved += 1;
+    } catch (e) {
+      console.warn('[Telemetry] auto-archive failed for', summary.sessionId, ':', e.message);
+    }
+  });
+  if (moved > 0) console.log('[Telemetry] auto-archived', moved, 'session(s) older than', TELEMETRY_AUTOARCHIVE_DAYS, 'days');
+}
+
+setTimeout(autoArchiveOldSessions, 60 * 1000);
+setInterval(autoArchiveOldSessions, 24 * 3600 * 1000);
 
 // A5 — Device registry. Each phone registers itself once per parcours entry
 // (POST /devices from PAGES['parcours']); admins can fetch the inventory to

@@ -3,6 +3,7 @@ media/
 parcours/
 _tmp/
 telemetry/*.json
+telemetry/archive/
 guest_password.json
 *.code-workspace
 

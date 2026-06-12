@@ -1,0 +1,382 @@
+/* Telemetry page — Leaflet rendering.
+ * Detail map (accuracy-coloured track, accuracy ribbon, GPS-problem pins,
+ * step-zone fire status, time scrubber) and multi-session group map. */
+window.TM = window.TM || {};
+
+TM.maps = (function() {
+    var ACC_BUCKETS = [
+        { max: 5, color: '#198754', label: '≤5m' },
+        { max: 10, color: '#0dcaf0', label: '≤10m' },
+        { max: 20, color: '#ffc107', label: '≤20m' },
+        { max: Infinity, color: '#dc3545', label: '>20m' }
+    ];
+
+    var PROBLEM_STYLES = {
+        gps_callback_gap: { color: '#fd7e14', label: 'gap' },
+        gps_sleep_suspect: { color: '#dc3545', label: 'sleep' },
+        gps_stale_callback: { color: '#ffc107', label: 'stale' },
+        gps_trigger_rejected: { color: '#6f42c1', label: 'reject' }
+    };
+
+    var TRACK_PALETTE = ['#0dcaf0', '#ffc107', '#20c997', '#fd7e14', '#ff6b6b', '#6f42c1', '#adb5bd', '#7ae582'];
+
+    // View persistence across re-renders/refreshes, keyed by caller-chosen key.
+    var viewStates = new Map();
+
+    function accBucket(acc) {
+        var value = Number(acc);
+        if (!Number.isFinite(value)) return ACC_BUCKETS.length - 1;
+        for (var i = 0; i < ACC_BUCKETS.length; i++) {
+            if (value <= ACC_BUCKETS[i].max) return i;
+        }
+        return ACC_BUCKETS.length - 1;
+    }
+
+    function getGpsEvents(events) {
+        return (events || []).filter(function(event) {
+            return event.type === 'gps' && event.data
+                && typeof event.data.lat === 'number' && typeof event.data.lng === 'number';
+        });
+    }
+
+    function distanceMeters(a, b) {
+        // Equirectangular approximation — plenty for decimation distances.
+        var dLat = (b[0] - a[0]) * 111320;
+        var dLng = (b[1] - a[1]) * 111320 * Math.cos(a[0] * Math.PI / 180);
+        return Math.sqrt(dLat * dLat + dLng * dLng);
+    }
+
+    function createBaseMap(containerId) {
+        var map = L.map(containerId).setView([45.75, 4.85], 15);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '&copy; OpenStreetMap'
+        }).addTo(map);
+        return map;
+    }
+
+    function normalizeLatLng(point) {
+        if (!point) return null;
+        if (Array.isArray(point) && point.length >= 2) return [Number(point[0]), Number(point[1])];
+        if (typeof point.lat === 'number' && (typeof point.lng === 'number' || typeof point.lon === 'number')) {
+            return [Number(point.lat), Number(point.lng != null ? point.lng : point.lon)];
+        }
+        if (typeof point.latitude === 'number' && (typeof point.longitude === 'number' || typeof point.lon === 'number')) {
+            return [Number(point.latitude), Number(point.longitude != null ? point.longitude : point.lon)];
+        }
+        return null;
+    }
+
+    function addSpotGeometry(group, spot, style, tooltip) {
+        var layer = null;
+        if (Array.isArray(spot.radius) && Array.isArray(spot.radius[0])) {
+            var points = spot.radius.map(normalizeLatLng).filter(Boolean);
+            if (points.length > 2) layer = L.polygon(points, style);
+        } else if (typeof spot.radius === 'number') {
+            layer = L.circle([spot.lat, spot.lon], Object.assign({ radius: Number(spot.radius) }, style));
+        } else if (typeof spot.lat === 'number' && typeof spot.lon === 'number') {
+            layer = L.circleMarker([spot.lat, spot.lon], Object.assign({ radius: 5, fillOpacity: 0.85 }, style));
+        }
+        if (!layer) return null;
+        layer.bindTooltip(tooltip.trim());
+        group.addLayer(layer);
+        return layer;
+    }
+
+    // Step zones. When fireStatus is on, colour each step zone by outcome:
+    // fired = green, refired = amber, never fired = red dashed.
+    function addOverlayZones(group, overlay, opts) {
+        if (!overlay || !overlay.data || !overlay.data.spots) return;
+        var spots = overlay.data.spots;
+        var fireCounts = (opts && opts.fireCounts) || null;
+
+        (spots.steps || []).forEach(function(step, index) {
+            var style = { color: '#ffc107', weight: 2, fillOpacity: 0.08 };
+            var label = 'Step ' + index + ': ' + (step.name || '');
+            if (fireCounts) {
+                var count = fireCounts.get(index) || 0;
+                if (count === 0) {
+                    style = { color: '#dc3545', weight: 2, fillOpacity: 0.05, dashArray: '6 4' };
+                    label += ' — NEVER FIRED';
+                } else if (count > 1) {
+                    style = { color: '#fd7e14', weight: 2, fillOpacity: 0.1 };
+                    label += ' — fired x' + count;
+                } else {
+                    style = { color: '#198754', weight: 2, fillOpacity: 0.1 };
+                    label += ' — fired';
+                }
+            }
+            addSpotGeometry(group, step, style, label);
+        });
+        (spots.offlimits || []).forEach(function(spot, index) {
+            addSpotGeometry(group, spot, { color: '#dc3545', weight: 2, fillOpacity: 0.12 }, 'Offlimit ' + index + ': ' + (spot.name || ''));
+        });
+        (spots.zones || []).forEach(function(spot, index) {
+            addSpotGeometry(group, spot, { color: '#20c997', weight: 2, fillOpacity: 0.05 }, 'Zone ' + index + ': ' + (spot.name || ''));
+        });
+    }
+
+    // Accuracy-coloured track: batch consecutive fixes whose pair-bucket
+    // (worse endpoint) is identical into one polyline per run.
+    function addColoredTrack(group, gpsEvents) {
+        if (gpsEvents.length < 2) return;
+        var runPoints = [[gpsEvents[0].data.lat, gpsEvents[0].data.lng]];
+        var runBucket = null;
+
+        for (var i = 1; i < gpsEvents.length; i++) {
+            var prev = gpsEvents[i - 1];
+            var curr = gpsEvents[i];
+            var bucket = Math.max(accBucket(prev.data.acc), accBucket(curr.data.acc));
+            var point = [curr.data.lat, curr.data.lng];
+
+            if (runBucket === null) runBucket = bucket;
+            if (bucket === runBucket) {
+                runPoints.push(point);
+            } else {
+                group.addLayer(L.polyline(runPoints, { color: ACC_BUCKETS[runBucket].color, weight: 3, opacity: 0.9 }));
+                runPoints = [runPoints[runPoints.length - 1], point];
+                runBucket = bucket;
+            }
+        }
+        if (runPoints.length > 1) {
+            group.addLayer(L.polyline(runPoints, { color: ACC_BUCKETS[runBucket].color, weight: 3, opacity: 0.9 }));
+        }
+    }
+
+    function addFlatTrack(group, gpsEvents, color) {
+        if (!gpsEvents.length) return;
+        var latlngs = gpsEvents.map(function(event) { return [event.data.lat, event.data.lng]; });
+        group.addLayer(L.polyline(latlngs, { color: color || '#0dcaf0', weight: 3, opacity: 0.92 }));
+    }
+
+    // Translucent accuracy circles, decimated so dense tracks stay readable.
+    function addAccuracyRibbon(group, gpsEvents) {
+        var lastKept = null;
+        gpsEvents.forEach(function(event, index) {
+            var point = [event.data.lat, event.data.lng];
+            var acc = Number(event.data.acc);
+            if (!Number.isFinite(acc) || acc <= 0) return;
+            if (lastKept && distanceMeters(lastKept, point) < 8 && index % 10 !== 0) return;
+            lastKept = point;
+            group.addLayer(L.circle(point, {
+                radius: acc,
+                color: ACC_BUCKETS[accBucket(acc)].color,
+                weight: 0,
+                fillOpacity: 0.07,
+                interactive: false
+            }));
+        });
+    }
+
+    function nearestFixBefore(gpsEvents, t) {
+        var found = null;
+        for (var i = 0; i < gpsEvents.length; i++) {
+            if (gpsEvents[i].t > t) break;
+            found = gpsEvents[i];
+        }
+        return found || gpsEvents[0] || null;
+    }
+
+    function describeProblem(event) {
+        var data = event.data || {};
+        return [
+            event.type,
+            data.gapMs != null ? 'gap:' + TM.util.formatGap(Number(data.gapMs)) : null,
+            data.ageMs != null ? 'age:' + TM.util.formatGap(Number(data.ageMs)) : null,
+            data.reason ? 'reason:' + data.reason : null,
+            data.acc != null ? 'acc:' + data.acc + 'm' : null,
+            data.source ? 'src:' + data.source : null,
+            new Date(event.t).toLocaleTimeString('fr-FR')
+        ].filter(Boolean).join(' · ');
+    }
+
+    // Pin GPS problems where they happened — the prospecting payoff.
+    function addProblemMarkers(group, events, gpsEvents) {
+        if (!gpsEvents.length) return;
+        (events || []).forEach(function(event) {
+            var style = PROBLEM_STYLES[event.type];
+            if (!style) return;
+            if (event.type === 'gps_callback_gap') {
+                var gap = Number(event.data && event.data.gapMs);
+                if (!Number.isFinite(gap) || gap < 8000) return;
+            }
+            var fix = nearestFixBefore(gpsEvents, event.t);
+            if (!fix) return;
+            group.addLayer(L.circleMarker([fix.data.lat, fix.data.lng], {
+                radius: 6,
+                color: '#ffffff',
+                weight: 1,
+                fillColor: style.color,
+                fillOpacity: 0.95
+            }).bindTooltip(describeProblem(event)));
+        });
+    }
+
+    function addStartEndMarkers(group, gpsEvents, labelPrefix) {
+        if (!gpsEvents.length) return;
+        var first = gpsEvents[0];
+        var last = gpsEvents[gpsEvents.length - 1];
+        group.addLayer(L.circleMarker([first.data.lat, first.data.lng], { radius: 7, color: '#198754', fillOpacity: 0.8 })
+            .bindTooltip((labelPrefix || '') + 'Start'));
+        group.addLayer(L.circleMarker([last.data.lat, last.data.lng], { radius: 7, color: '#dc3545', fillOpacity: 0.8 })
+            .bindTooltip((labelPrefix || '') + 'End'));
+    }
+
+    function addStepFireMarkers(group, events, gpsEvents) {
+        (events || []).filter(function(event) { return event.type === 'step_fire'; }).forEach(function(event) {
+            var fix = nearestFixBefore(gpsEvents, event.t);
+            if (!fix) return;
+            group.addLayer(L.circleMarker([fix.data.lat, fix.data.lng], {
+                radius: 5,
+                color: '#ffffff',
+                fillColor: '#ffc107',
+                fillOpacity: 0.9,
+                weight: 1
+            }).bindTooltip((event.data && event.data.name) || ('Step ' + (event.data && event.data.step))));
+        });
+    }
+
+    function computeFireCounts(events) {
+        var counts = new Map();
+        (events || []).forEach(function(event) {
+            if (event.type !== 'step_fire' || !event.data || !Number.isInteger(event.data.step)) return;
+            counts.set(event.data.step, (counts.get(event.data.step) || 0) + 1);
+        });
+        return counts;
+    }
+
+    function captureView(map) {
+        var center = map.getCenter();
+        return { center: [center.lat, center.lng], zoom: map.getZoom() };
+    }
+
+    /**
+     * Detail map handle.
+     * opts: { colored (default true), ribbon, problems, fireStatus, viewKey }
+     * Returns { map, refresh(newOpts), appendEvents(), setScrub(gpsIndex), destroy() }.
+     */
+    function renderDetailMap(containerId, data, overlay, opts) {
+        var options = Object.assign({ colored: true, ribbon: false, problems: false, fireStatus: false }, opts || {});
+        var viewKey = options.viewKey || ('detail:' + data.sessionId);
+
+        var map = createBaseMap(containerId);
+        var featureGroup = L.featureGroup().addTo(map);
+        var scrubMarker = null;
+        var destroyed = false;
+        var firstDraw = true;
+
+        function draw() {
+            featureGroup.clearLayers();
+            var events = data.events || [];
+            var gpsEvents = getGpsEvents(events);
+
+            addOverlayZones(featureGroup, overlay, options.fireStatus ? { fireCounts: computeFireCounts(events) } : null);
+            if (options.colored) addColoredTrack(featureGroup, gpsEvents);
+            else addFlatTrack(featureGroup, gpsEvents);
+            if (options.ribbon) addAccuracyRibbon(featureGroup, gpsEvents);
+            addStepFireMarkers(featureGroup, events, gpsEvents);
+            if (options.problems) addProblemMarkers(featureGroup, events, gpsEvents);
+            addStartEndMarkers(featureGroup, gpsEvents);
+
+            if (firstDraw) {
+                var saved = viewStates.get(viewKey);
+                if (saved) map.setView(saved.center, saved.zoom, { animate: false });
+                else if (featureGroup.getLayers().length > 0) map.fitBounds(featureGroup.getBounds().pad(0.08));
+                firstDraw = false;
+            }
+        }
+
+        map.on('moveend zoomend', function() {
+            if (!destroyed) viewStates.set(viewKey, captureView(map));
+        });
+
+        draw();
+        setTimeout(function() { if (!destroyed) map.invalidateSize(); }, 80);
+
+        return {
+            map: map,
+            refresh: function(newOpts) {
+                Object.assign(options, newOpts || {});
+                draw();
+            },
+            appendEvents: function() {
+                // data.events was mutated by the api tail merge — just redraw.
+                draw();
+            },
+            setScrub: function(gpsIndex) {
+                var gpsEvents = getGpsEvents(data.events || []);
+                var fix = gpsEvents[gpsIndex];
+                if (!fix) return null;
+                var point = [fix.data.lat, fix.data.lng];
+                if (!scrubMarker) {
+                    scrubMarker = L.circleMarker(point, {
+                        radius: 9,
+                        color: '#ffffff',
+                        weight: 2,
+                        fillColor: '#0d6efd',
+                        fillOpacity: 0.95
+                    }).addTo(map);
+                } else {
+                    scrubMarker.setLatLng(point);
+                }
+                return fix;
+            },
+            destroy: function() {
+                destroyed = true;
+                viewStates.set(viewKey, captureView(map));
+                map.remove();
+            }
+        };
+    }
+
+    /**
+     * Group map: one coloured track per session.
+     * items: [{ session, data }]; overlay drawn when all sessions share a parcours.
+     */
+    function renderGroupMap(containerId, items, overlay, opts) {
+        var options = opts || {};
+        var viewKey = options.viewKey || ('group:' + containerId);
+        var map = createBaseMap(containerId);
+        var featureGroup = L.featureGroup().addTo(map);
+
+        addOverlayZones(featureGroup, overlay, null);
+
+        items.forEach(function(item, index) {
+            var color = TRACK_PALETTE[index % TRACK_PALETTE.length];
+            var gpsEvents = getGpsEvents(item.data.events || []);
+            if (!gpsEvents.length) return;
+
+            var latlngs = gpsEvents.map(function(event) { return [event.data.lat, event.data.lng]; });
+            featureGroup.addLayer(L.polyline(latlngs, { color: color, weight: 3, opacity: 0.92 })
+                .bindTooltip(item.session.sessionId + ' · ' + (item.session.deviceModel || '')));
+            featureGroup.addLayer(L.circleMarker(latlngs[0], {
+                radius: 5, color: color, fillColor: color, fillOpacity: 0.7, weight: 1
+            }).bindTooltip('Start ' + item.session.sessionId));
+            featureGroup.addLayer(L.circleMarker(latlngs[latlngs.length - 1], {
+                radius: 5, color: '#ffffff', fillColor: color, fillOpacity: 0.95, weight: 1
+            }).bindTooltip('End ' + item.session.sessionId));
+        });
+
+        var saved = viewStates.get(viewKey);
+        if (saved) map.setView(saved.center, saved.zoom, { animate: false });
+        else if (featureGroup.getLayers().length > 0) map.fitBounds(featureGroup.getBounds().pad(0.08));
+
+        map.on('moveend zoomend', function() { viewStates.set(viewKey, captureView(map)); });
+        setTimeout(function() { map.invalidateSize(); }, 80);
+
+        return {
+            map: map,
+            destroy: function() { map.remove(); }
+        };
+    }
+
+    return {
+        ACC_BUCKETS: ACC_BUCKETS,
+        PROBLEM_STYLES: PROBLEM_STYLES,
+        TRACK_PALETTE: TRACK_PALETTE,
+        accBucket: accBucket,
+        getGpsEvents: getGpsEvents,
+        renderDetailMap: renderDetailMap,
+        renderGroupMap: renderGroupMap
+    };
+})();
