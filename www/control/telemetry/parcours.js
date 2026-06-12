@@ -188,6 +188,43 @@ TM.parcoursView = (function() {
         });
     }
 
+    // Landing index: one card per parcours with at-a-glance indicators.
+    function parcoursCard(label, walks) {
+        var completes = walks.filter(function(w) { return TM.api.statusOf(w) === 'ended-complete'; }).length;
+        var devices = new Set(walks.map(function(w) { return w.deviceUuid || w.deviceModel; })).size;
+        var medHealth = median(walks.map(TM.util.healthScore));
+        var last = walks[0];
+
+        return '<div class="pv-card" data-pv-open="' + esc(label) + '" role="button">' +
+            '<div class="pv-card-name">' + esc(label) + '</div>' +
+            '<div class="pv-card-stats">' +
+                '<span>' + walks.length + ' walk' + (walks.length > 1 ? 's' : '') + '</span>' +
+                '<span>' + (walks.length ? Math.round((completes / walks.length) * 100) : 0) + '% ✓</span>' +
+                '<span>' + devices + ' device' + (devices > 1 ? 's' : '') + '</span>' +
+                (medHealth != null
+                    ? '<span class="badge tm-health-chip" style="background:' + TM.util.healthColor(medHealth) + '">' + medHealth + '</span>'
+                    : '') +
+            '</div>' +
+            '<div class="pv-card-last">last walk: ' + (last ? esc(new Date(last.startTime).toLocaleDateString('fr-FR')) : '-') + '</div>' +
+        '</div>';
+    }
+
+    function renderIndex(root, available) {
+        var entries = available.map(function(label) {
+            return { label: label, walks: walksFor(label) };
+        }).sort(function(a, b) {
+            var lastA = a.walks[0] ? new Date(a.walks[0].startTime).getTime() : 0;
+            var lastB = b.walks[0] ? new Date(b.walks[0].startTime).getTime() : 0;
+            return lastB - lastA;
+        });
+
+        root.innerHTML =
+            '<div class="tm-meta">Choose a parcours to inspect its cross-day diagnostics.</div>' +
+            '<div class="pv-cards">' + entries.map(function(entry) {
+                return parcoursCard(entry.label, entry.walks);
+            }).join('') + '</div>';
+    }
+
     function render() {
         var root = document.getElementById('pv-root');
         if (!root) return;
@@ -199,7 +236,12 @@ TM.parcoursView = (function() {
         }
 
         var selected = TM.state.get('pv');
-        if (!selected || available.indexOf(selected) === -1) selected = available[0];
+        if (selected && available.indexOf(selected) === -1) selected = '';
+        if (!selected) {
+            if (mapHandle) { try { mapHandle.destroy(); } catch (e) {} mapHandle = null; }
+            renderIndex(root, available);
+            return;
+        }
 
         var walks = walksFor(selected);
         var totalSteps = 0;
@@ -208,7 +250,9 @@ TM.parcoursView = (function() {
 
         root.innerHTML =
             '<div class="d-flex gap-3 align-items-center flex-wrap mb-3">' +
+                '<button id="pv-back" class="btn btn-outline-secondary btn-sm">&larr; Parcours</button>' +
                 '<select id="pv-select" class="form-select form-select-sm" style="max-width:340px">' +
+                    '<option value="">— all parcours —</option>' +
                     available.map(function(label) {
                         return '<option value="' + esc(label) + '"' + (label === selected ? ' selected' : '') + '>' + esc(label) + '</option>';
                     }).join('') +
@@ -261,6 +305,16 @@ TM.parcoursView = (function() {
         });
 
         root.addEventListener('click', function(event) {
+            // pv changes re-render via the app's state-change routing.
+            if (event.target.id === 'pv-back' || event.target.closest('#pv-back')) {
+                TM.state.set({ pv: '' });
+                return;
+            }
+            var card = event.target.closest('[data-pv-open]');
+            if (card) {
+                TM.state.set({ pv: card.dataset.pvOpen });
+                return;
+            }
             var row = event.target.closest('[data-pv-session]');
             if (!row) return;
             TM.state.set({

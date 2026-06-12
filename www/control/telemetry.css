@@ -657,6 +657,43 @@ body.tm-body {
 
 /* ---------- Parcours view ---------- */
 
+.pv-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 12px;
+}
+.pv-card {
+    border: 1px solid rgba(255,255,255,0.1);
+    background: rgba(255,255,255,0.045);
+    border-radius: 10px;
+    padding: 12px 14px;
+    cursor: pointer;
+}
+.pv-card:hover {
+    background: rgba(255,255,255,0.09);
+    border-color: rgba(13, 202, 240, 0.45);
+}
+.pv-card-name {
+    font-weight: 600;
+    margin-bottom: 6px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.pv-card-stats {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+    font-size: 0.82rem;
+    color: rgba(255,255,255,0.7);
+}
+.pv-card-last {
+    margin-top: 6px;
+    font-size: 0.74rem;
+    color: rgba(255,255,255,0.45);
+}
+
 .pv-main {
     display: grid;
     grid-template-columns: minmax(0, 1.4fr) minmax(300px, 0.6fr);

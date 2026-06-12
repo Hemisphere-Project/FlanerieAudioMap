@@ -427,16 +427,20 @@ TM.maps = (function() {
         var options = opts || {};
         var viewKey = options.viewKey || ('group:' + containerId);
         var map = createBaseMap(containerId);
+        // Overlay zones live in their own group: the initial view fits the
+        // PARCOURS area, not the data — outlier fixes (old simulations far
+        // from the parcours) must not blow up the zoom.
+        var overlayGroup = L.featureGroup().addTo(map);
         var featureGroup = L.featureGroup().addTo(map);
 
         // Subdued steps (or reliability-coloured ones), to keep tracks/heat readable.
-        addOverlayZones(featureGroup, overlay, options.stepRates
+        addOverlayZones(overlayGroup, overlay, options.stepRates
             ? { stepRates: options.stepRates }
             : { lightSteps: true });
 
         if (options.mode === 'accuracy') {
             addAccuracyHeat(featureGroup, items);
-            finishGroupMap(map, featureGroup, viewKey);
+            finishGroupMap(map, featureGroup, viewKey, overlayGroup);
             return { map: map, destroy: function() { map.remove(); } };
         }
 
@@ -470,17 +474,22 @@ TM.maps = (function() {
             }).bindTooltip('End ' + item.session.sessionId));
         });
 
-        finishGroupMap(map, featureGroup, viewKey);
+        finishGroupMap(map, featureGroup, viewKey, overlayGroup);
         return {
             map: map,
             destroy: function() { map.remove(); }
         };
     }
 
-    function finishGroupMap(map, featureGroup, viewKey) {
+    function finishGroupMap(map, featureGroup, viewKey, overlayGroup) {
         var saved = viewStates.get(viewKey);
-        if (saved) map.setView(saved.center, saved.zoom, { animate: false });
-        else if (featureGroup.getLayers().length > 0) map.fitBounds(featureGroup.getBounds().pad(0.08));
+        if (saved) {
+            map.setView(saved.center, saved.zoom, { animate: false });
+        } else if (overlayGroup && overlayGroup.getLayers().length > 0) {
+            map.fitBounds(overlayGroup.getBounds().pad(0.08));
+        } else if (featureGroup.getLayers().length > 0) {
+            map.fitBounds(featureGroup.getBounds().pad(0.08));
+        }
 
         map.on('moveend zoomend', function() { viewStates.set(viewKey, captureView(map)); });
         setTimeout(function() { map.invalidateSize(); }, 80);
