@@ -224,17 +224,18 @@ body.tm-body {
 /* ---------- Device groups ---------- */
 
 .tm-group {
-    border: 1px solid rgba(255,255,255,0.07);
+    border: 1px solid rgba(255,255,255,0.13);
     border-radius: 10px;
     margin: 8px 4px;
     overflow: hidden;
+    background: rgba(255,255,255,0.02);
 }
 .tm-group-header {
     display: flex;
     align-items: center;
     gap: 8px;
     padding: 6px 12px;
-    background: rgba(255,255,255,0.045);
+    background: rgba(255,255,255,0.08);
     font-size: 0.88rem;
     flex-wrap: wrap;
 }
@@ -266,15 +267,16 @@ body.tm-body {
 
 .tm-row {
     display: grid;
-    grid-template-columns: 56px minmax(140px, 1.3fr) 70px minmax(160px, 1.6fr) 120px 30px;
+    grid-template-columns: 56px minmax(140px, 1.4fr) 70px minmax(120px, 1.1fr) 136px 24px;
     gap: 10px;
     align-items: center;
     padding: 7px 12px;
-    border-top: 1px solid rgba(255,255,255,0.05);
+    border-top: 1px solid rgba(255,255,255,0.08);
     cursor: pointer;
     font-size: 0.9rem;
 }
-.tm-row:hover { background: rgba(255,255,255,0.04); }
+.tm-row-alt { background: rgba(255,255,255,0.035); }
+.tm-row:hover { background: rgba(255,255,255,0.07); }
 .tm-row.active { background: rgba(13, 202, 240, 0.09); }
 .tm-row-prehl {
     background: rgba(13, 202, 240, 0.14);
@@ -307,9 +309,10 @@ body.tm-body {
     font-variant-numeric: tabular-nums;
 }
 .tm-row-chevron {
-    color: rgba(255,255,255,0.4);
-    text-align: right;
-    font-size: 0.78rem;
+    color: rgba(255,255,255,0.35);
+    text-align: center;
+    font-size: 1.05rem;
+    line-height: 1;
 }
 .tm-row.active .tm-row-chevron { transform: rotate(90deg); }
 
@@ -328,6 +331,7 @@ body.tm-body {
     display: flex;
     gap: 1px;
     height: 8px;
+    max-width: 300px;
 }
 .tm-stepbar span {
     flex: 1;
@@ -341,8 +345,10 @@ body.tm-body {
     font-variant-numeric: tabular-nums;
 }
 
+/* Fixed columns so accuracy and health align vertically across rows */
 .tm-row-q {
-    display: flex;
+    display: grid;
+    grid-template-columns: 66px 36px auto;
     align-items: center;
     gap: 8px;
     white-space: nowrap;
@@ -354,6 +360,7 @@ body.tm-body {
     align-items: center;
     gap: 4px;
 }
+.tm-health-chip { justify-self: start; }
 .tm-chip-dot {
     width: 8px;
     height: 8px;

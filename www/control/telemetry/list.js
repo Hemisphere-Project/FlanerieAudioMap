@@ -213,9 +213,9 @@ TM.list = (function() {
             var groupList = Array.from(groups.values());
             if (TM.state.get('sort') === 'worst') {
                 groupList.sort(function(a, b) {
-                    var worstA = Math.max.apply(null, a.sessions.map(TM.util.healthScore));
-                    var worstB = Math.max.apply(null, b.sessions.map(TM.util.healthScore));
-                    return worstB - worstA;
+                    var worstA = Math.min.apply(null, a.sessions.map(TM.util.healthScore));
+                    var worstB = Math.min.apply(null, b.sessions.map(TM.util.healthScore));
+                    return worstA - worstB;
                 });
             } else {
                 groupList.sort(function(a, b) { return new Date(a.sessions[0].startTime) - new Date(b.sessions[0].startTime); });
@@ -250,12 +250,11 @@ TM.list = (function() {
             esc(TM.util.formatNumber(accuracy, 1)) + 'm</span>';
     }
 
-    // Health score chip; click opens the anomaly popover.
+    // Health score chip (0..100, 100 = clean); click opens the anomaly popover.
     function healthChip(summary) {
         var score = TM.util.healthScore(summary);
-        var display = score >= 10 ? Math.round(score) : (Math.round(score * 10) / 10);
         return '<span class="badge tm-health-chip" style="background:' + TM.util.healthColor(score) + '" ' +
-            'tabindex="0" role="button" title="health score — click for anomalies">' + esc(display) + '</span>';
+            'tabindex="0" role="button" title="health ' + score + '/100 — click for anomalies">' + esc(score) + '</span>';
     }
 
     // Per-step bar: green = fired, red = reached but never fired (missed),
@@ -292,8 +291,6 @@ TM.list = (function() {
         var expanded = TM.detail.currentSessionId() === summary.sessionId;
         var note = TM.api.getNote(summary.sessionId);
         var chips = [];
-
-        if (options.restartIndex > 1) chips.push('<span class="badge text-bg-warning">restart #' + options.restartIndex + '</span>');
         if (Number(summary.resumeCount) > 0) chips.push('<span class="badge text-bg-secondary">resume x' + esc(summary.resumeCount) + '</span>');
         if (note) chips.push('<span class="tm-note-ic" title="' + esc(note) + '">✎</span>');
 
@@ -303,7 +300,7 @@ TM.list = (function() {
 
         var shortCode = String(summary.sessionId || '').split('_').pop();
 
-        return '<div class="tm-row' + (expanded ? ' active' : '') + (summary.kind === 'onboarding' ? ' tm-row-onb' : '') + '" ' +
+        return '<div class="tm-row' + (expanded ? ' active' : '') + (options.alt ? ' tm-row-alt' : '') + (summary.kind === 'onboarding' ? ' tm-row-onb' : '') + '" ' +
             'data-session-id="' + esc(summary.sessionId) + '" title="' + esc(summary.sessionId + ' · ' + status) + '">' +
             '<div class="tm-row-time">' + esc(TM.util.formatTime(summary.startTime)) +
                 '<span class="tm-row-code">' + esc(shortCode) + '</span></div>' +
@@ -313,7 +310,7 @@ TM.list = (function() {
             '<div class="tm-row-duration">' + esc(TM.util.formatDuration(summary.durationMs)) + '</div>' +
             '<div class="tm-row-prog">' + progressHtml(summary) + '</div>' +
             '<div class="tm-row-q">' + accChip(summary) + healthChip(summary) + ago + '</div>' +
-            '<div class="tm-row-chevron">▶</div>' +
+            '<div class="tm-row-chevron">›</div>' +
         '</div>';
     }
 
@@ -337,28 +334,20 @@ TM.list = (function() {
                   '<button class="tm-rename-btn" data-action="rename-device" data-uuid="' + esc(first.deviceUuid) + '" title="Rename device">✎</button>'
                 : '') +
             (first.isLoanDevice ? '<span class="badge tm-loan-badge" title="loan-fleet device">loan</span>' : '') +
-            (apk != null && Number.isFinite(apk) ? '<span class="badge text-bg-' + (apkStale ? 'danger' : 'dark') + '">apk ' + esc(apk) + (apkStale ? ' stale' : '') + '</span>' : '') +
+            (apk != null && Number.isFinite(apk) ? '<span class="badge text-bg-' + (apkStale ? 'secondary' : 'dark') + '"' + (apkStale ? ' title="older than the day\'s fleet max"' : '') + '>apk ' + esc(apk) + (apkStale ? ' stale' : '') + '</span>' : '') +
             '<div class="tm-group-meta">' +
                 '<span>' + walks.length + ' walk' + (walks.length > 1 ? 's' : '') + (onbs.length ? ' + ' + onbs.length + ' onb' : '') + '</span>' +
                 (walks.length > 1 ? '<button class="btn btn-outline-secondary btn-sm py-0" data-action="toggle-tracks" data-track-key="' + esc(domKey) + '">Tracks</button>' : '') +
             '</div>' +
         '</div>';
 
-        // restart numbering: consecutive walk sessions on the same parcours
-        var restartIndices = new Map();
-        var runParcours = null;
-        var runCount = 0;
-        walks.forEach(function(summary) {
-            if (summary.parcoursId === runParcours) runCount += 1;
-            else { runParcours = summary.parcoursId; runCount = 1; }
-            restartIndices.set(summary.sessionId, runCount);
-        });
-
         var kind = TM.state.get('kind');
         var rows = '';
+        var visibleIndex = 0;
         group.sessions.forEach(function(summary) {
             if (summary.kind === 'onboarding' && kind === 'all' && !onbExpanded.has(domKey)) return;
-            rows += renderRow(summary, { restartIndex: restartIndices.get(summary.sessionId) || 0 });
+            rows += renderRow(summary, { alt: visibleIndex % 2 === 1 });
+            visibleIndex += 1;
             if (TM.detail.currentSessionId() === summary.sessionId) {
                 rows += '<div class="tm-detail-host" data-host-for="' + esc(summary.sessionId) + '"></div>';
             }
@@ -536,7 +525,7 @@ TM.list = (function() {
         var acc = Number(summary.avgAccuracy);
         var header = '<div class="error-event-time mb-1">avg acc ' +
             (Number.isFinite(acc) ? esc(TM.util.formatNumber(acc, 1)) + 'm' : '?') +
-            ' · health score ' + esc(TM.util.healthScore(summary).toFixed(1)) + '</div>';
+            ' · health ' + esc(TM.util.healthScore(summary)) + '/100</div>';
 
         if (!lines.length) return header + '<div class="text-secondary">No anomalies recorded.</div>';
 

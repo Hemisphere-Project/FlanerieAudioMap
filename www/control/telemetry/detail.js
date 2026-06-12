@@ -99,7 +99,7 @@ TM.detail = (function() {
         if (client.appVersion != null) {
             var dayMax = TM.list.dayMaxApk(sessionDay);
             var stale = dayMax && Number(client.appVersion) < dayMax;
-            chips.push('<span class="badge text-bg-' + (stale ? 'danger' : 'secondary') + '">apk ' + esc(client.appVersion) + (stale ? ' < fleet ' + dayMax : '') + '</span>');
+            chips.push('<span class="badge text-bg-secondary">apk ' + esc(client.appVersion) + (stale ? ' < fleet ' + dayMax : '') + '</span>');
         }
         if (client.webappCommit) {
             var version = TM.api.getVersion();

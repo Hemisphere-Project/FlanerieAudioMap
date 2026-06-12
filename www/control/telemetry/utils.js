@@ -100,8 +100,8 @@ TM.util = (function() {
         setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
     }
 
-    // Composite "how bad was this session" score; higher = worse.
-    function healthScore(s) {
+    // Composite anomaly penalty (internal); 0 = clean walk.
+    function healthPenalty(s) {
         var score = 0;
         score += (Number(s.sleepSuspects) || 0) * 3;
         score += (Number(s.staleCallbacks) || 0);
@@ -117,10 +117,15 @@ TM.util = (function() {
         return score;
     }
 
-    function healthColor(score) {
-        if (score >= 6) return '#dc3545';
-        if (score >= 2) return '#ffc107';
-        return '#198754';
+    // Public health score, normalized 0..100 where 100 = perfect session.
+    function healthScore(s) {
+        return Math.max(0, Math.min(100, Math.round(100 - healthPenalty(s) * 10)));
+    }
+
+    function healthColor(score100) {
+        if (score100 >= 80) return '#198754';
+        if (score100 >= 40) return '#ffc107';
+        return '#dc3545';
     }
 
     return {
