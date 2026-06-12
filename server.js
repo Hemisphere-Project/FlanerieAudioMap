@@ -733,19 +733,25 @@ const TELEMETRY_LIVE_WINDOW_MS = 3 * 60 * 1000;
 // reaches the end with almost no steps fired and must not count as complete.
 const COMPLETE_FIRED_RATIO = 0.8;
 
+function sessionDeliveredFully(summary) {
+  const firedCount = Array.isArray(summary.firedSteps) ? summary.firedSteps.length : 0;
+  return summary.totalSteps > 0
+      && Number.isInteger(summary.finalStep)
+      && summary.finalStep >= summary.totalSteps - 1
+      && firedCount >= Math.ceil(summary.totalSteps * COMPLETE_FIRED_RATIO);
+}
+
 function computeSessionStatus(summary, nowMs) {
   if (summary.ended) {
-    const firedCount = Array.isArray(summary.firedSteps) ? summary.firedSteps.length : 0;
-    if (summary.totalSteps > 0
-        && Number.isInteger(summary.finalStep)
-        && summary.finalStep >= summary.totalSteps - 1
-        && firedCount >= Math.ceil(summary.totalSteps * COMPLETE_FIRED_RATIO)) {
-      return 'ended-complete';
-    }
-    return 'ended-partial';
+    return sessionDeliveredFully(summary) ? 'ended-complete' : 'ended-partial';
   }
   const last = Number(summary.lastEvent) || 0;
-  return (nowMs - last) < TELEMETRY_LIVE_WINDOW_MS ? 'live' : 'interrupted';
+  if ((nowMs - last) < TELEMETRY_LIVE_WINDOW_MS) return 'live';
+  // No session_end marker — audiences often kill the app right at the end of
+  // the show, so the marker depends on a polite exit. If the data proves the
+  // show was delivered (last step reached, fired coverage met), count it
+  // complete; 'interrupted' is reserved for streams dying mid-parcours.
+  return sessionDeliveredFully(summary) ? 'ended-complete' : 'interrupted';
 }
 
 function listSessionSummaries(archived) {

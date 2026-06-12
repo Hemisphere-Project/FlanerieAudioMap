@@ -22,11 +22,24 @@ TM.api = (function() {
     function nowServer() { return Date.now() + serverTimeOffset; }
 
     // Status: ended-* is final (server-computed); live/interrupted depends on
-    // "now" so recompute locally on every render.
+    // "now" so recompute locally on every render. Mirrors the server rules,
+    // including completion inferred without a session_end marker (audiences
+    // kill the app right at the end of the show).
+    var COMPLETE_FIRED_RATIO = 0.8; // mirror of server COMPLETE_FIRED_RATIO
+
+    function deliveredFully(summary) {
+        var firedCount = Array.isArray(summary.firedSteps) ? summary.firedSteps.length : 0;
+        return summary.totalSteps > 0
+            && Number.isInteger(summary.finalStep)
+            && summary.finalStep >= summary.totalSteps - 1
+            && firedCount >= Math.ceil(summary.totalSteps * COMPLETE_FIRED_RATIO);
+    }
+
     function statusOf(summary) {
         if (summary.ended) return summary.status || 'ended-partial';
         var last = Number(summary.lastEvent) || 0;
-        return (nowServer() - last) < LIVE_WINDOW_MS ? 'live' : 'interrupted';
+        if ((nowServer() - last) < LIVE_WINDOW_MS) return 'live';
+        return deliveredFully(summary) ? 'ended-complete' : 'interrupted';
     }
 
     function fetchJson(url, options) {

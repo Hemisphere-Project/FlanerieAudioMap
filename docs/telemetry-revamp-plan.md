@@ -20,8 +20,13 @@ load-bearing definitions for anyone reading the page or its exports:
   fired** (`COMPLETE_FIRED_RATIO` in server.js). A session resuming at step 20
   via the persisted walk gate ends "complete" by position but delivered no
   content — it is `ended-partial`.
-- Status taxonomy unchanged otherwise: `live` (<3 min since last event, no end),
-  `ended-complete`, `ended-partial`, `interrupted`.
+- The `session_end` marker is **optional** for completion: audiences often kill
+  the app right at the end of the show, so a stale stream with no end marker
+  that reached the last step with fired coverage met is `ended-complete` too
+  (the 0ay2 case). `interrupted` is reserved for streams dying mid-parcours.
+  Mirrored client-side in `api.js statusOf` / `deliveredFully`.
+- Taxonomy: `live` (<3 min since last event, no end), `ended-complete`,
+  `ended-partial`, `interrupted`.
 
 ### Health score (0–100, 100 = clean walk)
 Computed client-side in `utils.js healthPenalty()`, calibrated on the
