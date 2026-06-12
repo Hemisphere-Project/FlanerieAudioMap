@@ -526,6 +526,11 @@ TM.list = (function() {
         if (Number(summary.rejectedFixes) > 0) lines.push(['reject', 'Rejected fixes ×' + summary.rejectedFixes]);
         if (Number(summary.audioErrors) > 0) lines.push(['audio', 'Audio errors ×' + summary.audioErrors]);
         if (Number(summary.userLostCount) > 0) lines.push([null, 'User lost ×' + summary.userLostCount]);
+        // fragile-but-recovered signals
+        if (Number(summary.heartbeatRecoveries) > 0) lines.push([null, 'GPS heartbeat rescues ×' + summary.heartbeatRecoveries]);
+        if (Number(summary.afterplayFallbackLoadError) > 0) lines.push(['audio', 'Afterplay load errors ×' + summary.afterplayFallbackLoadError + ' (fallback used)']);
+        if (Number(summary.audiofocusRetryCount) > 0) lines.push([null, 'AudioFocus retries ×' + summary.audiofocusRetryCount]);
+        if (Number(summary.resumeCount) > 0) lines.push([null, 'Session resumes ×' + summary.resumeCount]);
 
         var acc = Number(summary.avgAccuracy);
         var header = '<div class="error-event-time mb-1">avg acc ' +

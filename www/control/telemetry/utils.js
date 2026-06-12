@@ -140,8 +140,16 @@ TM.util = (function() {
         p += Math.min(10, (Number(s.staleCallbacks) || 0));
         p += Math.min(5, (Number(s.rejectedFixes) || 0) * 0.05);
 
-        // Stability
+        // Stability / fragility — "it worked, but a self-healing mechanism had
+        // to step in": session resumes after a kill, the GPS heartbeat watchdog
+        // reviving tracking, audio rescued by the afterplay fallback after a
+        // load error, audiofocus auto-retries. NOTE: afterplayFallbackCount is
+        // NOT used — its no_src variant is a normal content path (steps with
+        // no afterplay configured), only the loaderror variant is a rescue.
         p += Math.min(8, (Number(s.resumeCount) || 0) * 4);
+        p += Math.min(16, (Number(s.heartbeatRecoveries) || 0) * 4);
+        p += Math.min(9, (Number(s.afterplayFallbackLoadError) || 0) * 3);
+        p += Math.min(6, (Number(s.audiofocusRetryCount) || 0) * 2);
 
         return p;
     }
