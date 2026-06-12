@@ -55,6 +55,18 @@ createStandaloneFlanerieChat({
 app.use(express.static(path.join(__dirname, 'www')));
 
 // static audio files
+// CORS + Range preflight insurance for the app's chunked media downloader: the
+// iOS WebView runs the webapp from app://localhost (cordova scheme handler) and
+// a Range/If-Range request header is not CORS-safelisted, so without these
+// headers a preflighting WebView would refuse the resumable downloads.
+app.use('/media', (req, res, next) => {
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+  res.set('Access-Control-Allow-Headers', 'Range, If-Range');
+  res.set('Access-Control-Expose-Headers', 'Content-Range, Content-Length, Accept-Ranges, Last-Modified, ETag');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
 app.use('/media', express.static(path.join(__dirname, 'media')));
 
 // static parcours files

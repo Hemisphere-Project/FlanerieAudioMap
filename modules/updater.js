@@ -136,14 +136,17 @@ function fileCrowler(path) {
         if (stats.isDirectory()) {
             result[file] = fileCrowler(subpath);
         } 
-        else if (!file.startsWith('.')) 
+        else if (!file.startsWith('.'))
         {
             result[file] = {}
-            const data = fs.readFileSync(subpath);
             result[file].size = stats.size;
             if (SETMEDIAHASH) {
+                // Only read file contents when hashing is on: this crawl runs at
+                // startup and on every media change, and reading the whole media
+                // tree (~3.6GB) blocks the event loop — stalling every in-flight
+                // download — for nothing when the hash is discarded.
                 const hash = crypto.createHash("sha256");
-                hash.update(data);
+                hash.update(fs.readFileSync(subpath));
                 result[file].hash = hash.digest("hex")
             }
         }

@@ -428,36 +428,72 @@ class Parcours extends EventEmitter {
                     return;
                 }
 
-                // DOWNLOAD MEDIA
-                var failedFiles = [];
-                const downloadSequence = this.state.mediaPack.reduce((promiseChain, file) => {
+                // DOWNLOAD MEDIA — pool of 4 parallel transfers (WebView allows 6
+                // connections per host; keep headroom for telemetry/API). A single
+                // sequential stream underuses lossy mobile links and was the main
+                // reason packs felt slow (2026-06-12 audit: server sustains 20
+                // parallel streams without breaking a sweat).
+                var failedFiles = [];   // paths failed twice → telemetry + reject
+                var retryFiles = [];    // files failed once → final sweep
+                var startedAt = Date.now();
+                this._livePackProgress = {};  // transient in-flight bytes, feeds loadprogress()
+
+                const downloadOne = (file, isRetry) => {
                     let info = data[file];
                     let path = this.pID + '/' + file;
-                    return promiseChain.then(() => media_download(path, info, dryrun))
+                    // 4th arg ignored by APKs older than the chunked downloader — harmless
+                    return media_download(path, info, dryrun, (bytes) => {
+                            this._livePackProgress[file] = Math.min(bytes, info.size || bytes);
+                        })
                         .then(() => {
                             console.log('Media loaded', path);
+                            delete this._livePackProgress[file];
                             this.state.mediaPackLoaded += info.size;
                         })
                         .catch(error => {
+                            delete this._livePackProgress[file];
                             if (error === 'DRYRUN') {
                                 console.log('Media dryrun', path);
                                 return;
                             }
                             console.warn('Error loading media', path, error);
-                            failedFiles.push(path);
-                            this.state.mediaPackLoaded += info.size; // count as processed
+                            if (!isRetry) {
+                                retryFiles.push(file);
+                            } else {
+                                failedFiles.push(path);
+                                this.state.mediaPackLoaded += info.size; // count as processed
+                            }
                         });
-                }, Promise.resolve());
+                };
 
-                downloadSequence
+                const runPool = (list, concurrency) => {
+                    let next = 0;
+                    const worker = () => {
+                        if (next >= list.length) return Promise.resolve();
+                        return downloadOne(list[next++], false).then(worker);
+                    };
+                    return Promise.all(Array.from({ length: Math.min(concurrency, list.length) }, worker));
+                };
+
+                runPool(this.state.mediaPack, 4)
+                    // Final sweep: one sequential second chance for files that failed
+                    // in the pool — rides out transient radio drops without making the
+                    // user tap retry for the whole pack.
+                    .then(() => retryFiles.reduce((chain, file) =>
+                        chain.then(() => downloadOne(file, true)), Promise.resolve()))
                     .then(() => {
                         if (failedFiles.length > 0) {
                             console.warn('Media download: ' + failedFiles.length + ' file(s) failed:', failedFiles);
-                            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('media_download_partial', {failed: failedFiles.length, total: this.state.mediaPack.length, files: failedFiles});
+                            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('media_download_partial', {failed: failedFiles.length, total: this.state.mediaPack.length, files: failedFiles, ms: Date.now() - startedAt});
                             reject('media_partial: ' + failedFiles.length + ' file(s) failed');
                             return;
                         }
-                        if (!dryrun) this.state.medialoaded = true;
+                        if (!dryrun) {
+                            this.state.medialoaded = true;
+                            // Field measurement of real pack transfer times (cached
+                            // packs report a few ms — that's the skip-check cost).
+                            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('media_pack_loaded', {files: this.state.mediaPack.length, bytes: this.state.mediaPackSize, ms: Date.now() - startedAt, retried: retryFiles.length});
+                        }
                         this.store();
                         resolve();
                     });
@@ -546,7 +582,12 @@ class Parcours extends EventEmitter {
 
     loadprogress() {
         if (this.state.mediaPackSize === 0) return 0;
-        return Math.round(this.state.mediaPackLoaded / this.state.mediaPackSize * 100);
+        // mediaPackLoaded only advances on completed files; add live in-flight
+        // bytes so the % moves smoothly during the big ones.
+        let live = 0;
+        if (this._livePackProgress)
+            for (const k in this._livePackProgress) live += this._livePackProgress[k];
+        return Math.min(100, Math.round((this.state.mediaPackLoaded + live) / this.state.mediaPackSize * 100));
     }
 
     addSpot(type, spot) {
