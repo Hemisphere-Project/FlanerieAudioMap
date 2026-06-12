@@ -3,9 +3,87 @@
 *2026-06-12 — covers `www/control/telemetry.html` (1870 lines, single file) + `server.js` telemetry routes.*
 
 > **Status: IMPLEMENTED 2026-06-12** (all phases P1–P5 incl. extras). Client now lives in
-> `www/control/telemetry.{html,css}` + `www/control/telemetry/{utils,state,api,maps,detail,list,app}.js`.
+> `www/control/telemetry.{html,css}` + `www/control/telemetry/{utils,state,api,maps,detail,list,app,parcours}.js`.
 > ⚠️ server.js changed (new summary fields, cache, `?since`/`?afterT`, notes endpoints, auto-archive):
 > the deploy webhook does NOT restart node — **restart the server** after pulling.
+> **As-built deviations from the plan below: see the addendum at the end of this file.**
+
+---
+
+## As-built addendum (2026-06-12, after 8 field-feedback rounds)
+
+Semantics that differ from (or are absent in) the original plan — these are the
+load-bearing definitions for anyone reading the page or its exports:
+
+### Status & completion
+- `ended-complete` requires reaching the last step **AND ≥80% of steps actually
+  fired** (`COMPLETE_FIRED_RATIO` in server.js). A session resuming at step 20
+  via the persisted walk gate ends "complete" by position but delivered no
+  content — it is `ended-partial`.
+- Status taxonomy unchanged otherwise: `live` (<3 min since last event, no end),
+  `ended-complete`, `ended-partial`, `interrupted`.
+
+### Health score (0–100, 100 = clean walk)
+Computed client-side in `utils.js healthPenalty()`, calibrated on the
+2026-06-11/12 field data. Weighted by **walker-perceived impact**:
+- missed steps (reached but never fired) dominate: up to −80;
+- sustained coarse accuracy disqualifies: −55 above 25 m avg, −40 above 18 m,
+  −15 above 12 m; below 9 m barely counts;
+- user-lost episodes: −4 each if median recovery <60 s, else −8;
+- **worked-but-fragile** self-healing counts: GPS heartbeat rescues −4 (cap 16),
+  afterplay **load-error** fallbacks −3 (cap 9), audiofocus retries −2 (cap 6),
+  session resumes −4 (cap 8);
+- rejected fixes ≈ free (−0.05 each, cap 5): that is the sample filter working;
+- `afterplayFallbackCount` total is deliberately NOT used — its `no_src`
+  variant fires on nearly every walk (steps without afterplay audio).
+Bands: ≥85 green (great walk), 45–84 amber (ok, with issues), <45 red (device
+needs attention / should not have walked).
+
+### List & rows
+- Day sections are an accordion (only today open by default); multi-parcours
+  days split into per-parcours sub-sections, each with its own timeline and
+  tracks map.
+- Rows: time + short code | dimmed parcours | duration | per-step block graph
+  (green fired / red missed / grey not reached / pulsing blue = live walker
+  position) | GPS-quality chip (avg acc) + health chip. The health chip's
+  popover lists anomalies; each line opens the events panel pre-filtered.
+  Restart badges were replaced by zebra striping; status pill removed (status
+  is in the tooltip, the step graph and the pinned IN PROGRESS section).
+- Day timeline bars are the same step-block graphs on the time axis with a
+  health-coloured strip underneath, hourly grid, zoom (full span ↔ 2 h window)
+  and horizontal scroll; bars hover-highlight and click-jump to their row.
+
+### Maps
+- Tracks maps (day / parcours-section / device group) toggle between `Tracks`
+  and `Avg accuracy`. The accuracy heat is **device-robust**: fixes binned into
+  ~25 m cells, averaged per device first, cell value = **median across
+  devices** (a faulty phone is outvoted wherever ≥2 phones passed); <3-fix
+  cells dropped, single-device cells dimmed. Initial view fits the **parcours
+  overlay bounds**, not the data (outlier fixes from old simulations otherwise
+  blow up the zoom).
+- Detail map has two views: `Progress` (step fire-status zones + problem pins)
+  and `GPS quality` (light steps + accuracy ribbon), plus a steps-only ↔ all
+  zones toggle. Both keep the accuracy-coloured track.
+- Wheel zoom is a custom deterministic accumulator (`maps.js
+  attachWheelZoom`); Leaflet's debounce-based `scrollWheelZoom` double-fires
+  with fractional zoomSnap and is disabled.
+
+### Parcours view (new tab, not in the original plan)
+Cross-day diagnostics per parcours, aggregating **active + archive**:
+- landing index of parcours cards (walks, completion %, devices, median
+  health, last activity);
+- per-step **fire-rate reliability** (fired / walks-that-reached) as a list and
+  painted on the map's step zones (green ≥95% / orange ≥80% / red below) —
+  computed from summaries, so it uses every walk for free;
+- accuracy heat over the last 10/25/50 walks (detail fetches are capped);
+- health histogram, recent walks with jump-to-session links.
+Known limitation: old/simulation walks in the archive pollute the rates; a
+date-range filter ("since last parcours edit") is the natural next step.
+
+### URL state (deep links)
+`#tab=sessions|archive|parcours|beacons · parcours/kind/status/dev/q/h/prog ·
+s=<sessionId> (expanded) · live=0|1 · view=prog|gps · zones=0|1 · sort ·
+ndays · pv=<parcours label>`. Only non-defaults are serialized.
 
 ## 1. Current state & pain points
 
