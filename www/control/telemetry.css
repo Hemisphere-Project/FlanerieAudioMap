@@ -193,32 +193,78 @@ body.tm-body {
 }
 .tm-day.collapsed .tm-day-caret { transform: rotate(-90deg); }
 
-/* Timeline strip: one bar per session across the day's active span */
+/* Timeline strip: one step-block bar per session across the active span,
+   with a health strip underneath and a discreet hour grid behind. */
 .tm-timeline {
     position: relative;
     height: auto;
-    margin: 4px 14px 8px;
+    margin: 4px 14px 0;
+    padding: 3px 0;
+}
+.tm-timeline-gridline {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    border-left: 1px solid rgba(255,255,255,0.07);
+    pointer-events: none;
 }
 .tm-timeline-row {
     position: relative;
-    height: 8px;
+    height: 10px;
     margin-bottom: 3px;
 }
 .tm-timeline-bar {
     position: absolute;
     height: 100%;
-    border-radius: 3px;
-    min-width: 4px;
-    opacity: 0.85;
+    min-width: 6px;
     cursor: pointer;
-}
-.tm-timeline-bar:hover { opacity: 1; outline: 1px solid #fff; }
-.tm-timeline-axis {
     display: flex;
-    justify-content: space-between;
-    color: rgba(255,255,255,0.4);
-    font-size: 0.68rem;
+    flex-direction: column;
+}
+.tm-timeline-bar:hover { outline: 1px solid rgba(255,255,255,0.7); }
+.tm-tlbar-steps {
+    display: flex;
+    gap: 1px;
+    height: 7px;
+}
+.tm-tlbar-steps span {
+    flex: 1;
+    min-width: 1px;
+    border-radius: 1px;
+}
+.tm-tlbar-health {
+    height: 2px;
+    margin-top: 1px;
+    border-radius: 1px;
+}
+.tm-timeline-axis {
+    position: relative;
+    height: 14px;
     margin: 0 14px 6px;
+    color: rgba(255,255,255,0.35);
+    font-size: 0.65rem;
+}
+.tm-timeline-axis span {
+    position: absolute;
+    transform: translateX(-50%);
+}
+
+/* Per-parcours sub-sections inside a multi-parcours day */
+.tm-parcours-section {
+    border-left: 2px solid rgba(255,255,255,0.12);
+    margin: 10px 4px;
+    padding-left: 8px;
+}
+.tm-parcours-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 2px 10px 4px;
+}
+.tm-parcours-title {
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: rgba(255,255,255,0.85);
 }
 
 /* ---------- Device groups ---------- */
@@ -267,7 +313,7 @@ body.tm-body {
 
 .tm-row {
     display: grid;
-    grid-template-columns: 56px minmax(140px, 1.4fr) 70px minmax(120px, 1.1fr) 136px 24px;
+    grid-template-columns: 56px minmax(110px, 1.1fr) 64px minmax(110px, 1fr) 150px 24px;
     gap: 10px;
     align-items: center;
     padding: 7px 12px;
@@ -335,7 +381,7 @@ body.tm-body {
     display: flex;
     gap: 1px;
     height: 8px;
-    max-width: 300px;
+    max-width: 260px;
 }
 .tm-stepbar span {
     flex: 1;

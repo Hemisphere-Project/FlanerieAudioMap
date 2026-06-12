@@ -190,6 +190,27 @@ TM.list = (function() {
         return summary.deviceUuid || ('label:' + (summary.deviceModel || 'unknown'));
     }
 
+    function buildGroups(sessions) {
+        var groups = new Map();
+        sessions.forEach(function(summary) {
+            var key = groupKeyFor(summary);
+            if (!groups.has(key)) groups.set(key, { key: key, sessions: [] });
+            groups.get(key).sessions.push(summary);
+        });
+
+        var groupList = Array.from(groups.values());
+        if (TM.state.get('sort') === 'worst') {
+            groupList.sort(function(a, b) {
+                var worstA = Math.min.apply(null, a.sessions.map(TM.util.healthScore));
+                var worstB = Math.min.apply(null, b.sessions.map(TM.util.healthScore));
+                return worstA - worstB;
+            });
+        } else {
+            groupList.sort(function(a, b) { return new Date(a.sessions[0].startTime) - new Date(b.sessions[0].startTime); });
+        }
+        return groupList;
+    }
+
     function buildDays(sessions) {
         var byDay = new Map();
         sessions.forEach(function(summary) {
@@ -203,27 +224,29 @@ TM.list = (function() {
             var daySessions = byDay.get(dayKey);
             daySessions.sort(function(a, b) { return new Date(a.startTime) - new Date(b.startTime); });
 
-            var groups = new Map();
+            // Split per parcours so multi-parcours days (testing) keep their
+            // timelines, maps and device groups distinct.
+            var byParcours = new Map();
             daySessions.forEach(function(summary) {
-                var key = groupKeyFor(summary);
-                if (!groups.has(key)) groups.set(key, { key: key, sessions: [], first: summary });
-                groups.get(key).sessions.push(summary);
+                var label = parcoursLabel(summary) || '—';
+                if (!byParcours.has(label)) byParcours.set(label, []);
+                byParcours.get(label).push(summary);
             });
-
-            var groupList = Array.from(groups.values());
-            if (TM.state.get('sort') === 'worst') {
-                groupList.sort(function(a, b) {
-                    var worstA = Math.min.apply(null, a.sessions.map(TM.util.healthScore));
-                    var worstB = Math.min.apply(null, b.sessions.map(TM.util.healthScore));
-                    return worstA - worstB;
-                });
-            } else {
-                groupList.sort(function(a, b) { return new Date(a.sessions[0].startTime) - new Date(b.sessions[0].startTime); });
-            }
+            var multi = byParcours.size > 1;
+            var sections = Array.from(byParcours.entries()).map(function(entry) {
+                var prefix = multi ? dayKey + '|' + entry[0] : dayKey;
+                return {
+                    label: entry[0],
+                    sessions: entry[1],
+                    prefix: prefix,
+                    trackKey: 'day:' + prefix,
+                    groups: buildGroups(entry[1])
+                };
+            }).sort(function(a, b) { return new Date(a.sessions[0].startTime) - new Date(b.sessions[0].startTime); });
 
             var walks = daySessions.filter(function(s) { return s.kind === 'walk'; });
             var stats = {
-                devices: groups.size,
+                devices: new Set(daySessions.map(groupKeyFor)).size,
                 walks: walks.length,
                 complete: walks.filter(function(s) { return TM.api.statusOf(s) === 'ended-complete'; }).length,
                 onboarding: daySessions.length - walks.length,
@@ -232,7 +255,7 @@ TM.list = (function() {
                 })
             };
 
-            return { dayKey: dayKey, sessions: daySessions, groups: groupList, stats: stats };
+            return { dayKey: dayKey, sessions: daySessions, sections: sections, multi: multi, stats: stats };
         });
     }
 
@@ -257,13 +280,10 @@ TM.list = (function() {
             'tabindex="0" role="button" title="health ' + score + '/100 — click for anomalies">' + esc(score) + '</span>';
     }
 
-    // Per-step bar: green = fired, red = reached but never fired (missed),
+    // Step segments: green = fired, red = reached but never fired (missed),
     // dark grey = not reached yet, pulsing blue = current step of a live walk.
-    function progressHtml(summary) {
-        if (summary.kind !== 'walk' || !(summary.totalSteps > 0)) {
-            return '<span class="tm-progress-label">' + (summary.finalStep != null ? 'step ' + esc(summary.finalStep) : '—') + '</span>';
-        }
-
+    // Shared by the row progress bar and the day timeline bars.
+    function stepSegmentsHtml(summary, withTitles) {
         var live = TM.api.statusOf(summary) === 'live';
         var fired = new Set(Array.isArray(summary.firedSteps) ? summary.firedSteps : []);
         var reachedUpTo = Number.isInteger(summary.finalStep) ? summary.finalStep : -1;
@@ -276,11 +296,17 @@ TM.list = (function() {
             else if (fired.has(i)) { color = '#198754'; hint = 'step ' + i + ' fired'; }
             else if (i <= reachedUpTo) { color = '#dc3545'; hint = 'step ' + i + ' MISSED'; }
             else { color = 'rgba(255,255,255,0.13)'; hint = 'step ' + i + ' not reached'; }
-            segments += '<span' + cls + ' style="background:' + color + '" title="' + esc(hint) + '"></span>';
+            segments += '<span' + cls + ' style="background:' + color + '"' + (withTitles ? ' title="' + esc(hint) + '"' : '') + '></span>';
         }
+        return segments;
+    }
 
+    function progressHtml(summary) {
+        if (summary.kind !== 'walk' || !(summary.totalSteps > 0)) {
+            return '<span class="tm-progress-label">' + (summary.finalStep != null ? 'step ' + esc(summary.finalStep) : '—') + '</span>';
+        }
         return '<div class="tm-progress">' +
-            '<div class="tm-stepbar">' + segments + '</div>' +
+            '<div class="tm-stepbar">' + stepSegmentsHtml(summary, true) + '</div>' +
             '<span class="tm-progress-label">' + (summary.finalStep != null ? (summary.finalStep + 1) : '?') + '/' + esc(summary.totalSteps) + '</span>' +
         '</div>';
     }
@@ -314,8 +340,8 @@ TM.list = (function() {
         '</div>';
     }
 
-    function renderGroup(group, dayKey) {
-        var domKey = dayKey + '/' + group.key;
+    function renderGroup(group, dayKey, prefix) {
+        var domKey = prefix + '/' + group.key;
         var first = group.sessions[0];
         var device = TM.api.getDevice(first.deviceUuid);
         var friendly = device && device.friendly_name;
@@ -368,27 +394,52 @@ TM.list = (function() {
         return '<div class="tm-group">' + header + tracksHost + rows + fold + '</div>';
     }
 
-    function renderTimeline(day) {
-        if (day.sessions.length < 2) return '';
-        var starts = day.sessions.map(function(s) { return new Date(s.startTime).getTime(); });
-        var ends = day.sessions.map(function(s) { return Number(s.lastEvent) || new Date(s.startTime).getTime(); });
+    // Day/parcours timeline: each bar is the session's step-block graph
+    // placed on the time axis, with a thin health-coloured strip underneath
+    // and a discreet hour grid behind.
+    function renderTimeline(sessions) {
+        if (sessions.length < 2) return '';
+        var starts = sessions.map(function(s) { return new Date(s.startTime).getTime(); });
+        var ends = sessions.map(function(s, i) { return Math.max(Number(s.lastEvent) || 0, starts[i]); });
         var min = Math.min.apply(null, starts);
         var max = Math.max.apply(null, ends);
         var span = Math.max(60000, max - min);
 
-        var rows = day.sessions.map(function(summary, index) {
-            var start = starts[index];
-            var end = ends[index];
-            var left = ((start - min) / span) * 100;
-            var width = Math.max(0.5, ((end - start) / span) * 100);
+        var rows = sessions.map(function(summary, index) {
+            var left = ((starts[index] - min) / span) * 100;
+            var width = Math.max(0.6, ((ends[index] - starts[index]) / span) * 100);
+            var status = TM.api.statusOf(summary);
+            var health = TM.util.healthScore(summary);
+
+            var steps = (summary.kind === 'walk' && summary.totalSteps > 0)
+                ? stepSegmentsHtml(summary, false)
+                : '<span style="background:' + statusColor(status) + ';opacity:0.45"></span>';
+
             return '<div class="tm-timeline-row"><div class="tm-timeline-bar" ' +
-                'style="left:' + left.toFixed(2) + '%;width:' + width.toFixed(2) + '%;background:' + statusColor(TM.api.statusOf(summary)) + '" ' +
+                'style="left:' + left.toFixed(2) + '%;width:' + width.toFixed(2) + '%" ' +
                 'data-timeline-session="' + esc(summary.sessionId) + '" ' +
-                'title="' + esc(summary.sessionId + ' · ' + deviceLabelFor(summary) + ' · ' + TM.util.formatDuration(summary.durationMs)) + '"></div></div>';
+                'title="' + esc(summary.sessionId + ' · ' + deviceLabelFor(summary) + ' · ' + TM.util.formatDuration(summary.durationMs) + ' · ' + status + ' · health ' + health + '/100') + '">' +
+                '<div class="tm-tlbar-steps">' + steps + '</div>' +
+                '<div class="tm-tlbar-health" style="background:' + TM.util.healthColor(health) + '"></div>' +
+            '</div></div>';
         }).join('');
 
-        return '<div class="tm-timeline">' + rows + '</div>' +
-            '<div class="tm-timeline-axis"><span>' + esc(TM.util.formatTime(min)) + '</span><span>' + esc(TM.util.formatTime(max)) + '</span></div>';
+        // Hour grid: at most ~10 lines, stepping whole hours.
+        var grid = '';
+        var axis = '';
+        var stepHours = Math.max(1, Math.ceil((span / 3600000) / 10));
+        var tick = new Date(min);
+        tick.setMinutes(0, 0, 0);
+        var tickMs = tick.getTime();
+        while (tickMs <= min) tickMs += 3600000;
+        for (; tickMs < max; tickMs += stepHours * 3600000) {
+            var x = ((tickMs - min) / span) * 100;
+            grid += '<div class="tm-timeline-gridline" style="left:' + x.toFixed(2) + '%"></div>';
+            axis += '<span style="left:' + x.toFixed(2) + '%">' + new Date(tickMs).getHours() + 'h</span>';
+        }
+
+        return '<div class="tm-timeline">' + grid + rows + '</div>' +
+            '<div class="tm-timeline-axis">' + axis + '</div>';
     }
 
     function isDayOpen(dayKey, index) {
@@ -396,20 +447,26 @@ TM.list = (function() {
         return dayKey === TM.util.dayKey(Date.now()); // only today open by default
     }
 
+    function trackHostHtml(trackKey) {
+        return openTrackMaps.has(trackKey)
+            ? '<div class="tm-group-map" data-track-map="' + esc(trackKey) + '"></div><div class="comparison-legend" data-track-legend="' + esc(trackKey) + '"></div>'
+            : '';
+    }
+
     function renderDay(day, index) {
         var open = isDayOpen(day.dayKey, index);
         var stats = day.stats;
-        var trackKey = 'day:' + day.dayKey;
 
         var statsHtml = '<div class="tm-day-stats">' +
             (stats.anomaly ? '<span class="tm-day-anomaly" title="sleep suspects or interrupted sessions"></span>' : '') +
             '<span>' + stats.devices + ' device' + (stats.devices > 1 ? 's' : '') + '</span>' +
             '<span>' + stats.walks + ' walk' + (stats.walks > 1 ? 's' : '') + (stats.walks ? ' (' + stats.complete + ' ✓)' : '') + '</span>' +
             (stats.onboarding ? '<span>' + stats.onboarding + ' onb</span>' : '') +
+            (day.multi ? '<span>' + day.sections.length + ' parcours</span>' : '') +
         '</div>';
 
         var actions = '<div class="tm-day-actions">' +
-            '<button class="btn btn-outline-secondary btn-sm py-0" data-action="toggle-tracks" data-track-key="' + esc(trackKey) + '" title="All day tracks on one map">Map</button>' +
+            (day.multi ? '' : '<button class="btn btn-outline-secondary btn-sm py-0" data-action="toggle-tracks" data-track-key="' + esc(day.sections[0].trackKey) + '" title="All day tracks on one map">Map</button>') +
             '<div class="dropdown">' +
                 '<button class="btn btn-outline-secondary btn-sm py-0 dropdown-toggle" data-bs-toggle="dropdown">⋯</button>' +
                 '<ul class="dropdown-menu dropdown-menu-end">' +
@@ -419,9 +476,20 @@ TM.list = (function() {
             '</div>' +
         '</div>';
 
-        var tracksHost = openTrackMaps.has(trackKey)
-            ? '<div class="tm-group-map" data-track-map="' + esc(trackKey) + '"></div><div class="comparison-legend" data-track-legend="' + esc(trackKey) + '"></div>'
-            : '';
+        var body = day.sections.map(function(section) {
+            var head = day.multi
+                ? '<div class="tm-parcours-head">' +
+                    '<span class="tm-parcours-title">' + esc(section.label) + '</span>' +
+                    '<span class="text-secondary small">' + section.sessions.length + ' session' + (section.sessions.length > 1 ? 's' : '') + '</span>' +
+                    '<button class="btn btn-outline-secondary btn-sm py-0 ms-auto" data-action="toggle-tracks" data-track-key="' + esc(section.trackKey) + '">Map</button>' +
+                  '</div>'
+                : '';
+            var inner = head +
+                renderTimeline(section.sessions) +
+                trackHostHtml(section.trackKey) +
+                section.groups.map(function(group) { return renderGroup(group, day.dayKey, section.prefix); }).join('');
+            return day.multi ? '<div class="tm-parcours-section">' + inner + '</div>' : inner;
+        }).join('');
 
         return '<div class="tm-day' + (open ? '' : ' collapsed') + '" data-day="' + esc(day.dayKey) + '">' +
             '<div class="tm-day-header" data-action="toggle-day" data-day-key="' + esc(day.dayKey) + '">' +
@@ -429,11 +497,7 @@ TM.list = (function() {
                 '<span class="tm-day-title">' + esc(TM.util.dayLabel(day.dayKey)) + '</span>' +
                 statsHtml + actions +
             '</div>' +
-            '<div class="tm-day-body">' +
-                renderTimeline(day) +
-                tracksHost +
-                day.groups.map(function(group) { return renderGroup(group, day.dayKey); }).join('') +
-            '</div>' +
+            '<div class="tm-day-body">' + body + '</div>' +
         '</div>';
     }
 
@@ -693,10 +757,13 @@ TM.list = (function() {
 
         // Track-map data: filtered sessions grouped by track key
         var byKey = new Map();
+        var isWalk = function(s) { return s.kind === 'walk'; };
         days.forEach(function(day) {
-            byKey.set('day:' + day.dayKey, day.sessions.filter(function(s) { return s.kind === 'walk'; }));
-            day.groups.forEach(function(group) {
-                byKey.set(day.dayKey + '/' + group.key, group.sessions.filter(function(s) { return s.kind === 'walk'; }));
+            day.sections.forEach(function(section) {
+                byKey.set(section.trackKey, section.sessions.filter(isWalk));
+                section.groups.forEach(function(group) {
+                    byKey.set(section.prefix + '/' + group.key, group.sessions.filter(isWalk));
+                });
             });
         });
         renderTrackMaps(byKey);
