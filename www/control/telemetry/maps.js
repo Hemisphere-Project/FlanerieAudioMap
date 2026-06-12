@@ -46,20 +46,52 @@ TM.maps = (function() {
         return Math.sqrt(dLat * dLat + dLng * dLng);
     }
 
+    // Deterministic wheel zoom, replacing Leaflet's timer-based handler.
+    // Leaflet batches wheel deltas per debounce window and rounds every window
+    // UP to a full zoomSnap step, so bursts longer than the window — or
+    // residual deltas from high-resolution wheels — produce extra zoom steps
+    // that replay after the animation (the "double fire" glitch). Here a step
+    // only fires when the accumulated wheel distance crosses STEP_PX; the
+    // remainder carries within a gesture and resets after a short idle, and
+    // the zoom is applied without animation so nothing can queue.
+    function attachWheelZoom(map) {
+        var STEP_PX = 100;     // accumulated wheel distance per zoom step
+        var STEP_ZOOM = 0.5;   // zoom amount per step
+        var IDLE_MS = 250;     // gesture separator: residual delta is dropped
+        var acc = 0;
+        var lastWheelAt = 0;
+
+        map.getContainer().addEventListener('wheel', function(event) {
+            event.preventDefault();
+            event.stopPropagation();
+
+            // Normalize to pixels (Leaflet's own line/page factors).
+            var delta = event.deltaY;
+            if (event.deltaMode === 1) delta *= 60;
+            else if (event.deltaMode === 2) delta *= 800;
+
+            var now = Date.now();
+            if (now - lastWheelAt > IDLE_MS || (acc !== 0 && (acc > 0) !== (delta > 0))) acc = 0;
+            lastWheelAt = now;
+
+            acc += delta;
+            var steps = Math.trunc(acc / STEP_PX);
+            if (!steps) return;
+            acc -= steps * STEP_PX;
+
+            var targetZoom = Math.max(map.getMinZoom(), Math.min(map.getMaxZoom(), map.getZoom() - steps * STEP_ZOOM));
+            if (targetZoom === map.getZoom()) return;
+            map.setZoomAround(map.mouseEventToContainerPoint(event), targetZoom, { animate: false });
+        }, { passive: false });
+    }
+
     function createBaseMap(containerId) {
-        // Fractional zoom + a higher px-per-level makes wheel zooming gentle
-        // enough to aim precisely at a street corner.
-        // wheelDebounceTime must be LONG: Leaflet rounds each debounce window
-        // up to a full zoomSnap step (Math.ceil(d/snap)*snap), so a short
-        // debounce splits one wheel notch into several windows and the queued
-        // steps replay after the zoom animation — the "multiple firing" glitch.
-        // 100ms batches a whole gesture into a single zoom.
         var map = L.map(containerId, {
             zoomSnap: 0.25,
             zoomDelta: 0.5,
-            wheelPxPerZoomLevel: 220,
-            wheelDebounceTime: 100
+            scrollWheelZoom: false
         }).setView([45.75, 4.85], 15);
+        attachWheelZoom(map);
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             maxZoom: 19,
             attribution: '&copy; OpenStreetMap'
