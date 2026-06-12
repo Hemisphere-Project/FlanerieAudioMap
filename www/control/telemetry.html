@@ -19,6 +19,7 @@
             <ul class="nav nav-pills tm-tabs">
                 <li class="nav-item"><a class="nav-link" href="#" data-tab="sessions">Sessions</a></li>
                 <li class="nav-item"><a class="nav-link" href="#" data-tab="archive">Archive</a></li>
+                <li class="nav-item"><a class="nav-link" href="#" data-tab="parcours">Parcours</a></li>
                 <li class="nav-item"><a class="nav-link" href="#" data-tab="beacons">Beacons</a></li>
             </ul>
             <div class="tm-header-actions">
@@ -110,6 +111,10 @@
             <button id="load-more-days" class="btn btn-outline-secondary btn-sm w-100" style="display:none">Load older days</button>
         </section>
 
+        <section id="view-parcours" hidden>
+            <div id="pv-root"><div class="text-muted p-3">Loading…</div></div>
+        </section>
+
         <section id="view-beacons" hidden>
             <div class="d-flex justify-content-between align-items-center mb-2">
                 <div>
@@ -136,6 +141,7 @@
     <script src="/control/telemetry/maps.js"></script>
     <script src="/control/telemetry/detail.js"></script>
     <script src="/control/telemetry/list.js"></script>
+    <script src="/control/telemetry/parcours.js"></script>
     <script src="/control/telemetry/app.js"></script>
 </body>
 </html>

@@ -334,8 +334,10 @@ body.tm-body {
     cursor: pointer;
     font-size: 0.9rem;
 }
-.tm-row { background: rgba(255,255,255,0.045); }
-.tm-row-alt { background: rgba(255,255,255,0.08); }
+/* Both stripes sit clearly above the chrome; the delta between them is
+   small so it reads as row separation, not as highlighted rows. */
+.tm-row { background: rgba(255,255,255,0.055); }
+.tm-row-alt { background: rgba(255,255,255,0.075); }
 .tm-row:hover { background: rgba(255,255,255,0.12); }
 .tm-row.active { background: rgba(13, 202, 240, 0.12); }
 .tm-row-prehl {
@@ -652,6 +654,109 @@ body.tm-body {
     margin: 8px 4px 0;
 }
 .tm-trackmap-bar .btn { line-height: 1.1; }
+
+/* ---------- Parcours view ---------- */
+
+.pv-main {
+    display: grid;
+    grid-template-columns: minmax(0, 1.4fr) minmax(300px, 0.6fr);
+    gap: 16px;
+    margin-top: 4px;
+}
+.pv-map {
+    height: 520px;
+    border-radius: 10px;
+    overflow: hidden;
+}
+.pv-side h6 {
+    font-size: 0.82rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: rgba(255,255,255,0.6);
+}
+.pv-steps {
+    max-height: 300px;
+    overflow-y: auto;
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 8px;
+    padding: 4px 8px;
+}
+.pv-step {
+    display: grid;
+    grid-template-columns: 30px minmax(40px, 1fr) 110px 86px;
+    gap: 8px;
+    align-items: center;
+    font-size: 0.8rem;
+    padding: 2px 0;
+}
+.pv-step-idx { color: rgba(255,255,255,0.5); font-family: monospace; }
+.pv-step-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: rgba(255,255,255,0.65);
+}
+.pv-step-bar {
+    height: 7px;
+    background: rgba(255,255,255,0.08);
+    border-radius: 3px;
+    overflow: hidden;
+}
+.pv-step-bar div { height: 100%; }
+.pv-step-rate {
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    color: rgba(255,255,255,0.75);
+}
+.pv-histo {
+    display: flex;
+    gap: 8px;
+    align-items: flex-end;
+    height: 90px;
+    padding: 4px 2px 0;
+}
+.pv-histo-col {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    align-items: center;
+    height: 100%;
+    font-size: 0.66rem;
+    color: rgba(255,255,255,0.5);
+    gap: 2px;
+}
+.pv-histo-bar {
+    width: 100%;
+    border-radius: 3px 3px 0 0;
+    min-height: 2px;
+}
+.pv-histo-col strong { color: rgba(255,255,255,0.85); }
+.pv-recent-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-size: 0.82rem;
+    cursor: pointer;
+    background: rgba(255,255,255,0.045);
+    margin-bottom: 3px;
+}
+.pv-recent-row:hover { background: rgba(255,255,255,0.1); }
+.pv-recent-date { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pv-recent-dev {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: rgba(255,255,255,0.6);
+}
+
+@media (max-width: 992px) {
+    .pv-main { grid-template-columns: 1fr; }
+    .pv-map { height: 360px; }
+}
 
 /* Beacons */
 .beacon-table-wrap {

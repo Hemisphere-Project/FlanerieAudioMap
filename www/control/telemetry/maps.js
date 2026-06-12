@@ -105,6 +105,22 @@ TM.maps = (function() {
                 ? { color: '#ffc107', weight: 1, opacity: 0.45, fillOpacity: 0.03 }
                 : { color: '#ffc107', weight: 2, fillOpacity: 0.08 };
             var label = 'Step ' + index + ': ' + (step.name || '');
+            // Cross-walk reliability colouring (Parcours view): rate = fired /
+            // walks that reached this step.
+            if (options.stepRates) {
+                var stat = options.stepRates.get(index);
+                if (!stat || stat.reached === 0) {
+                    style = { color: '#6c757d', weight: 1, dashArray: '4 4', fillOpacity: 0.02 };
+                    label += ' — never reached';
+                } else {
+                    var rate = stat.fired / stat.reached;
+                    var color = rate >= 0.95 ? '#198754' : (rate >= 0.8 ? '#fd7e14' : '#dc3545');
+                    style = { color: color, weight: 2, fillOpacity: 0.12 };
+                    label += ' — fired ' + stat.fired + '/' + stat.reached + ' walks (' + Math.round(rate * 100) + '%)';
+                }
+                addSpotGeometry(group, step, style, label);
+                return;
+            }
             if (fireCounts) {
                 var count = fireCounts.get(index) || 0;
                 if (count === 0) {
@@ -349,13 +365,19 @@ TM.maps = (function() {
         };
     }
 
-    // Average-accuracy heat: bin every fix of every session into ~14 m cells,
-    // colour each cell by its mean accuracy. After several walks the bad-GPS
-    // areas of a parcours stand out for route adjustment.
+    // Average-accuracy heat, robust to faulty devices: fixes are binned into
+    // ~25 m cells, averaged PER DEVICE first, then the cell value is the
+    // MEDIAN across devices — one phone with bad GPS is outvoted wherever at
+    // least two phones passed. Cells are drawn as overlapping meter-scaled
+    // blobs so areas read as zones, not point clouds; single-device cells are
+    // dimmed (low confidence) and cells with under 3 fixes are dropped.
     function addAccuracyHeat(group, items) {
-        var CELL_M = 14;
-        var cells = new Map();
+        var CELL_M = 25;
+        var MIN_FIXES = 3;
+        var cells = new Map(); // key -> { perDevice: Map(dev -> {sum,n}), latSum, lngSum, n }
+
         items.forEach(function(item) {
+            var device = (item.session && item.session.deviceUuid) || item.session.sessionId;
             getGpsEvents(item.data.events || []).forEach(function(event) {
                 var acc = Number(event.data.acc);
                 if (!Number.isFinite(acc) || acc <= 0) return;
@@ -363,27 +385,42 @@ TM.maps = (function() {
                 var dLng = CELL_M / (111320 * Math.cos(event.data.lat * Math.PI / 180));
                 var key = Math.round(event.data.lat / dLat) + '_' + Math.round(event.data.lng / dLng);
                 var cell = cells.get(key);
-                if (!cell) { cell = { sum: 0, n: 0, latSum: 0, lngSum: 0 }; cells.set(key, cell); }
-                cell.sum += acc;
-                cell.n += 1;
+                if (!cell) { cell = { perDevice: new Map(), latSum: 0, lngSum: 0, n: 0 }; cells.set(key, cell); }
+                var deviceAgg = cell.perDevice.get(device);
+                if (!deviceAgg) { deviceAgg = { sum: 0, n: 0 }; cell.perDevice.set(device, deviceAgg); }
+                deviceAgg.sum += acc;
+                deviceAgg.n += 1;
                 cell.latSum += event.data.lat;
                 cell.lngSum += event.data.lng;
+                cell.n += 1;
             });
         });
+
         cells.forEach(function(cell) {
-            var avg = cell.sum / cell.n;
-            group.addLayer(L.circleMarker([cell.latSum / cell.n, cell.lngSum / cell.n], {
-                radius: 7,
+            if (cell.n < MIN_FIXES) return;
+            var deviceMeans = Array.from(cell.perDevice.values())
+                .map(function(agg) { return agg.sum / agg.n; })
+                .sort(function(a, b) { return a - b; });
+            var mid = Math.floor(deviceMeans.length / 2);
+            var median = deviceMeans.length % 2 ? deviceMeans[mid] : (deviceMeans[mid - 1] + deviceMeans[mid]) / 2;
+            var deviceCount = deviceMeans.length;
+
+            group.addLayer(L.circle([cell.latSum / cell.n, cell.lngSum / cell.n], {
+                radius: CELL_M * 0.8,
                 weight: 0,
-                fillColor: ACC_BUCKETS[accBucket(avg)].color,
-                fillOpacity: 0.55
-            }).bindTooltip(avg.toFixed(1) + 'm avg · ' + cell.n + ' fix' + (cell.n > 1 ? 'es' : '')));
+                fillColor: ACC_BUCKETS[accBucket(median)].color,
+                fillOpacity: deviceCount >= 2 ? 0.4 : 0.18
+            }).bindTooltip(
+                median.toFixed(1) + 'm · median of ' + deviceCount + ' device' + (deviceCount > 1 ? 's' : '') +
+                ' · ' + cell.n + ' fixes' + (deviceCount < 2 ? ' · low confidence' : '')
+            ));
         });
     }
 
     /**
      * Group map. mode 'tracks' (default): one coloured track per session with
      * hover/click callbacks. mode 'accuracy': aggregated avg-accuracy heat.
+     * opts.stepRates colours step zones by cross-walk fire rate (Parcours view).
      * items: [{ session, data }]; overlay drawn when all sessions share a parcours.
      */
     function renderGroupMap(containerId, items, overlay, opts) {
@@ -392,8 +429,10 @@ TM.maps = (function() {
         var map = createBaseMap(containerId);
         var featureGroup = L.featureGroup().addTo(map);
 
-        // Subdued steps only, to keep tracks/heat readable.
-        addOverlayZones(featureGroup, overlay, { lightSteps: true });
+        // Subdued steps (or reliability-coloured ones), to keep tracks/heat readable.
+        addOverlayZones(featureGroup, overlay, options.stepRates
+            ? { stepRates: options.stepRates }
+            : { lightSteps: true });
 
         if (options.mode === 'accuracy') {
             addAccuracyHeat(featureGroup, items);

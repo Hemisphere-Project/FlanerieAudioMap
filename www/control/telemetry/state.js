@@ -6,7 +6,8 @@ window.TM = window.TM || {};
 
 TM.state = (function() {
     var DEFAULTS = {
-        tab: 'sessions',      // sessions | beacons | archive
+        tab: 'sessions',      // sessions | archive | parcours | beacons
+        pv: '',               // parcours-view selected parcours label
         parcours: '',
         kind: 'all',          // all | walk | onb
         status: '',           // csv of live,complete,partial,interrupted ('' = all)

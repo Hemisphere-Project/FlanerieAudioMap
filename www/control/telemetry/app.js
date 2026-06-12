@@ -132,12 +132,21 @@ TM.app = (function() {
     // ---- Tabs ----
 
     function showTab(tab) {
-        document.getElementById('view-sessions').hidden = (tab === 'beacons');
+        document.getElementById('view-sessions').hidden = (tab === 'beacons' || tab === 'parcours');
         document.getElementById('view-beacons').hidden = (tab !== 'beacons');
-        document.getElementById('tm-filters').style.visibility = (tab === 'beacons') ? 'hidden' : '';
+        document.getElementById('view-parcours').hidden = (tab !== 'parcours');
+        document.getElementById('tm-filters').style.display = (tab === 'beacons' || tab === 'parcours') ? 'none' : '';
 
         if (tab === 'beacons' && !beaconsLoaded) refreshBeacons();
-        if (tab !== 'beacons' && !TM.api.isLoaded(tab === 'archive')) {
+        if (tab === 'parcours') {
+            // The parcours view aggregates across active AND archive.
+            Promise.all([
+                TM.api.listSessions(false, { delta: TM.api.isLoaded(false) }),
+                TM.api.listSessions(true, { delta: TM.api.isLoaded(true) })
+            ]).then(function() { TM.parcoursView.render(); })
+              .catch(function() { TM.parcoursView.render(); });
+        }
+        if ((tab === 'sessions' || tab === 'archive') && !TM.api.isLoaded(tab === 'archive')) {
             loadCurrentScope().then(function() {
                 populateFilterOptions();
                 TM.list.render();
@@ -377,7 +386,24 @@ TM.app = (function() {
             showTab(TM.state.get('tab'));
             populateFilterOptions();
             TM.list.render();
+            // Jump links (e.g. from the parcours view) carry a session id.
+            var deepLinked = TM.state.get('s');
+            var tab = TM.state.get('tab');
+            if (deepLinked && (tab === 'sessions' || tab === 'archive')) {
+                if (TM.api.getSession(deepLinked, TM.state.archived())) {
+                    TM.list.openDetailFor(deepLinked, {});
+                } else {
+                    loadCurrentScope().then(function() {
+                        populateFilterOptions();
+                        TM.list.render();
+                        if (TM.api.getSession(deepLinked, TM.state.archived())) TM.list.openDetailFor(deepLinked, {});
+                    });
+                }
+            }
             return;
+        }
+        if (changedKeys.indexOf('pv') !== -1 && TM.state.get('tab') === 'parcours') {
+            TM.parcoursView.render();
         }
         var filtersChanged = changedKeys.some(function(key) { return FILTER_KEYS.indexOf(key) !== -1; });
         if (filtersChanged) {
@@ -398,6 +424,7 @@ TM.app = (function() {
         bindHeader();
         bindMaintenance();
         TM.list.bind();
+        TM.parcoursView.bind();
         TM.state.onChange(onStateChange);
         syncControlsFromState();
         showTab(TM.state.get('tab'));
