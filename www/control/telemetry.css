@@ -326,7 +326,7 @@ body.tm-body {
 
 .tm-row {
     display: grid;
-    grid-template-columns: 56px minmax(110px, 1.1fr) 64px minmax(110px, 1fr) 150px 24px;
+    grid-template-columns: 22px 56px minmax(110px, 1.1fr) 64px minmax(110px, 1fr) 150px 24px;
     gap: 10px;
     align-items: center;
     padding: 7px 12px;
@@ -349,6 +349,41 @@ body.tm-body {
     0%, 55% { background: rgba(13, 202, 240, 0.35); box-shadow: inset 3px 0 0 #0dcaf0; }
     100% { background: transparent; box-shadow: none; }
 }
+
+.tm-row-checkcell { display: flex; align-items: center; }
+.tm-row-check {
+    opacity: 0.25;
+    cursor: pointer;
+    margin: 0;
+}
+.tm-row:hover .tm-row-check,
+.tm-row-check:checked { opacity: 1; }
+.tm-group-check {
+    opacity: 0.4;
+    cursor: pointer;
+    margin: 0 2px 0 0;
+}
+.tm-group-check:hover,
+.tm-group-check:checked,
+.tm-group-check:indeterminate { opacity: 1; }
+
+.tm-selection-bar {
+    position: fixed;
+    bottom: 18px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 1300;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    background: #222;
+    border: 1px solid rgba(13, 202, 240, 0.5);
+    border-radius: 999px;
+    padding: 7px 14px;
+    box-shadow: 0 4px 18px rgba(0,0,0,0.55);
+    white-space: nowrap;
+}
+.tm-selection-bar[hidden] { display: none; }
 
 .tm-row-time {
     font-variant-numeric: tabular-nums;
@@ -823,13 +858,14 @@ body.tm-body {
     .tm-filters.open { display: grid; }
     .tm-filters-toggle { display: inline-block !important; }
     .tm-row {
-        grid-template-columns: 48px 1fr 60px 26px;
+        grid-template-columns: 20px 48px 1fr 60px 26px;
         grid-template-areas:
-            "time parcours duration chevron"
-            "time progress progress chevron"
-            "time quality quality chevron";
+            "check time parcours duration chevron"
+            "check time progress progress chevron"
+            "check time quality quality chevron";
         row-gap: 3px;
     }
+    .tm-row-checkcell { grid-area: check; }
     .tm-row-time { grid-area: time; }
     .tm-row-parcours { grid-area: parcours; }
     .tm-row-duration { grid-area: duration; }

@@ -243,7 +243,10 @@ TM.api = (function() {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ sessionIds: sessionIds })
-        }).then(function(result) { return result.data; });
+        }).then(function(result) {
+            stores.archive.loaded = false;
+            return result.data;
+        });
     }
 
     function pruneShort(thresholdMs, archived) {
@@ -284,6 +287,7 @@ TM.api = (function() {
         getDetail: getDetail,
         getDetailTail: getDetailTail,
         dropDetail: dropDetail,
+        removeLocal: removeSessionLocally,
         loadNotes: loadNotes,
         getNote: getNote,
         saveNote: saveNote,

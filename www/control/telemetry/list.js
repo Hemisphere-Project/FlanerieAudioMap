@@ -82,6 +82,8 @@ TM.list = (function() {
     var trackMapModes = new Map();    // trackKey -> 'tracks' | 'accuracy'
     var trackMapHandles = [];         // destroyed on each render
     var timelineView = new Map();     // tlKey -> { factor, center } (zoom state)
+    var selectedIds = new Set();      // multi-selection (selective delete/archive)
+    var lastCheckedId = null;         // shift-click range anchor
 
     // ---- Status helpers ----
 
@@ -330,6 +332,7 @@ TM.list = (function() {
 
         return '<div class="tm-row' + (expanded ? ' active' : '') + (options.alt ? ' tm-row-alt' : '') + (summary.kind === 'onboarding' ? ' tm-row-onb' : '') + '" ' +
             'data-session-id="' + esc(summary.sessionId) + '" title="' + esc(summary.sessionId + ' · ' + status) + '">' +
+            '<div class="tm-row-checkcell"><input type="checkbox" class="form-check-input tm-row-check"' + (selectedIds.has(summary.sessionId) ? ' checked' : '') + '></div>' +
             '<div class="tm-row-time">' + esc(TM.util.formatTime(summary.startTime)) +
                 '<span class="tm-row-code">' + esc(shortCode) + '</span></div>' +
             '<div class="tm-row-parcours">' + esc(parcoursLabel(summary) || '-') +
@@ -355,6 +358,7 @@ TM.list = (function() {
         var apkStale = fleetApk && Number.isFinite(apk) && apk < fleetApk;
 
         var header = '<div class="tm-group-header">' +
+            '<input type="checkbox" class="form-check-input tm-group-check" title="select all sessions of this device">' +
             '<span class="tm-group-device">📱 ' + esc(label) + '</span>' +
             (friendly ? '<span class="text-secondary small">' + esc(deviceLabelFor(Object.assign({}, first, { deviceUuid: null }))) + '</span>' : '') +
             (first.deviceUuid
@@ -806,6 +810,7 @@ TM.list = (function() {
         }
 
         restoreTimelineScroll();
+        updateSelectionUI();
         updateAgoTickers();
     }
 
@@ -841,6 +846,125 @@ TM.list = (function() {
         void row.offsetWidth; // restart the animation on repeat clicks
         row.classList.add('tm-row-flash');
         setTimeout(function() { row.classList.remove('tm-row-flash'); }, 2600);
+    }
+
+    // ---- Multi-selection (selective archive/delete/export) ----
+
+    function visibleRowIds() {
+        return Array.prototype.map.call(
+            document.querySelectorAll('.tm-row[data-session-id]'),
+            function(row) { return row.dataset.sessionId; });
+    }
+
+    function updateSelectionUI() {
+        // prune ids that vanished from the current scope
+        Array.from(selectedIds).forEach(function(id) { if (!findSession(id)) selectedIds.delete(id); });
+
+        document.querySelectorAll('.tm-row[data-session-id]').forEach(function(row) {
+            var checkbox = row.querySelector('.tm-row-check');
+            if (checkbox) checkbox.checked = selectedIds.has(row.dataset.sessionId);
+        });
+        document.querySelectorAll('.tm-group').forEach(function(groupEl) {
+            var checkbox = groupEl.querySelector('.tm-group-check');
+            if (!checkbox) return;
+            var ids = Array.prototype.map.call(groupEl.querySelectorAll('.tm-row[data-session-id]'),
+                function(row) { return row.dataset.sessionId; });
+            var selectedCount = ids.filter(function(id) { return selectedIds.has(id); }).length;
+            checkbox.checked = ids.length > 0 && selectedCount === ids.length;
+            checkbox.indeterminate = selectedCount > 0 && selectedCount < ids.length;
+        });
+
+        var bar = document.getElementById('tm-selection-bar');
+        if (!bar) return;
+        bar.hidden = selectedIds.size === 0;
+        document.getElementById('sel-count').textContent = selectedIds.size + ' selected';
+        var archived = TM.state.archived();
+        document.getElementById('sel-archive').hidden = archived;
+        document.getElementById('sel-unarchive').hidden = !archived;
+    }
+
+    function toggleSelect(sessionId, checked, shiftKey) {
+        if (shiftKey && lastCheckedId && lastCheckedId !== sessionId) {
+            var ids = visibleRowIds();
+            var a = ids.indexOf(lastCheckedId);
+            var b = ids.indexOf(sessionId);
+            if (a !== -1 && b !== -1) {
+                for (var i = Math.min(a, b); i <= Math.max(a, b); i++) {
+                    if (checked) selectedIds.add(ids[i]);
+                    else selectedIds.delete(ids[i]);
+                }
+            }
+        } else {
+            if (checked) selectedIds.add(sessionId);
+            else selectedIds.delete(sessionId);
+        }
+        lastCheckedId = sessionId;
+        updateSelectionUI();
+    }
+
+    function clearSelection() {
+        selectedIds.clear();
+        lastCheckedId = null;
+        updateSelectionUI();
+    }
+
+    function bindSelectionBar() {
+        var bar = document.getElementById('tm-selection-bar');
+        if (!bar) return;
+
+        document.getElementById('sel-clear').addEventListener('click', clearSelection);
+
+        document.getElementById('sel-all').addEventListener('click', function() {
+            getFilteredSessions().forEach(function(summary) { selectedIds.add(summary.sessionId); });
+            updateSelectionUI();
+        });
+
+        document.getElementById('sel-export').addEventListener('click', function() {
+            var rows = Array.from(selectedIds).map(findSession).filter(Boolean).map(buildSummaryRow);
+            TM.util.downloadText('telemetry-selection.csv', TM.util.toCsv(rows), 'text/csv;charset=utf-8');
+        });
+
+        document.getElementById('sel-archive').addEventListener('click', function() {
+            var ids = Array.from(selectedIds);
+            if (!ids.length) return;
+            if (!confirm('Archive ' + ids.length + ' selected session' + (ids.length > 1 ? 's' : '') + '?')) return;
+            TM.api.archiveBulk(ids)
+                .then(function(result) {
+                    (result.archived || []).forEach(function(id) { TM.api.removeLocal(id, false); });
+                    var skipped = (result.skipped || []).length;
+                    if (skipped) alert(skipped + ' session(s) skipped');
+                    clearSelection();
+                    render();
+                })
+                .catch(function(error) { alert('Failed to archive: ' + error); });
+        });
+
+        document.getElementById('sel-unarchive').addEventListener('click', function() {
+            var ids = Array.from(selectedIds);
+            if (!ids.length) return;
+            if (!confirm('Unarchive ' + ids.length + ' selected session' + (ids.length > 1 ? 's' : '') + '?')) return;
+            Promise.allSettled(ids.map(function(id) { return TM.api.unarchiveSession(id); }))
+                .then(function(results) {
+                    var failed = results.filter(function(r) { return r.status === 'rejected'; }).length;
+                    if (failed) alert(failed + ' session(s) failed to unarchive');
+                    clearSelection();
+                    render();
+                });
+        });
+
+        document.getElementById('sel-delete').addEventListener('click', function() {
+            var ids = Array.from(selectedIds);
+            if (!ids.length) return;
+            if (!confirm('Permanently DELETE ' + ids.length + ' selected session' + (ids.length > 1 ? 's' : '') + '? This cannot be undone.')) return;
+            var archived = TM.state.archived();
+            Promise.allSettled(ids.map(function(id) { return TM.api.deleteSession(id, archived); }))
+                .then(function(results) {
+                    var failed = results.filter(function(r) { return r.status === 'rejected'; }).length;
+                    if (failed) alert(failed + ' session(s) failed to delete');
+                    clearSelection();
+                    render();
+                });
+        });
     }
 
     function openDetailFor(sessionId, opts) {
@@ -932,6 +1056,28 @@ TM.list = (function() {
             }
         }
 
+        var rowCheck = event.target.closest('.tm-row-check');
+        if (rowCheck) {
+            event.stopPropagation();
+            var checkRow = rowCheck.closest('.tm-row');
+            if (checkRow) toggleSelect(checkRow.dataset.sessionId, rowCheck.checked, event.shiftKey);
+            return;
+        }
+
+        var groupCheck = event.target.closest('.tm-group-check');
+        if (groupCheck) {
+            event.stopPropagation();
+            var checkGroup = groupCheck.closest('.tm-group');
+            if (checkGroup) {
+                checkGroup.querySelectorAll('.tm-row[data-session-id]').forEach(function(row) {
+                    if (groupCheck.checked) selectedIds.add(row.dataset.sessionId);
+                    else selectedIds.delete(row.dataset.sessionId);
+                });
+                updateSelectionUI();
+            }
+            return;
+        }
+
         var chip = event.target.closest('.tm-health-chip');
         if (chip) {
             event.stopPropagation();
@@ -979,6 +1125,7 @@ TM.list = (function() {
         if (loadMoreBtn) loadMoreBtn.addEventListener('click', function() {
             TM.state.set({ ndays: String((Number(TM.state.get('ndays')) || 7) + 7) });
         });
+        bindSelectionBar();
     }
 
     return {
@@ -992,6 +1139,7 @@ TM.list = (function() {
         parcoursOptions: parcoursOptions,
         deviceOptions: deviceOptions,
         openDetailFor: openDetailFor,
-        updateAgoTickers: updateAgoTickers
+        updateAgoTickers: updateAgoTickers,
+        clearSelection: clearSelection
     };
 })();

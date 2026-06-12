@@ -382,6 +382,7 @@ TM.app = (function() {
 
     function onStateChange(changedKeys) {
         if (changedKeys.indexOf('tab') !== -1) {
+            TM.list.clearSelection(); // selections are scoped to a tab's store
             syncControlsFromState();
             showTab(TM.state.get('tab'));
             populateFilterOptions();
