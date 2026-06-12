@@ -266,7 +266,7 @@ body.tm-body {
 
 .tm-row {
     display: grid;
-    grid-template-columns: 56px minmax(120px, 1.2fr) 70px minmax(120px, 1fr) 110px minmax(140px, 1.4fr) 30px;
+    grid-template-columns: 56px minmax(140px, 1.3fr) 70px minmax(160px, 1.6fr) 120px 30px;
     gap: 10px;
     align-items: center;
     padding: 7px 12px;
@@ -276,6 +276,10 @@ body.tm-body {
 }
 .tm-row:hover { background: rgba(255,255,255,0.04); }
 .tm-row.active { background: rgba(13, 202, 240, 0.09); }
+.tm-row-prehl {
+    background: rgba(13, 202, 240, 0.14);
+    box-shadow: inset 3px 0 0 rgba(13, 202, 240, 0.6);
+}
 .tm-row-flash { animation: tm-row-flash 2.5s ease-out; }
 @keyframes tm-row-flash {
     0%, 55% { background: rgba(13, 202, 240, 0.35); box-shadow: inset 3px 0 0 #0dcaf0; }
@@ -337,13 +341,44 @@ body.tm-body {
     font-variant-numeric: tabular-nums;
 }
 
-.tm-health {
-    display: inline-block;
-    width: 9px;
-    height: 9px;
+.tm-row-q {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    white-space: nowrap;
+}
+.tm-chip-q {
+    font-size: 0.8rem;
+    font-variant-numeric: tabular-nums;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+.tm-chip-dot {
+    width: 8px;
+    height: 8px;
     border-radius: 50%;
-    margin-left: 5px;
-    vertical-align: middle;
+    display: inline-block;
+}
+.tm-health-chip {
+    color: #fff;
+    min-width: 26px;
+    cursor: pointer;
+    font-variant-numeric: tabular-nums;
+}
+.tm-health-chip:hover { outline: 1px solid rgba(255,255,255,0.5); }
+.tm-loan-badge {
+    background: transparent;
+    border: 1px solid rgba(255, 193, 7, 0.4);
+    color: rgba(255, 193, 7, 0.7);
+    font-weight: 500;
+}
+.tm-pop-line { cursor: pointer; }
+.tm-pop-line:hover { color: #8bd3ff; }
+.tm-step-live { animation: tm-step-live 1.4s ease-in-out infinite; }
+@keyframes tm-step-live {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
 }
 
 .tm-note-ic {
@@ -361,11 +396,6 @@ body.tm-body {
 }
 .tm-onb-fold:hover { color: rgba(255,255,255,0.8); }
 .tm-row.tm-row-onb { opacity: 0.72; }
-
-.gps-badges { display: flex; flex-wrap: wrap; gap: 4px; }
-.gps-badges .badge { font-weight: 500; }
-.error-badge { cursor: pointer; user-select: none; }
-.error-badge:hover { outline: 1px solid rgba(255,255,255,0.5); }
 
 /* ---------- Detail panel ---------- */
 
@@ -588,15 +618,14 @@ body.tm-body {
         grid-template-areas:
             "time parcours duration chevron"
             "time progress progress chevron"
-            "time badges badges chevron";
+            "time quality quality chevron";
         row-gap: 3px;
     }
     .tm-row-time { grid-area: time; }
     .tm-row-parcours { grid-area: parcours; }
     .tm-row-duration { grid-area: duration; }
-    .tm-progress { grid-area: progress; }
-    .tm-row-status { display: inline; }
-    .gps-badges { grid-area: badges; }
+    .tm-row-prog { grid-area: progress; }
+    .tm-row-q { grid-area: quality; }
     .tm-row-chevron { grid-area: chevron; }
     .tm-scrub-readout { min-width: 0; font-size: 0.7rem; }
 }

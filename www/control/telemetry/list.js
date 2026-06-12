@@ -238,48 +238,46 @@ TM.list = (function() {
 
     // ---- Row rendering ----
 
-    function precisionBadge(summary) {
+    // One overall GPS-quality chip (avg accuracy, coloured by bucket).
+    function accChip(summary) {
         var accuracy = Number(summary.avgAccuracy);
-        if (!Number.isFinite(accuracy)) return '<span class="badge text-bg-secondary">gps ?</span>';
-        if (accuracy <= 5) return '<span class="badge text-bg-success">tight ' + esc(TM.util.formatNumber(accuracy, 1)) + 'm</span>';
-        if (accuracy <= 10) return '<span class="badge text-bg-info">good ' + esc(TM.util.formatNumber(accuracy, 1)) + 'm</span>';
-        if (accuracy <= 20) return '<span class="badge text-bg-warning">fair ' + esc(TM.util.formatNumber(accuracy, 1)) + 'm</span>';
-        return '<span class="badge text-bg-danger">coarse ' + esc(TM.util.formatNumber(accuracy, 1)) + 'm</span>';
-    }
-
-    function errorBadge(kind, color, label) {
-        return '<span class="badge text-bg-' + color + ' error-badge" data-error-kind="' + esc(kind) + '" tabindex="0" role="button" title="Click for details, alt-click to open the events panel">' + esc(label) + '</span>';
-    }
-
-    function renderGpsBadges(summary) {
-        var badges = [precisionBadge(summary)];
-        if (summary.maxGapMs != null && Number(summary.maxGapMs) >= 8000) {
-            badges.push(errorBadge('gap', 'warning', 'gap ' + TM.util.formatGap(Number(summary.maxGapMs))));
+        if (!Number.isFinite(accuracy)) {
+            return '<span class="tm-chip-q" style="color:rgba(255,255,255,0.4)" title="no GPS data">gps ?</span>';
         }
-        if (Number(summary.sleepSuspects) > 0) badges.push(errorBadge('sleep', 'danger', 'sleep x' + summary.sleepSuspects));
-        if (Number(summary.staleCallbacks) > 0) badges.push(errorBadge('stale', 'warning', 'stale x' + summary.staleCallbacks));
-        if (Number(summary.rejectedFixes) > 0) badges.push(errorBadge('reject', 'warning', 'reject x' + summary.rejectedFixes));
-        if (Number(summary.audioErrors) > 0) badges.push(errorBadge('audio', 'secondary', 'audio x' + summary.audioErrors));
-        return '<div class="gps-badges">' + badges.join('') + '</div>';
+        var color = TM.maps.ACC_BUCKETS[TM.maps.accBucket(accuracy)].color;
+        return '<span class="tm-chip-q" style="color:' + color + '" title="avg GPS accuracy">' +
+            '<span class="tm-chip-dot" style="background:' + color + '"></span>' +
+            esc(TM.util.formatNumber(accuracy, 1)) + 'm</span>';
+    }
+
+    // Health score chip; click opens the anomaly popover.
+    function healthChip(summary) {
+        var score = TM.util.healthScore(summary);
+        var display = score >= 10 ? Math.round(score) : (Math.round(score * 10) / 10);
+        return '<span class="badge tm-health-chip" style="background:' + TM.util.healthColor(score) + '" ' +
+            'tabindex="0" role="button" title="health score — click for anomalies">' + esc(display) + '</span>';
     }
 
     // Per-step bar: green = fired, red = reached but never fired (missed),
-    // dark grey = not reached yet.
+    // dark grey = not reached yet, pulsing blue = current step of a live walk.
     function progressHtml(summary) {
         if (summary.kind !== 'walk' || !(summary.totalSteps > 0)) {
             return '<span class="tm-progress-label">' + (summary.finalStep != null ? 'step ' + esc(summary.finalStep) : '—') + '</span>';
         }
 
+        var live = TM.api.statusOf(summary) === 'live';
         var fired = new Set(Array.isArray(summary.firedSteps) ? summary.firedSteps : []);
         var reachedUpTo = Number.isInteger(summary.finalStep) ? summary.finalStep : -1;
         var segments = '';
         for (var i = 0; i < summary.totalSteps; i++) {
             var color;
             var hint;
-            if (fired.has(i)) { color = '#198754'; hint = 'step ' + i + ' fired'; }
+            var cls = '';
+            if (live && i === reachedUpTo) { color = '#0dcaf0'; hint = 'step ' + i + ' — LIVE, walker here'; cls = ' class="tm-step-live"'; }
+            else if (fired.has(i)) { color = '#198754'; hint = 'step ' + i + ' fired'; }
             else if (i <= reachedUpTo) { color = '#dc3545'; hint = 'step ' + i + ' MISSED'; }
             else { color = 'rgba(255,255,255,0.13)'; hint = 'step ' + i + ' not reached'; }
-            segments += '<span style="background:' + color + '" title="' + esc(hint) + '"></span>';
+            segments += '<span' + cls + ' style="background:' + color + '" title="' + esc(hint) + '"></span>';
         }
 
         return '<div class="tm-progress">' +
@@ -292,7 +290,6 @@ TM.list = (function() {
         var options = opts || {};
         var status = TM.api.statusOf(summary);
         var expanded = TM.detail.currentSessionId() === summary.sessionId;
-        var health = TM.util.healthScore(summary);
         var note = TM.api.getNote(summary.sessionId);
         var chips = [];
 
@@ -306,17 +303,16 @@ TM.list = (function() {
 
         var shortCode = String(summary.sessionId || '').split('_').pop();
 
-        return '<div class="tm-row' + (expanded ? ' active' : '') + (summary.kind === 'onboarding' ? ' tm-row-onb' : '') + '" data-session-id="' + esc(summary.sessionId) + '">' +
+        return '<div class="tm-row' + (expanded ? ' active' : '') + (summary.kind === 'onboarding' ? ' tm-row-onb' : '') + '" ' +
+            'data-session-id="' + esc(summary.sessionId) + '" title="' + esc(summary.sessionId + ' · ' + status) + '">' +
             '<div class="tm-row-time">' + esc(TM.util.formatTime(summary.startTime)) +
                 '<span class="tm-row-code">' + esc(shortCode) + '</span></div>' +
-            '<div class="tm-row-parcours" title="' + esc(summary.sessionId) + '">' + esc(parcoursLabel(summary) || '-') +
+            '<div class="tm-row-parcours">' + esc(parcoursLabel(summary) || '-') +
                 (summary.kind === 'onboarding' ? ' <span class="badge text-bg-dark">onb</span>' : '') +
                 (chips.length ? ' ' + chips.join(' ') : '') + '</div>' +
             '<div class="tm-row-duration">' + esc(TM.util.formatDuration(summary.durationMs)) + '</div>' +
-            '<div>' + progressHtml(summary) + '</div>' +
-            '<div class="tm-row-status">' + statusPill(summary) + ago +
-                '<span class="tm-health" style="background:' + TM.util.healthColor(health) + '" title="health score ' + health.toFixed(1) + '"></span></div>' +
-            renderGpsBadges(summary) +
+            '<div class="tm-row-prog">' + progressHtml(summary) + '</div>' +
+            '<div class="tm-row-q">' + accChip(summary) + healthChip(summary) + ago + '</div>' +
             '<div class="tm-row-chevron">▶</div>' +
         '</div>';
     }
@@ -340,7 +336,7 @@ TM.list = (function() {
                 ? '<span class="tm-group-uuid">' + esc(first.deviceUuid.slice(0, 8)) + '</span>' +
                   '<button class="tm-rename-btn" data-action="rename-device" data-uuid="' + esc(first.deviceUuid) + '" title="Rename device">✎</button>'
                 : '') +
-            (first.isLoanDevice ? '<span class="badge text-bg-warning">loan</span>' : '') +
+            (first.isLoanDevice ? '<span class="badge tm-loan-badge" title="loan-fleet device">loan</span>' : '') +
             (apk != null && Number.isFinite(apk) ? '<span class="badge text-bg-' + (apkStale ? 'danger' : 'dark') + '">apk ' + esc(apk) + (apkStale ? ' stale' : '') + '</span>' : '') +
             '<div class="tm-group-meta">' +
                 '<span>' + walks.length + ' walk' + (walks.length > 1 ? 's' : '') + (onbs.length ? ' + ' + onbs.length + ' onb' : '') + '</span>' +
@@ -478,7 +474,11 @@ TM.list = (function() {
                 var overlayPromise = ids.length === 1 ? TM.api.loadParcoursOverlay(ids[0]) : Promise.resolve(null);
                 return overlayPromise.then(function(overlay) {
                     if (!document.getElementById(mapEl.id)) return;
-                    trackMapHandles.push(TM.maps.renderGroupMap(mapEl.id, items, overlay, { viewKey: 'tracks:' + key }));
+                    trackMapHandles.push(TM.maps.renderGroupMap(mapEl.id, items, overlay, {
+                        viewKey: 'tracks:' + key,
+                        onTrackHover: previewRow,
+                        onTrackClick: jumpToRow
+                    }));
                     if (legendEl) {
                         legendEl.innerHTML = items.map(function(item, index) {
                             var color = TM.maps.TRACK_PALETTE[index % TM.maps.TRACK_PALETTE.length];
@@ -522,40 +522,39 @@ TM.list = (function() {
         if (event.key === 'Escape') dismissErrorPopover();
     }
 
-    function renderErrorPopoverBody(kind, events) {
-        var def = ERROR_BADGE_KINDS[kind];
-        if (!events.length) return '<div class="text-secondary">No matching events recorded for this session.</div>';
+    function healthPopoverBody(summary) {
+        var lines = [];
+        if (summary.maxGapMs != null && Number(summary.maxGapMs) >= 8000) {
+            lines.push(['gap', 'Worst callback gap ' + TM.util.formatGap(Number(summary.maxGapMs))]);
+        }
+        if (Number(summary.sleepSuspects) > 0) lines.push(['sleep', 'Sleep suspects ×' + summary.sleepSuspects]);
+        if (Number(summary.staleCallbacks) > 0) lines.push(['stale', 'Stale callbacks ×' + summary.staleCallbacks]);
+        if (Number(summary.rejectedFixes) > 0) lines.push(['reject', 'Rejected fixes ×' + summary.rejectedFixes]);
+        if (Number(summary.audioErrors) > 0) lines.push(['audio', 'Audio errors ×' + summary.audioErrors]);
+        if (Number(summary.userLostCount) > 0) lines.push([null, 'User lost ×' + summary.userLostCount]);
 
-        var sorted = events.slice();
-        if (def.sortKey) sorted.sort(function(a, b) { return def.sortKey(a) - def.sortKey(b); });
+        var acc = Number(summary.avgAccuracy);
+        var header = '<div class="error-event-time mb-1">avg acc ' +
+            (Number.isFinite(acc) ? esc(TM.util.formatNumber(acc, 1)) + 'm' : '?') +
+            ' · health score ' + esc(TM.util.healthScore(summary).toFixed(1)) + '</div>';
 
-        var maxRows = 25;
-        var rows = sorted.slice(0, maxRows).map(function(event) {
-            var when = new Date(event.t).toLocaleTimeString('fr-FR');
-            return '<div class="error-event-row">' +
-                '<div class="error-event-time">' + esc(when) + ' · <code>' + esc(event.type) + '</code></div>' +
-                '<div class="error-event-payload">' + esc(def.describe(event)) + '</div>' +
-            '</div>';
+        if (!lines.length) return header + '<div class="text-secondary">No anomalies recorded.</div>';
+
+        var rows = lines.map(function(line) {
+            return '<div class="error-event-row tm-pop-line" role="button"' +
+                (line[0] ? ' data-error-kind="' + esc(line[0]) + '"' : '') + '>' + esc(line[1]) + '</div>';
         }).join('');
 
-        var footer = '<div class="error-popover-footer">' +
-            sorted.length + ' event' + (sorted.length > 1 ? 's' : '') +
-            (sorted.length > maxRows ? ' (showing top ' + maxRows + ')' : '') +
-            ' · alt-click the badge to open the full events panel' +
-        '</div>';
-
-        return rows + footer;
+        return header + rows + '<div class="error-popover-footer">click a line to open the matching events</div>';
     }
 
-    function showErrorPopover(triggerEl, summary, kind) {
-        var def = ERROR_BADGE_KINDS[kind];
-        if (!def) return;
+    function showHealthPopover(triggerEl, summary) {
         if (activeErrorPopover && activeErrorPopover.trigger === triggerEl) { dismissErrorPopover(); return; }
         dismissErrorPopover();
 
         var popover = new bootstrap.Popover(triggerEl, {
-            title: def.label + ' — ' + summary.sessionId,
-            content: '<div class="text-secondary">Loading...</div>',
+            title: summary.sessionId,
+            content: healthPopoverBody(summary),
             html: true,
             trigger: 'manual',
             placement: 'auto',
@@ -564,28 +563,22 @@ TM.list = (function() {
         });
         popover.show();
         activeErrorPopover = { trigger: triggerEl, popover: popover };
+
+        var popoverEl = getActivePopoverEl();
+        if (popoverEl) {
+            popoverEl.querySelectorAll('.tm-pop-line').forEach(function(lineEl) {
+                lineEl.addEventListener('click', function() {
+                    var kind = lineEl.dataset.errorKind || null;
+                    dismissErrorPopover();
+                    openDetailFor(summary.sessionId, { openEvents: true, errorFilterKind: kind });
+                });
+            });
+        }
+
         setTimeout(function() {
             document.addEventListener('click', onDocumentClickForPopover, true);
             document.addEventListener('keydown', onKeydownForPopover, true);
         }, 0);
-
-        TM.api.getDetail(summary.sessionId, TM.state.archived())
-            .then(function(data) {
-                if (!activeErrorPopover || activeErrorPopover.trigger !== triggerEl) return;
-                var allowed = new Set(def.types);
-                var matching = (data.events || []).filter(function(event) { return allowed.has(event.type); });
-                var popoverEl = getActivePopoverEl();
-                var bodyEl = popoverEl && popoverEl.querySelector('.popover-body');
-                if (bodyEl) {
-                    bodyEl.innerHTML = renderErrorPopoverBody(kind, matching);
-                    popover.update();
-                }
-            })
-            .catch(function(error) {
-                var popoverEl = getActivePopoverEl();
-                var bodyEl = popoverEl && popoverEl.querySelector('.popover-body');
-                if (bodyEl) bodyEl.innerHTML = '<div class="text-danger">Failed to load: ' + esc(String(error)) + '</div>';
-            });
     }
 
     // ---- Day export ----
@@ -732,6 +725,26 @@ TM.list = (function() {
         return TM.api.getSession(sessionId, TM.state.archived());
     }
 
+    function rowFor(sessionId) {
+        return document.querySelector('.tm-row[data-session-id="' + CSS.escape(sessionId) + '"]');
+    }
+
+    // Hover preview from the timeline strip or a group-map track.
+    function previewRow(sessionId, on) {
+        var row = rowFor(sessionId);
+        if (row) row.classList.toggle('tm-row-prehl', !!on);
+    }
+
+    function jumpToRow(sessionId) {
+        var row = rowFor(sessionId);
+        if (!row) return;
+        row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        row.classList.remove('tm-row-flash');
+        void row.offsetWidth; // restart the animation on repeat clicks
+        row.classList.add('tm-row-flash');
+        setTimeout(function() { row.classList.remove('tm-row-flash'); }, 2600);
+    }
+
     function openDetailFor(sessionId, opts) {
         var row = document.querySelector('.tm-row[data-session-id="' + CSS.escape(sessionId) + '"]');
         if (!row) return;
@@ -757,8 +770,14 @@ TM.list = (function() {
                 var dayKey = actionEl.dataset.dayKey;
                 var dayEl = actionEl.closest('.tm-day');
                 var nowOpen = dayEl.classList.contains('collapsed');
+                if (nowOpen) {
+                    // Accordion: opening a day collapses the others.
+                    document.querySelectorAll('.tm-day').forEach(function(el) {
+                        if (el !== dayEl) dayToggles.set(el.dataset.day, false);
+                    });
+                }
                 dayToggles.set(dayKey, nowOpen);
-                dayEl.classList.toggle('collapsed');
+                render();
                 return;
             }
             if (action === 'toggle-onb') {
@@ -795,34 +814,19 @@ TM.list = (function() {
             }
         }
 
-        var badge = event.target.closest('.error-badge');
-        if (badge) {
+        var chip = event.target.closest('.tm-health-chip');
+        if (chip) {
             event.stopPropagation();
-            var badgeRow = badge.closest('.tm-row');
-            var summary = badgeRow && findSession(badgeRow.dataset.sessionId);
-            if (!summary) return;
-            var kind = badge.dataset.errorKind;
-            if (event.altKey || event.shiftKey || event.metaKey || event.ctrlKey) {
-                dismissErrorPopover();
-                openDetailFor(summary.sessionId, { openEvents: true, errorFilterKind: kind });
-            } else {
-                showErrorPopover(badge, summary, kind);
-            }
+            var chipRow = chip.closest('.tm-row');
+            var summary = chipRow && findSession(chipRow.dataset.sessionId);
+            if (summary) showHealthPopover(chip, summary);
             return;
         }
 
         var bar = event.target.closest('[data-timeline-session]');
         if (bar) {
             event.stopPropagation();
-            var barSessionId = bar.dataset.timelineSession;
-            var barRow = document.querySelector('.tm-row[data-session-id="' + CSS.escape(barSessionId) + '"]');
-            if (barRow) {
-                barRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                barRow.classList.remove('tm-row-flash');
-                void barRow.offsetWidth; // restart the animation on repeat clicks
-                barRow.classList.add('tm-row-flash');
-                setTimeout(function() { barRow.classList.remove('tm-row-flash'); }, 2600);
-            }
+            jumpToRow(bar.dataset.timelineSession);
             return;
         }
 
@@ -839,10 +843,19 @@ TM.list = (function() {
         }
     }
 
+    function onContainerHover(event) {
+        var bar = event.target.closest('[data-timeline-session]');
+        if (bar) previewRow(bar.dataset.timelineSession, event.type === 'mouseover');
+    }
+
     function bind() {
         ['live-section', 'days-container'].forEach(function(id) {
             var el = document.getElementById(id);
-            if (el) el.addEventListener('click', onContainerClick);
+            if (el) {
+                el.addEventListener('click', onContainerClick);
+                el.addEventListener('mouseover', onContainerHover);
+                el.addEventListener('mouseout', onContainerHover);
+            }
         });
         var loadMoreBtn = document.getElementById('load-more-days');
         if (loadMoreBtn) loadMoreBtn.addEventListener('click', function() {

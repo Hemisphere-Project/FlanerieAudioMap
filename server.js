@@ -716,9 +716,18 @@ const sessionSummaryCache = new Map(); // filePath -> { mtimeMs, size, summary }
 
 const TELEMETRY_LIVE_WINDOW_MS = 3 * 60 * 1000;
 
+// "Complete" means the walk actually ran, not just that the route probe ended
+// on the last step: a session that resumed at step 20 (persisted walk gate)
+// reaches the end with almost no steps fired and must not count as complete.
+const COMPLETE_FIRED_RATIO = 0.8;
+
 function computeSessionStatus(summary, nowMs) {
   if (summary.ended) {
-    if (summary.totalSteps > 0 && Number.isInteger(summary.finalStep) && summary.finalStep >= summary.totalSteps - 1) {
+    const firedCount = Array.isArray(summary.firedSteps) ? summary.firedSteps.length : 0;
+    if (summary.totalSteps > 0
+        && Number.isInteger(summary.finalStep)
+        && summary.finalStep >= summary.totalSteps - 1
+        && firedCount >= Math.ceil(summary.totalSteps * COMPLETE_FIRED_RATIO)) {
       return 'ended-complete';
     }
     return 'ended-partial';

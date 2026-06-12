@@ -95,7 +95,7 @@ TM.detail = (function() {
         var sessionDay = TM.util.dayKey(data.startTime);
         var isToday = sessionDay === TM.util.dayKey(Date.now());
 
-        if (client.isLoanDevice) chips.push('<span class="badge text-bg-warning">loan</span>');
+        if (client.isLoanDevice) chips.push('<span class="badge tm-loan-badge" title="loan-fleet device">loan</span>');
         if (client.appVersion != null) {
             var dayMax = TM.list.dayMaxApk(sessionDay);
             var stale = dayMax && Number(client.appVersion) < dayMax;

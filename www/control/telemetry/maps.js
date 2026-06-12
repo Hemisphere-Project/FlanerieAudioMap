@@ -47,7 +47,14 @@ TM.maps = (function() {
     }
 
     function createBaseMap(containerId) {
-        var map = L.map(containerId).setView([45.75, 4.85], 15);
+        // Fractional zoom + a higher px-per-level makes wheel zooming gentle
+        // enough to aim precisely at a street corner.
+        var map = L.map(containerId, {
+            zoomSnap: 0.25,
+            zoomDelta: 0.5,
+            wheelPxPerZoomLevel: 180,
+            wheelDebounceTime: 30
+        }).setView([45.75, 4.85], 15);
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             maxZoom: 19,
             attribution: '&copy; OpenStreetMap'
@@ -361,8 +368,22 @@ TM.maps = (function() {
             if (!gpsEvents.length) return;
 
             var latlngs = gpsEvents.map(function(event) { return [event.data.lat, event.data.lng]; });
-            featureGroup.addLayer(L.polyline(latlngs, { color: color, weight: 3, opacity: 0.92 })
-                .bindTooltip(item.session.sessionId + ' · ' + (item.session.deviceModel || '')));
+            var track = L.polyline(latlngs, { color: color, weight: 3, opacity: 0.92 })
+                .bindTooltip(item.session.sessionId + ' · ' + (item.session.deviceModel || ''));
+
+            track.on('mouseover', function() {
+                track.setStyle({ weight: 6, opacity: 1 });
+                if (options.onTrackHover) options.onTrackHover(item.session.sessionId, true);
+            });
+            track.on('mouseout', function() {
+                track.setStyle({ weight: 3, opacity: 0.92 });
+                if (options.onTrackHover) options.onTrackHover(item.session.sessionId, false);
+            });
+            track.on('click', function() {
+                if (options.onTrackClick) options.onTrackClick(item.session.sessionId);
+            });
+
+            featureGroup.addLayer(track);
             featureGroup.addLayer(L.circleMarker(latlngs[0], {
                 radius: 5, color: color, fillColor: color, fillOpacity: 0.7, weight: 1
             }).bindTooltip('Start ' + item.session.sessionId));
