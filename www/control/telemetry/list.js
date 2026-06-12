@@ -78,8 +78,10 @@ TM.list = (function() {
     var activeErrorPopover = null;
     var dayToggles = new Map();       // dayKey -> bool (user override: true=open)
     var onbExpanded = new Set();      // groupDomKey
-    var openTrackMaps = new Set();    // groupDomKey or 'day:'+dayKey
+    var openTrackMaps = new Set();    // groupDomKey or 'day:'+prefix
+    var trackMapModes = new Map();    // trackKey -> 'tracks' | 'accuracy'
     var trackMapHandles = [];         // destroyed on each render
+    var timelineView = new Map();     // tlKey -> { factor, center } (zoom state)
 
     // ---- Status helpers ----
 
@@ -387,17 +389,17 @@ TM.list = (function() {
             '</div>';
         }
 
-        var tracksHost = openTrackMaps.has(domKey)
-            ? '<div class="tm-group-map" data-track-map="' + esc(domKey) + '"></div><div class="comparison-legend" data-track-legend="' + esc(domKey) + '"></div>'
-            : '';
-
-        return '<div class="tm-group">' + header + tracksHost + rows + fold + '</div>';
+        return '<div class="tm-group">' + header + trackHostHtml(domKey) + rows + fold + '</div>';
     }
 
     // Day/parcours timeline: each bar is the session's step-block graph
     // placed on the time axis, with a thin health-coloured strip underneath
-    // and a discreet hour grid behind.
-    function renderTimeline(sessions) {
+    // and an hourly grid behind. Zoomable (full span down to a 2 h window)
+    // with horizontal scrolling; zoom state is kept per timeline in
+    // timelineView so it survives re-renders.
+    var TIMELINE_MIN_WINDOW_MS = 2 * 3600 * 1000;
+
+    function renderTimeline(sessions, tlKey) {
         if (sessions.length < 2) return '';
         var starts = sessions.map(function(s) { return new Date(s.startTime).getTime(); });
         var ends = sessions.map(function(s, i) { return Math.max(Number(s.lastEvent) || 0, starts[i]); });
@@ -405,9 +407,13 @@ TM.list = (function() {
         var max = Math.max.apply(null, ends);
         var span = Math.max(60000, max - min);
 
+        var maxFactor = Math.max(1, span / TIMELINE_MIN_WINDOW_MS);
+        var view = timelineView.get(tlKey);
+        var factor = Math.min(maxFactor, Math.max(1, (view && view.factor) || 1));
+
         var rows = sessions.map(function(summary, index) {
             var left = ((starts[index] - min) / span) * 100;
-            var width = Math.max(0.6, ((ends[index] - starts[index]) / span) * 100);
+            var width = Math.max(0.6 / factor, ((ends[index] - starts[index]) / span) * 100);
             var status = TM.api.statusOf(summary);
             var health = TM.util.healthScore(summary);
 
@@ -416,7 +422,7 @@ TM.list = (function() {
                 : '<span style="background:' + statusColor(status) + ';opacity:0.45"></span>';
 
             return '<div class="tm-timeline-row"><div class="tm-timeline-bar" ' +
-                'style="left:' + left.toFixed(2) + '%;width:' + width.toFixed(2) + '%" ' +
+                'style="left:' + left.toFixed(3) + '%;width:' + width.toFixed(3) + '%" ' +
                 'data-timeline-session="' + esc(summary.sessionId) + '" ' +
                 'title="' + esc(summary.sessionId + ' · ' + deviceLabelFor(summary) + ' · ' + TM.util.formatDuration(summary.durationMs) + ' · ' + status + ' · health ' + health + '/100') + '">' +
                 '<div class="tm-tlbar-steps">' + steps + '</div>' +
@@ -424,22 +430,46 @@ TM.list = (function() {
             '</div></div>';
         }).join('');
 
-        // Hour grid: at most ~10 lines, stepping whole hours.
+        // Hourly grid lines; labels thinned only when they would crowd the
+        // visible window.
         var grid = '';
         var axis = '';
-        var stepHours = Math.max(1, Math.ceil((span / 3600000) / 10));
+        var labelStep = Math.max(1, Math.ceil((span / 3600000) / (10 * factor)));
         var tick = new Date(min);
         tick.setMinutes(0, 0, 0);
         var tickMs = tick.getTime();
         while (tickMs <= min) tickMs += 3600000;
-        for (; tickMs < max; tickMs += stepHours * 3600000) {
+        for (var hourIndex = 0; tickMs < max; tickMs += 3600000, hourIndex++) {
             var x = ((tickMs - min) / span) * 100;
-            grid += '<div class="tm-timeline-gridline" style="left:' + x.toFixed(2) + '%"></div>';
-            axis += '<span style="left:' + x.toFixed(2) + '%">' + new Date(tickMs).getHours() + 'h</span>';
+            grid += '<div class="tm-timeline-gridline" style="left:' + x.toFixed(3) + '%"></div>';
+            if (hourIndex % labelStep === 0) {
+                axis += '<span style="left:' + x.toFixed(3) + '%">' + new Date(tickMs).getHours() + 'h</span>';
+            }
         }
 
-        return '<div class="tm-timeline">' + grid + rows + '</div>' +
-            '<div class="tm-timeline-axis">' + axis + '</div>';
+        var zoom = maxFactor > 1
+            ? '<div class="tm-timeline-top"><div class="btn-group btn-group-sm">' +
+                '<button class="btn btn-outline-secondary py-0" data-action="tl-zoom" data-dir="out" data-tl-key="' + esc(tlKey) + '"' + (factor <= 1 ? ' disabled' : '') + '>−</button>' +
+                '<button class="btn btn-outline-secondary py-0" data-action="tl-zoom" data-dir="in" data-tl-key="' + esc(tlKey) + '"' + (factor >= maxFactor ? ' disabled' : '') + '>+</button>' +
+              '</div></div>'
+            : '';
+
+        return zoom +
+            '<div class="tm-timeline-wrap" data-tl-key="' + esc(tlKey) + '">' +
+                '<div class="tm-timeline-inner" style="width:' + (factor * 100).toFixed(1) + '%">' +
+                    '<div class="tm-timeline">' + grid + rows + '</div>' +
+                    '<div class="tm-timeline-axis">' + axis + '</div>' +
+                '</div>' +
+            '</div>';
+    }
+
+    function restoreTimelineScroll() {
+        document.querySelectorAll('.tm-timeline-wrap[data-tl-key]').forEach(function(wrap) {
+            var view = timelineView.get(wrap.dataset.tlKey);
+            if (!view || !view.factor || view.factor <= 1) return;
+            var center = Number.isFinite(view.center) ? view.center : 0.5;
+            wrap.scrollLeft = Math.max(0, center * wrap.scrollWidth - wrap.clientWidth / 2);
+        });
     }
 
     function isDayOpen(dayKey, index) {
@@ -448,9 +478,14 @@ TM.list = (function() {
     }
 
     function trackHostHtml(trackKey) {
-        return openTrackMaps.has(trackKey)
-            ? '<div class="tm-group-map" data-track-map="' + esc(trackKey) + '"></div><div class="comparison-legend" data-track-legend="' + esc(trackKey) + '"></div>'
-            : '';
+        if (!openTrackMaps.has(trackKey)) return '';
+        var mode = trackMapModes.get(trackKey) || 'tracks';
+        return '<div class="tm-trackmap-bar">' +
+            '<div class="btn-group btn-group-sm">' +
+                '<button class="btn btn-outline-secondary py-0' + (mode === 'tracks' ? ' active' : '') + '" data-action="trackmap-mode" data-mode="tracks" data-track-key="' + esc(trackKey) + '">Tracks</button>' +
+                '<button class="btn btn-outline-secondary py-0' + (mode === 'accuracy' ? ' active' : '') + '" data-action="trackmap-mode" data-mode="accuracy" data-track-key="' + esc(trackKey) + '" title="mean GPS accuracy per ~14m cell, all walks aggregated">Avg accuracy</button>' +
+            '</div></div>' +
+            '<div class="tm-group-map" data-track-map="' + esc(trackKey) + '"></div>';
     }
 
     function renderDay(day, index) {
@@ -485,7 +520,7 @@ TM.list = (function() {
                   '</div>'
                 : '';
             var inner = head +
-                renderTimeline(section.sessions) +
+                renderTimeline(section.sessions, section.prefix) +
                 trackHostHtml(section.trackKey) +
                 section.groups.map(function(group) { return renderGroup(group, day.dayKey, section.prefix); }).join('');
             return day.multi ? '<div class="tm-parcours-section">' + inner + '</div>' : inner;
@@ -509,12 +544,14 @@ TM.list = (function() {
 
         document.querySelectorAll('[data-track-map]').forEach(function(mapEl) {
             var key = mapEl.dataset.trackMap;
+            var mode = trackMapModes.get(key) || 'tracks';
             var sessions = filteredByKey.get(key) || [];
-            sessions = sessions.slice(0, 8);
+            // Track readability caps at 8; the accuracy heat aggregates, so
+            // it can take many more walks.
+            sessions = sessions.slice(0, mode === 'accuracy' ? 24 : 8);
             if (!sessions.length) return;
 
             mapEl.id = 'tm-track-map-' + key.replace(/[^a-zA-Z0-9_-]/g, '_');
-            var legendEl = document.querySelector('[data-track-legend="' + CSS.escape(key) + '"]');
 
             Promise.all(sessions.map(function(summary) {
                 return TM.api.getDetail(summary.sessionId, TM.state.archived()).then(function(data) {
@@ -529,16 +566,10 @@ TM.list = (function() {
                     if (!document.getElementById(mapEl.id)) return;
                     trackMapHandles.push(TM.maps.renderGroupMap(mapEl.id, items, overlay, {
                         viewKey: 'tracks:' + key,
+                        mode: mode,
                         onTrackHover: previewRow,
                         onTrackClick: jumpToRow
                     }));
-                    if (legendEl) {
-                        legendEl.innerHTML = items.map(function(item, index) {
-                            var color = TM.maps.TRACK_PALETTE[index % TM.maps.TRACK_PALETTE.length];
-                            return '<div class="comparison-legend-item"><span class="comparison-legend-color" style="background:' + color + '"></span>' +
-                                '<code>' + esc(item.session.sessionId) + '</code><span>' + esc(deviceLabelFor(item.session)) + '</span></div>';
-                        }).join('');
-                    }
                 });
             }).catch(function(error) {
                 mapEl.innerHTML = '<div class="text-danger p-2">Failed to load tracks: ' + esc(String(error)) + '</div>';
@@ -774,6 +805,7 @@ TM.list = (function() {
             TM.detail.remount(host);
         }
 
+        restoreTimelineScroll();
         updateAgoTickers();
     }
 
@@ -858,6 +890,26 @@ TM.list = (function() {
                 var trackKey = actionEl.dataset.trackKey;
                 if (openTrackMaps.has(trackKey)) openTrackMaps.delete(trackKey);
                 else openTrackMaps.add(trackKey);
+                render();
+                return;
+            }
+            if (action === 'trackmap-mode') {
+                event.stopPropagation();
+                trackMapModes.set(actionEl.dataset.trackKey, actionEl.dataset.mode);
+                render();
+                return;
+            }
+            if (action === 'tl-zoom') {
+                event.stopPropagation();
+                var tlKey = actionEl.dataset.tlKey;
+                var wrap = document.querySelector('.tm-timeline-wrap[data-tl-key="' + CSS.escape(tlKey) + '"]');
+                var view = timelineView.get(tlKey) || { factor: 1, center: 0.5 };
+                if (wrap && wrap.scrollWidth > 0) {
+                    view.center = (wrap.scrollLeft + wrap.clientWidth / 2) / wrap.scrollWidth;
+                }
+                view.factor = actionEl.dataset.dir === 'in' ? view.factor * 1.6 : view.factor / 1.6;
+                if (view.factor <= 1.05) view.factor = 1;
+                timelineView.set(tlKey, view);
                 render();
                 return;
             }

@@ -349,8 +349,41 @@ TM.maps = (function() {
         };
     }
 
+    // Average-accuracy heat: bin every fix of every session into ~14 m cells,
+    // colour each cell by its mean accuracy. After several walks the bad-GPS
+    // areas of a parcours stand out for route adjustment.
+    function addAccuracyHeat(group, items) {
+        var CELL_M = 14;
+        var cells = new Map();
+        items.forEach(function(item) {
+            getGpsEvents(item.data.events || []).forEach(function(event) {
+                var acc = Number(event.data.acc);
+                if (!Number.isFinite(acc) || acc <= 0) return;
+                var dLat = CELL_M / 111320;
+                var dLng = CELL_M / (111320 * Math.cos(event.data.lat * Math.PI / 180));
+                var key = Math.round(event.data.lat / dLat) + '_' + Math.round(event.data.lng / dLng);
+                var cell = cells.get(key);
+                if (!cell) { cell = { sum: 0, n: 0, latSum: 0, lngSum: 0 }; cells.set(key, cell); }
+                cell.sum += acc;
+                cell.n += 1;
+                cell.latSum += event.data.lat;
+                cell.lngSum += event.data.lng;
+            });
+        });
+        cells.forEach(function(cell) {
+            var avg = cell.sum / cell.n;
+            group.addLayer(L.circleMarker([cell.latSum / cell.n, cell.lngSum / cell.n], {
+                radius: 7,
+                weight: 0,
+                fillColor: ACC_BUCKETS[accBucket(avg)].color,
+                fillOpacity: 0.55
+            }).bindTooltip(avg.toFixed(1) + 'm avg · ' + cell.n + ' fix' + (cell.n > 1 ? 'es' : '')));
+        });
+    }
+
     /**
-     * Group map: one coloured track per session.
+     * Group map. mode 'tracks' (default): one coloured track per session with
+     * hover/click callbacks. mode 'accuracy': aggregated avg-accuracy heat.
      * items: [{ session, data }]; overlay drawn when all sessions share a parcours.
      */
     function renderGroupMap(containerId, items, overlay, opts) {
@@ -359,8 +392,14 @@ TM.maps = (function() {
         var map = createBaseMap(containerId);
         var featureGroup = L.featureGroup().addTo(map);
 
-        // Multi-track comparison: steps only, subdued, to keep tracks readable.
+        // Subdued steps only, to keep tracks/heat readable.
         addOverlayZones(featureGroup, overlay, { lightSteps: true });
+
+        if (options.mode === 'accuracy') {
+            addAccuracyHeat(featureGroup, items);
+            finishGroupMap(map, featureGroup, viewKey);
+            return { map: map, destroy: function() { map.remove(); } };
+        }
 
         items.forEach(function(item, index) {
             var color = TRACK_PALETTE[index % TRACK_PALETTE.length];
@@ -392,17 +431,20 @@ TM.maps = (function() {
             }).bindTooltip('End ' + item.session.sessionId));
         });
 
+        finishGroupMap(map, featureGroup, viewKey);
+        return {
+            map: map,
+            destroy: function() { map.remove(); }
+        };
+    }
+
+    function finishGroupMap(map, featureGroup, viewKey) {
         var saved = viewStates.get(viewKey);
         if (saved) map.setView(saved.center, saved.zoom, { animate: false });
         else if (featureGroup.getLayers().length > 0) map.fitBounds(featureGroup.getBounds().pad(0.08));
 
         map.on('moveend zoomend', function() { viewStates.set(viewKey, captureView(map)); });
         setTimeout(function() { map.invalidateSize(); }, 80);
-
-        return {
-            map: map,
-            destroy: function() { map.remove(); }
-        };
     }
 
     return {

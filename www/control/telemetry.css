@@ -2,7 +2,7 @@
    Loaded after bootstrap (dark theme) and client.css. */
 
 body.tm-body {
-    background-color: #222;
+    background-color: #161616;
     min-height: 100%;
 }
 
@@ -141,7 +141,7 @@ body.tm-body {
 
 .tm-day {
     border: 1px solid rgba(255,255,255,0.09);
-    background: rgba(255,255,255,0.025);
+    background: rgba(255,255,255,0.012);
     border-radius: 12px;
     margin-bottom: 14px;
     overflow: hidden;
@@ -154,9 +154,9 @@ body.tm-body {
     padding: 9px 14px;
     cursor: pointer;
     flex-wrap: wrap;
-    background: rgba(255,255,255,0.03);
+    background: rgba(255,255,255,0.02);
 }
-.tm-day-header:hover { background: rgba(255,255,255,0.06); }
+.tm-day-header:hover { background: rgba(255,255,255,0.05); }
 
 .tm-day-title {
     font-weight: 600;
@@ -194,11 +194,23 @@ body.tm-body {
 .tm-day.collapsed .tm-day-caret { transform: rotate(-90deg); }
 
 /* Timeline strip: one step-block bar per session across the active span,
-   with a health strip underneath and a discreet hour grid behind. */
+   with a health strip underneath and an hourly grid behind. Zoomable via
+   the +/- buttons; the inner block widens and the wrap scrolls. */
+.tm-timeline-top {
+    display: flex;
+    justify-content: flex-end;
+    margin: 2px 14px 0;
+}
+.tm-timeline-top .btn { line-height: 1; }
+.tm-timeline-wrap {
+    overflow-x: auto;
+    margin: 0 14px;
+}
+.tm-timeline-inner { min-width: 100%; }
 .tm-timeline {
     position: relative;
     height: auto;
-    margin: 4px 14px 0;
+    margin: 4px 0 0;
     padding: 3px 0;
 }
 .tm-timeline-gridline {
@@ -240,7 +252,7 @@ body.tm-body {
 .tm-timeline-axis {
     position: relative;
     height: 14px;
-    margin: 0 14px 6px;
+    margin: 0 0 6px;
     color: rgba(255,255,255,0.35);
     font-size: 0.65rem;
 }
@@ -270,20 +282,21 @@ body.tm-body {
 /* ---------- Device groups ---------- */
 
 .tm-group {
-    border: 1px solid rgba(255,255,255,0.13);
+    border: 1px solid rgba(255,255,255,0.08);
     border-radius: 10px;
     margin: 8px 4px;
     overflow: hidden;
-    background: rgba(255,255,255,0.02);
+    background: transparent;
 }
 .tm-group-header {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 6px 12px;
-    background: rgba(255,255,255,0.08);
-    font-size: 0.88rem;
+    padding: 5px 12px;
+    background: rgba(255,255,255,0.025);
+    font-size: 0.86rem;
     flex-wrap: wrap;
+    color: rgba(255,255,255,0.75);
 }
 .tm-group-device { font-weight: 600; }
 .tm-group-uuid {
@@ -321,9 +334,10 @@ body.tm-body {
     cursor: pointer;
     font-size: 0.9rem;
 }
-.tm-row-alt { background: rgba(255,255,255,0.035); }
-.tm-row:hover { background: rgba(255,255,255,0.07); }
-.tm-row.active { background: rgba(13, 202, 240, 0.09); }
+.tm-row { background: rgba(255,255,255,0.045); }
+.tm-row-alt { background: rgba(255,255,255,0.08); }
+.tm-row:hover { background: rgba(255,255,255,0.12); }
+.tm-row.active { background: rgba(13, 202, 240, 0.12); }
 .tm-row-prehl {
     background: rgba(13, 202, 240, 0.14);
     box-shadow: inset 3px 0 0 rgba(13, 202, 240, 0.6);
@@ -626,22 +640,18 @@ body.tm-body {
     color: rgba(255,255,255,0.55); font-size: 0.72rem;
 }
 
-/* Group (multi-track) map */
+/* Group (multi-track / accuracy-heat) map */
 .tm-group-map {
     height: 380px;
     border-radius: 10px;
     overflow: hidden;
-    margin: 8px 4px;
+    margin: 4px 4px 8px;
 }
-.comparison-legend { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 6px 10px; }
-.comparison-legend-item {
-    display: inline-flex; align-items: center; gap: 6px;
-    padding: 3px 8px; border-radius: 999px;
-    background: rgba(255,255,255,0.04);
-    border: 1px solid rgba(255,255,255,0.06);
-    font-size: 0.8rem;
+.tm-trackmap-bar {
+    display: flex;
+    margin: 8px 4px 0;
 }
-.comparison-legend-color { width: 10px; height: 10px; border-radius: 999px; display: inline-block; }
+.tm-trackmap-bar .btn { line-height: 1.1; }
 
 /* Beacons */
 .beacon-table-wrap {
