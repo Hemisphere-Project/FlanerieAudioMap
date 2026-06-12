@@ -49,11 +49,16 @@ TM.maps = (function() {
     function createBaseMap(containerId) {
         // Fractional zoom + a higher px-per-level makes wheel zooming gentle
         // enough to aim precisely at a street corner.
+        // wheelDebounceTime must be LONG: Leaflet rounds each debounce window
+        // up to a full zoomSnap step (Math.ceil(d/snap)*snap), so a short
+        // debounce splits one wheel notch into several windows and the queued
+        // steps replay after the zoom animation — the "multiple firing" glitch.
+        // 100ms batches a whole gesture into a single zoom.
         var map = L.map(containerId, {
             zoomSnap: 0.25,
             zoomDelta: 0.5,
-            wheelPxPerZoomLevel: 180,
-            wheelDebounceTime: 30
+            wheelPxPerZoomLevel: 220,
+            wheelDebounceTime: 100
         }).setView([45.75, 4.85], 15);
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             maxZoom: 19,
