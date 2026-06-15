@@ -1150,6 +1150,21 @@ app.get('/list', (req, res) => {
   res.json(parcours);  
 });
 
+// Security (S1, 2026-06-15) — reject path traversal in user-supplied parcours /
+// media names. A name must be a single safe path segment: no separators, no
+// '..', no NUL byte. Express URL-decodes route params (so '..%2f..' arrives as
+// '../..'), which is exactly what path.basename() collapses. Returns the name,
+// or null if unsafe (caller responds 400 / redirect). Used by every endpoint
+// that builds a filesystem path from req.params.file/parcours/folder/file or
+// req.body.file.
+function safeName(s) {
+  if (typeof s !== 'string' || s.length === 0) return null;
+  if (s.indexOf('\0') !== -1) return null;
+  if (s === '.' || s === '..') return null;
+  if (s !== path.basename(s)) return null;   // any directory component → reject
+  return s;
+}
+
 // new parcours
 app.post('/newParcours', requireAuth, express.json(), (req, res) => {
   let name = req.body.name;
@@ -1177,7 +1192,8 @@ app.post('/newParcours', requireAuth, express.json(), (req, res) => {
 
 // delete parcours
 app.post('/deleteParcours', requireAuth, express.json(), (req, res) => {
-  const fileName = req.body.file;
+  const fileName = safeName(req.body.file);
+  if (!fileName) return res.status(400).json({ error: 'Invalid name' });
   const filePath = './parcours/' + fileName + '.json';
 
   // Guest: can only delete GUEST_ parcours
@@ -1201,7 +1217,8 @@ app.post('/deleteParcours', requireAuth, express.json(), (req, res) => {
 
 // clone Parcours
 app.post('/cloneParcours', requireAuth, express.json(), (req, res) => {
-  const fileName = req.body.file;
+  const fileName = safeName(req.body.file);
+  if (!fileName) return res.status(400).json({ error: 'Invalid name' });
   const filePath = './parcours/' + fileName + '.json';
   const content = JSON.parse(fs.readFileSync(filePath, 'utf8'));
 
@@ -1239,20 +1256,24 @@ app.post('/cloneParcours', requireAuth, express.json(), (req, res) => {
 
 // edit parcours (protected)
 app.get('/edit/:file', requireAuth, (req, res) => {
+  const fileName = safeName(req.params.file);
+  if (!fileName) return res.redirect('/control');
   // Guest: can only edit GUEST_ parcours
   if (req.userRole === 'guest') {
     try {
-      const content = JSON.parse(fs.readFileSync('./parcours/' + req.params.file + '.json', 'utf8'));
+      const content = JSON.parse(fs.readFileSync('./parcours/' + fileName + '.json', 'utf8'));
       if (!content.info.name.startsWith('GUEST_')) return res.redirect('/control');
     } catch { return res.redirect('/control'); }
   }
   res.sendFile(path.join(__dirname, 'www', 'control', 'edit.html'));
 });
 
-// get parcours json
-app.get('/edit/:file/json', (req, res) => {
+// get parcours json (S1 — requireAuth: this was the one unauthenticated path-build,
+// readable via '..%2f..%2fguest_password' before the fix)
+app.get('/edit/:file/json', requireAuth, (req, res) => {
   const role = getUserRole(req);
-  const fileName = req.params.file;
+  const fileName = safeName(req.params.file);
+  if (!fileName) return res.status(400).json({ error: 'Invalid name' });
   const filePath = './parcours/' + fileName + '.json';
   const content = JSON.parse(fs.readFileSync(filePath, 'utf8'));
 
@@ -1267,7 +1288,8 @@ app.get('/edit/:file/json', (req, res) => {
 // save parcours json
 app.post('/edit/:file/json', requireAuth, express.json(), (req, res) => {
   try {
-    const fileName = req.params.file;
+    const fileName = safeName(req.params.file);
+    if (!fileName) return res.status(400).json({ error: 'Invalid name' });
     const filePath = './parcours/' + fileName + '.json';
     var content = req.body;
 
@@ -1398,13 +1420,15 @@ app.post('/edit/:file/json', requireAuth, express.json(), (req, res) => {
 
 // Media json file tree (one deep) with folders as keys and files as values list
 app.get('/mediaList/:parcours', (req, res) => {
-  const mediaFolder = './media/'+req.params.parcours+'/';
+  const parcours = safeName(req.params.parcours);
+  if (!parcours) return res.status(400).json({ error: 'Invalid name' });
+  const mediaFolder = './media/'+parcours+'/';
 
   // Create folder if not exists
   if (!fs.existsSync(mediaFolder)) fs.mkdirSync(mediaFolder);
 
   const media = {'.':[]};
-  const mediaStats = getParcoursMediaStats(req.params.parcours);
+  const mediaStats = getParcoursMediaStats(parcours);
   fs.readdirSync(mediaFolder).forEach(folder => {
     if (fs.lstatSync(mediaFolder + folder).isDirectory())
       media[folder] = fs.readdirSync(mediaFolder + folder)
@@ -1423,7 +1447,9 @@ const MPEG_BITRATES = new Set([32,40,48,56,64,80,96,112,128,144,160,192,224,256,
 
 // Check all MP3 files in a parcours for mobile compatibility issues
 app.get('/mediaCheck/:parcours', async (req, res) => {
-  const mediaFolder = './media/' + req.params.parcours + '/';
+  const parcours = safeName(req.params.parcours);
+  if (!parcours) return res.status(400).json({ error: 'Invalid name' });
+  const mediaFolder = './media/' + parcours + '/';
   if (!fs.existsSync(mediaFolder)) return res.json({});
 
   // Collect all files as { key: "folder/file", path: "..." }
@@ -1484,19 +1510,24 @@ app.get('/mediaCheck/:parcours', async (req, res) => {
 // Upload media file with folder argument from file argument
 app.post('/mediaUpload/:parcours/:folder/:name?', requireAuth, upload.single('file'), (req, res) =>
 {
+  const parcours = safeName(req.params.parcours);
+  const folder = safeName(req.params.folder);
+  if (!parcours || !folder) return res.status(400).json({ error: 'Invalid name' });
+
   // Guest: can only upload to GUEST_ parcours
   if (req.userRole === 'guest') {
     try {
-      const pc = JSON.parse(fs.readFileSync('./parcours/' + req.params.parcours + '.json', 'utf8'));
+      const pc = JSON.parse(fs.readFileSync('./parcours/' + parcours + '.json', 'utf8'));
       if (!pc.info.name.startsWith('GUEST_')) return res.status(403).json({ error: 'Access denied' });
     } catch { return res.status(403).json({ error: 'Access denied' }); }
   }
 
-  console.log('mediaUpload', req.file, req.params.parcours, req.params.folder, req.params.name);
-  
-  const filename = req.params.name ? req.params.name + '.' + req.file.originalname.split('.').pop() : req.file.originalname;
+  console.log('mediaUpload', req.file, parcours, folder, req.params.name);
 
-  const mediaFolder = './media/' + req.params.parcours + '/' + req.params.folder + '/';
+  const filename = safeName(req.params.name ? req.params.name + '.' + req.file.originalname.split('.').pop() : req.file.originalname);
+  if (!filename) return res.status(400).json({ error: 'Invalid filename' });
+
+  const mediaFolder = './media/' + parcours + '/' + folder + '/';
   const filePath = mediaFolder + filename;
 
   fs.renameSync(req.file.path, filePath);
@@ -1505,16 +1536,21 @@ app.post('/mediaUpload/:parcours/:folder/:name?', requireAuth, upload.single('fi
 
 // Remove media file
 app.get('/mediaRemove/:parcours/:folder/:file', requireAuth, (req, res) => {
+  const parcours = safeName(req.params.parcours);
+  const folder = safeName(req.params.folder);
+  const file = safeName(req.params.file);
+  if (!parcours || !folder || !file) return res.status(400).json({ error: 'Invalid name' });
+
   // Guest: can only remove from GUEST_ parcours
   if (req.userRole === 'guest') {
     try {
-      const pc = JSON.parse(fs.readFileSync('./parcours/' + req.params.parcours + '.json', 'utf8'));
+      const pc = JSON.parse(fs.readFileSync('./parcours/' + parcours + '.json', 'utf8'));
       if (!pc.info.name.startsWith('GUEST_')) return res.status(403).json({ error: 'Access denied' });
     } catch { return res.status(403).json({ error: 'Access denied' }); }
   }
 
-  const mediaFolder = './media/' + req.params.parcours + '/' + req.params.folder + '/';
-  const filePath = mediaFolder + req.params.file;
+  const mediaFolder = './media/' + parcours + '/' + folder + '/';
+  const filePath = mediaFolder + file;
   fs.unlinkSync(filePath, (err) => {
     if (err) console.error(err);
   });
@@ -1523,16 +1559,20 @@ app.get('/mediaRemove/:parcours/:folder/:file', requireAuth, (req, res) => {
 
 // Remove folder and all files inside
 app.get('/mediaRemoveFolder/:parcours/:folder', requireAuth, (req, res) => {
+  const parcours = safeName(req.params.parcours);
+  const folder = safeName(req.params.folder);
+  if (!parcours || !folder) return res.status(400).json({ error: 'Invalid name' });
+
   // Guest: can only remove from GUEST_ parcours
   if (req.userRole === 'guest') {
     try {
-      const pc = JSON.parse(fs.readFileSync('./parcours/' + req.params.parcours + '.json', 'utf8'));
+      const pc = JSON.parse(fs.readFileSync('./parcours/' + parcours + '.json', 'utf8'));
       if (!pc.info.name.startsWith('GUEST_')) return res.status(403).json({ error: 'Access denied' });
     } catch { return res.status(403).json({ error: 'Access denied' }); }
   }
 
-  const mediaFolder = './media/' + req.params.parcours + '/' + req.params.folder;
-  if (req.params.folder)
+  const mediaFolder = './media/' + parcours + '/' + folder;
+  if (folder)
     fs.rm(mediaFolder, { recursive: true }, (err) => {
       if (err) console.error(err);
     });
