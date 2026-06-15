@@ -81,6 +81,7 @@ TM.list = (function() {
     var trackMapOpen = new Map();     // trackKey -> explicit bool (overrides default)
     var trackMapModes = new Map();    // trackKey -> 'tracks' | 'accuracy'
     var trackMapHandles = [];         // destroyed on each render
+    var trackMapRenderToken = 0;      // guards superseded async map builds
     var timelineView = new Map();     // tlKey -> { factor, center } (zoom state)
     var selectedIds = new Set();      // multi-selection (selective delete/archive)
     var lastCheckedId = null;         // shift-click range anchor
@@ -554,6 +555,11 @@ TM.list = (function() {
     function renderTrackMaps(filteredByKey) {
         trackMapHandles.forEach(function(handle) { try { handle.destroy(); } catch (e) {} });
         trackMapHandles = [];
+        // Each render gets a generation token. Track map builds are async
+        // (they fetch walk details first); a render that supersedes this one
+        // bumps the token, so a late-resolving build bails instead of calling
+        // L.map() on a container the next render already initialized.
+        var token = ++trackMapRenderToken;
 
         document.querySelectorAll('[data-track-map]').forEach(function(mapEl) {
             var key = mapEl.dataset.trackMap;
@@ -563,8 +569,6 @@ TM.list = (function() {
             // it can take many more walks.
             sessions = sessions.slice(0, mode === 'accuracy' ? 24 : 8);
             if (!sessions.length) return;
-
-            mapEl.id = 'tm-track-map-' + key.replace(/[^a-zA-Z0-9_-]/g, '_');
 
             Promise.all(sessions.map(function(summary) {
                 return TM.api.getDetail(summary.sessionId, TM.state.archived()).then(function(data) {
@@ -576,8 +580,10 @@ TM.list = (function() {
                 }).filter(Boolean)));
                 var overlayPromise = ids.length === 1 ? TM.api.loadParcoursOverlay(ids[0]) : Promise.resolve(null);
                 return overlayPromise.then(function(overlay) {
-                    if (!document.getElementById(mapEl.id)) return;
-                    trackMapHandles.push(TM.maps.renderGroupMap(mapEl.id, items, overlay, {
+                    // Superseded by a newer render, or the element was rebuilt
+                    // out of the DOM — don't init a map on a stale container.
+                    if (token !== trackMapRenderToken || !mapEl.isConnected) return;
+                    trackMapHandles.push(TM.maps.renderGroupMap(mapEl, items, overlay, {
                         viewKey: 'tracks:' + key,
                         mode: mode,
                         onTrackHover: previewRow,
@@ -585,6 +591,7 @@ TM.list = (function() {
                     }));
                 });
             }).catch(function(error) {
+                if (token !== trackMapRenderToken || !mapEl.isConnected) return;
                 mapEl.innerHTML = '<div class="text-danger p-2">Failed to load tracks: ' + esc(String(error)) + '</div>';
             });
         });

@@ -85,8 +85,16 @@ TM.maps = (function() {
         }, { passive: false });
     }
 
-    function createBaseMap(containerId) {
-        var map = L.map(containerId, {
+    function createBaseMap(container) {
+        // Accepts an id string or an element. If the element was already
+        // initialized by a prior (racing) render, tear that down first so
+        // L.map() doesn't throw "Map container is already initialized".
+        var el = typeof container === 'string' ? document.getElementById(container) : container;
+        if (el && el._leaflet_id != null) {
+            el._leaflet_id = null;
+            el.innerHTML = '';
+        }
+        var map = L.map(el || container, {
             zoomSnap: 0.25,
             zoomDelta: 0.5,
             scrollWheelZoom: false
