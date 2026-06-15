@@ -569,6 +569,9 @@ TM.list = (function() {
             var key = mapEl.dataset.trackMap;
             var mode = trackMapModes.get(key) || 'tracks';
             var sessions = filteredByKey.get(key) || [];
+            // The accuracy heat reflects real-world GPS quality, so exclude
+            // GPS-simulated walks (their faked fixes would distort the cells).
+            if (mode === 'accuracy') sessions = sessions.filter(function(s) { return !s.isSimulation; });
             // Track readability caps at 8; the accuracy heat aggregates, so
             // it can take many more walks.
             sessions = sessions.slice(0, mode === 'accuracy' ? 24 : 8);
