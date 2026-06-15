@@ -138,9 +138,16 @@ TM.maps = (function() {
         var fireCounts = options.fireCounts || null;
 
         (spots.steps || []).forEach(function(step, index) {
-            var style = options.lightSteps
-                ? { color: '#ffc107', weight: 1, opacity: 0.45, fillOpacity: 0.03 }
-                : { color: '#ffc107', weight: 2, fillOpacity: 0.08 };
+            var style;
+            if (options.greySteps) {
+                // Neutral background context (multi-track day map): just shows
+                // where the steps are without competing with the track colours.
+                style = { color: '#adb5bd', weight: 1, opacity: 0.5, fillOpacity: 0.04 };
+            } else if (options.lightSteps) {
+                style = { color: '#ffc107', weight: 1, opacity: 0.45, fillOpacity: 0.03 };
+            } else {
+                style = { color: '#ffc107', weight: 2, fillOpacity: 0.08 };
+            }
             var label = 'Step ' + index + ': ' + (step.name || '');
             // Cross-walk reliability colouring (Parcours view): rate = fired /
             // walks that reached this step.
@@ -470,10 +477,11 @@ TM.maps = (function() {
         var overlayGroup = L.featureGroup().addTo(map);
         var featureGroup = L.featureGroup().addTo(map);
 
-        // Subdued steps (or reliability-coloured ones), to keep tracks/heat readable.
+        // Neutral grey steps as background context (or reliability-coloured
+        // ones in the Parcours view), to keep tracks/heat readable.
         addOverlayZones(overlayGroup, overlay, options.stepRates
             ? { stepRates: options.stepRates }
-            : { lightSteps: true });
+            : { greySteps: true });
 
         if (options.mode === 'accuracy') {
             addAccuracyHeat(featureGroup, items);

@@ -78,7 +78,7 @@ TM.list = (function() {
     var activeErrorPopover = null;
     var dayToggles = new Map();       // dayKey -> bool (user override: true=open)
     var onbExpanded = new Set();      // groupDomKey
-    var openTrackMaps = new Set();    // groupDomKey or 'day:'+prefix
+    var trackMapOpen = new Map();     // trackKey -> explicit bool (overrides default)
     var trackMapModes = new Map();    // trackKey -> 'tracks' | 'accuracy'
     var trackMapHandles = [];         // destroyed on each render
     var timelineView = new Map();     // tlKey -> { factor, center } (zoom state)
@@ -481,13 +481,20 @@ TM.list = (function() {
         return dayKey === TM.util.dayKey(Date.now()); // only today open by default
     }
 
-    function trackHostHtml(trackKey) {
-        if (!openTrackMaps.has(trackKey)) return '';
+    // The day/parcours-section summary map is shown by default (when its day is
+    // expanded); per-device group maps default closed. A user toggle stores an
+    // explicit override either way.
+    function isTrackOpen(trackKey, defaultOpen) {
+        return trackMapOpen.has(trackKey) ? trackMapOpen.get(trackKey) : !!defaultOpen;
+    }
+
+    function trackHostHtml(trackKey, defaultOpen) {
+        if (!isTrackOpen(trackKey, defaultOpen)) return '';
         var mode = trackMapModes.get(trackKey) || 'tracks';
         return '<div class="tm-trackmap-bar">' +
             '<div class="btn-group btn-group-sm">' +
                 '<button class="btn btn-outline-secondary py-0' + (mode === 'tracks' ? ' active' : '') + '" data-action="trackmap-mode" data-mode="tracks" data-track-key="' + esc(trackKey) + '">Tracks</button>' +
-                '<button class="btn btn-outline-secondary py-0' + (mode === 'accuracy' ? ' active' : '') + '" data-action="trackmap-mode" data-mode="accuracy" data-track-key="' + esc(trackKey) + '" title="mean GPS accuracy per ~14m cell, all walks aggregated">Avg accuracy</button>' +
+                '<button class="btn btn-outline-secondary py-0' + (mode === 'accuracy' ? ' active' : '') + '" data-action="trackmap-mode" data-mode="accuracy" data-track-key="' + esc(trackKey) + '" title="median GPS accuracy per ~25m cell across devices, all walks aggregated">Avg accuracy</button>' +
             '</div></div>' +
             '<div class="tm-group-map" data-track-map="' + esc(trackKey) + '"></div>';
     }
@@ -504,8 +511,9 @@ TM.list = (function() {
             (day.multi ? '<span>' + day.sections.length + ' parcours</span>' : '') +
         '</div>';
 
+        var dayMapOpen = !day.multi && isTrackOpen(day.sections[0].trackKey, open);
         var actions = '<div class="tm-day-actions">' +
-            (day.multi ? '' : '<button class="btn btn-outline-secondary btn-sm py-0" data-action="toggle-tracks" data-track-key="' + esc(day.sections[0].trackKey) + '" title="All day tracks on one map">Map</button>') +
+            (day.multi ? '' : '<button class="btn btn-outline-secondary btn-sm py-0" data-action="toggle-tracks" data-track-key="' + esc(day.sections[0].trackKey) + '" title="All day tracks on one map">' + (dayMapOpen ? 'Hide map' : 'Map') + '</button>') +
             '<div class="dropdown">' +
                 '<button class="btn btn-outline-secondary btn-sm py-0 dropdown-toggle" data-bs-toggle="dropdown">⋯</button>' +
                 '<ul class="dropdown-menu dropdown-menu-end">' +
@@ -516,16 +524,17 @@ TM.list = (function() {
         '</div>';
 
         var body = day.sections.map(function(section) {
+            var sectionMapOpen = isTrackOpen(section.trackKey, open);
             var head = day.multi
                 ? '<div class="tm-parcours-head">' +
                     '<span class="tm-parcours-title">' + esc(section.label) + '</span>' +
                     '<span class="text-secondary small">' + section.sessions.length + ' session' + (section.sessions.length > 1 ? 's' : '') + '</span>' +
-                    '<button class="btn btn-outline-secondary btn-sm py-0 ms-auto" data-action="toggle-tracks" data-track-key="' + esc(section.trackKey) + '">Map</button>' +
+                    '<button class="btn btn-outline-secondary btn-sm py-0 ms-auto" data-action="toggle-tracks" data-track-key="' + esc(section.trackKey) + '">' + (sectionMapOpen ? 'Hide map' : 'Map') + '</button>' +
                   '</div>'
                 : '';
             var inner = head +
                 renderTimeline(section.sessions, section.prefix) +
-                trackHostHtml(section.trackKey) +
+                trackHostHtml(section.trackKey, open) +
                 section.groups.map(function(group) { return renderGroup(group, day.dayKey, section.prefix); }).join('');
             return day.multi ? '<div class="tm-parcours-section">' + inner + '</div>' : inner;
         }).join('');
@@ -1012,8 +1021,9 @@ TM.list = (function() {
             if (action === 'toggle-tracks') {
                 event.stopPropagation();
                 var trackKey = actionEl.dataset.trackKey;
-                if (openTrackMaps.has(trackKey)) openTrackMaps.delete(trackKey);
-                else openTrackMaps.add(trackKey);
+                // Toggle relative to the current effective (possibly default) state.
+                var currentlyOpen = !!document.querySelector('[data-track-map="' + CSS.escape(trackKey) + '"]');
+                trackMapOpen.set(trackKey, !currentlyOpen);
                 render();
                 return;
             }
