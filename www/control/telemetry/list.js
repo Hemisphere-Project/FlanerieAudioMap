@@ -331,13 +331,14 @@ TM.list = (function() {
 
         var shortCode = String(summary.sessionId || '').split('_').pop();
 
-        return '<div class="tm-row' + (expanded ? ' active' : '') + (options.alt ? ' tm-row-alt' : '') + (summary.kind === 'onboarding' ? ' tm-row-onb' : '') + '" ' +
-            'data-session-id="' + esc(summary.sessionId) + '" title="' + esc(summary.sessionId + ' · ' + status) + '">' +
+        return '<div class="tm-row' + (expanded ? ' active' : '') + (options.alt ? ' tm-row-alt' : '') + (summary.kind === 'onboarding' ? ' tm-row-onb' : '') + (summary.isSimulation ? ' tm-row-sim' : '') + '" ' +
+            'data-session-id="' + esc(summary.sessionId) + '" title="' + esc(summary.sessionId + ' · ' + status + (summary.isSimulation ? ' · simulation' : '')) + '">' +
             '<div class="tm-row-checkcell"><input type="checkbox" class="form-check-input tm-row-check"' + (selectedIds.has(summary.sessionId) ? ' checked' : '') + '></div>' +
             '<div class="tm-row-time">' + esc(TM.util.formatTime(summary.startTime)) +
                 '<span class="tm-row-code">' + esc(shortCode) + '</span></div>' +
             '<div class="tm-row-parcours">' + esc(parcoursLabel(summary) || '-') +
                 (summary.kind === 'onboarding' ? ' <span class="badge text-bg-dark">onb</span>' : '') +
+                (summary.isSimulation ? ' <span class="badge tm-sim-badge" title="GPS-simulated walk">sim</span>' : '') +
                 (chips.length ? ' ' + chips.join(' ') : '') + '</div>' +
             '<div class="tm-row-duration">' + esc(TM.util.formatDuration(summary.durationMs)) + '</div>' +
             '<div class="tm-row-prog">' + progressHtml(summary) + '</div>' +

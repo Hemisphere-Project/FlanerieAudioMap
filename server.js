@@ -509,6 +509,12 @@ function findParcoursByTelemetryId(parcoursId) {
 function summarizeTelemetrySessionData(data) {
   const events = Array.isArray(data.events) ? data.events : [];
   const gpsEvents = events.filter(event => event.type === 'gps' && event.data && typeof event.data.acc === 'number');
+  // Simulation walks (runMode 'simulate') emit GPS fixes tagged source
+  // 'simulate'; real walks never do. Use all GPS events (not just acc-typed)
+  // for the ratio.
+  const allGps = events.filter(event => event.type === 'gps' && event.data);
+  const simulateSamples = allGps.filter(event => event.data.source === 'simulate').length;
+  const isSimulation = allGps.length > 0 && (simulateSamples / allGps.length) >= 0.5;
   const gpsQualitySummaries = events.filter(event => event.type === 'gps_quality_summary');
   const stepFires = events.filter(event => event.type === 'step_fire');
   const uniqueSteps = new Set(stepFires
@@ -585,6 +591,7 @@ function summarizeTelemetrySessionData(data) {
     resumeCount,
     firedSteps: Array.from(uniqueSteps).sort((a, b) => a - b),
     uniqueStepCount: uniqueSteps.size,
+    isSimulation,
     gpsCount: gpsEvents.length,
     avgAccuracy: gpsAccuracies.length > 0
       ? gpsAccuracies.reduce((sum, value) => sum + value, 0) / gpsAccuracies.length
@@ -678,6 +685,7 @@ function buildSessionSummary(data) {
     parcoursId: data.parcoursId,
     parcoursName: data.parcoursName,
     kind,
+    isSimulation: summary.isSimulation,
     deviceModel: getTelemetryDeviceLabel(data.client),
     devicePlatform: data.client && (data.client.devicePlatform || data.client.platform) ? (data.client.devicePlatform || data.client.platform) : '',
     deviceManufacturer: data.client && (data.client.deviceManufacturer || data.client.manufacturer) ? (data.client.deviceManufacturer || data.client.manufacturer) : '',
