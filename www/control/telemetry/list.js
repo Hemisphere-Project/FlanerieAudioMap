@@ -121,6 +121,7 @@ TM.list = (function() {
         var sessions = TM.api.getSessions(archived);
         var parcoursValue = TM.state.get('parcours');
         var kind = TM.state.get('kind');
+        var sim = TM.state.get('sim');
         var statuses = TM.state.statusSet();
         var dev = TM.state.get('dev');
         var query = TM.state.get('q').trim().toLowerCase();
@@ -132,6 +133,8 @@ TM.list = (function() {
             if (parcoursValue && parcoursLabel(summary) !== parcoursValue) return false;
             if (kind === 'walk' && summary.kind !== 'walk') return false;
             if (kind === 'onb' && summary.kind !== 'onboarding') return false;
+            if (sim === 'hide' && summary.isSimulation) return false;
+            if (sim === 'only' && !summary.isSimulation) return false;
             if (dev && summary.deviceUuid !== dev) return false;
             if (query && String(summary.sessionId || '').toLowerCase().indexOf(query) === -1) return false;
 

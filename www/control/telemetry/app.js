@@ -21,6 +21,7 @@ TM.app = (function() {
     function syncControlsFromState() {
         document.getElementById('f-parcours').value = TM.state.get('parcours');
         document.getElementById('f-kind').value = TM.state.get('kind');
+        document.getElementById('f-sim').value = TM.state.get('sim');
         document.getElementById('f-dev').value = TM.state.get('dev');
         document.getElementById('f-q').value = TM.state.get('q');
         document.getElementById('f-sort').value = TM.state.get('sort');
@@ -70,6 +71,7 @@ TM.app = (function() {
     function bindFilterControls() {
         document.getElementById('f-parcours').addEventListener('change', function() { TM.state.set({ parcours: this.value }); });
         document.getElementById('f-kind').addEventListener('change', function() { TM.state.set({ kind: this.value }); });
+        document.getElementById('f-sim').addEventListener('change', function() { TM.state.set({ sim: this.value }); });
         document.getElementById('f-dev').addEventListener('change', function() { TM.state.set({ dev: this.value }); });
         document.getElementById('f-sort').addEventListener('change', function() { TM.state.set({ sort: this.value }); });
 
@@ -381,7 +383,7 @@ TM.app = (function() {
 
     // ---- State change routing ----
 
-    var FILTER_KEYS = ['parcours', 'kind', 'status', 'dev', 'q', 'h', 'prog', 'sort', 'ndays'];
+    var FILTER_KEYS = ['parcours', 'kind', 'sim', 'status', 'dev', 'q', 'h', 'prog', 'sort', 'ndays'];
 
     function onStateChange(changedKeys) {
         if (changedKeys.indexOf('tab') !== -1) {

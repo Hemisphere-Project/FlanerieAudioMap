@@ -16,9 +16,18 @@ TM.parcoursView = (function() {
         return String(summary.parcoursName || summary.parcoursId || '').replace(/^onb:/, '');
     }
 
+    // Real walks only — simulation walks (GPS-faked) would pollute the
+    // reliability rates and the accuracy heat, so the whole Parcours analysis
+    // excludes them.
     function allWalks() {
         return TM.api.getSessions(false).concat(TM.api.getSessions(true))
-            .filter(function(s) { return s.kind === 'walk'; });
+            .filter(function(s) { return s.kind === 'walk' && !s.isSimulation; });
+    }
+
+    function simWalkCountFor(label) {
+        return TM.api.getSessions(false).concat(TM.api.getSessions(true))
+            .filter(function(s) { return s.kind === 'walk' && s.isSimulation && parcoursLabelOf(s) === label; })
+            .length;
     }
 
     function labels() {
@@ -263,6 +272,9 @@ TM.parcoursView = (function() {
                             return '<option value="' + cap + '"' + (cap === heatCap ? ' selected' : '') + '>' + cap + '</option>';
                         }).join('') +
                     '</select>walks</div>' +
+                (simWalkCountFor(selected) > 0
+                    ? '<span class="small text-secondary" title="GPS-simulated walks are excluded from reliability and accuracy">' + simWalkCountFor(selected) + ' simulation' + (simWalkCountFor(selected) > 1 ? 's' : '') + ' excluded</span>'
+                    : '') +
             '</div>' +
             renderStats(walks) +
             '<div class="pv-main">' +

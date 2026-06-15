@@ -10,6 +10,7 @@ TM.state = (function() {
         pv: '',               // parcours-view selected parcours label
         parcours: '',
         kind: 'all',          // all | walk | onb
+        sim: '',              // '' include | hide | only (simulation walks)
         status: '',           // csv of live,complete,partial,interrupted ('' = all)
         dev: '',              // deviceUuid
         q: '',                // sessionId substring
@@ -79,7 +80,7 @@ TM.state = (function() {
 
     function resetFilters() {
         set({
-            parcours: DEFAULTS.parcours, kind: DEFAULTS.kind, status: DEFAULTS.status,
+            parcours: DEFAULTS.parcours, kind: DEFAULTS.kind, sim: DEFAULTS.sim, status: DEFAULTS.status,
             dev: DEFAULTS.dev, q: DEFAULTS.q, h: DEFAULTS.h, prog: DEFAULTS.prog,
             sort: DEFAULTS.sort
         });
