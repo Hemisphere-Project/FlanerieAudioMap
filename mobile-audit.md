@@ -718,6 +718,44 @@ Also banked: morning startup gate cleared in ~10–20 s on both good-GPS devices
 
 ---
 
+## 2026-06-15 addendum — first apk-33 field walk (FP4, solo): apk-33 stack re-validated; weak-GPS calibration STILL OPEN (FP4 had good GPS); two roadmap corrections
+
+One completed solo walk: **FP4 (Fairphone 4), Android 15, apk 33, webapp `a2121c9`, bg-geo 2.15.1 / power-opt 0.3.3 / audio-simple 0.3.4 / audiofocus 1.9.1** — `20260615_080411_bglu`, FLANERIE_INVITES_V3 (21 steps), 42m26s, **completed** (step 20 fired + done), 8073 events, walked largely backgrounded/locked. This was brought specifically to close the **weak-GPS** items (flat-20 m startup gate, A4 `gps_degraded` calibration, E1/E2/E3 at realistic accuracy). **It did not close them — see correction #1.**
+
+### ✅ What this walk validates
+
+- **First apk-33 field walk — the build is sound end-to-end.** 42 min, completed, zero audio errors, zero GPS state transitions (`acquiring/frozen/lost/recovered` all 0), 443 real fixes with 0 gaps ≥ 90 s. The media-downloader rewrite (apk 33) did not regress the app; **but the chunked downloader itself was NOT exercised** — the pack was pre-loaded (`media_integrity_check` only, no `media_pack_loaded`), so the 2026-06-12 field validation (`.part` resume, `media_pack_loaded.ms`) is **still pending a real field download**.
+- **D1/D2/keepalive stack clean on a NEW device (re-confirms the 2026-06-11 P0 closure).** `watchdog_stats notifyCount=0` (no false fires, no real freeze), `rendererNudgeCount=38`, `autoForegroundCount=0`, `walkActiveRestored=false`; D2 rail `gps_rail_configured=1` + `wakeCount=38`; levers live (`renderer_priority {keep:true,result:"kept"}`, `audio_context_state running`); `alarm_wake_stats count=83` (BG-5 AlarmManager alive). JS never froze (max inter-event gap **30 s**, inside the 90 s bar) across a backgrounded walk.
+- **Architecture D fail-soft validated on a 2nd no-GMS device.** `location_dispatch_stats fusedAvailable=false` (the FP4 is deGoogled / no Play-Services Fused provider — like the 2026-06-11 Pixel 4a/LineageOS); raw-primary carried the entire walk (`rawDelivered` climbing, `fusedSuppressed=1251`, `fusedDelivered=1`). **Bonus: the FP4 now doubles as a permanent no-GMS Architecture-D test device** — but cannot test GMS-Fused-specific paths.
+- **A4 `gps_degraded` does NOT false-fire** (`degraded=0/rec=0`) — correct, accuracy never sustained > 35 m (max was a single 30 m fix). Validates the guard; does **not** calibrate the threshold (correction #1).
+- **`step_resume_current` overshoot is benign** (the `stepResumeCurrent=2` flag): `border=−0.48 m` (step 0) and `−1.36 m` (step 10) — both fractionally *inside*, within GPS noise; correct re-resume, not a premature advance.
+- **`accuracy_near_border` clean: no phantom-inside firing.** 571 samples (560 inside / 11 outside); **no step fired while geometrically outside**; max outside-overshoot **+4.7 m** — but at avgAcc 10 m this does not stress E1/E2/E3 (correction #1).
+
+### 🔴 Correction #1 — the FP4 is NOT a reliable weak-GPS proxy; the weak-GPS items remain OPEN
+
+The roadmap (D3) assumed FP4 ≈ avgAcc 20–30 m. **Today the FP4 delivered good GPS: raw-fix p50 = 10 m, p90 = 12 m, p95 = 14 m, max = 30 m, avg = 10.3 m** (only 5 `gps_trigger_rejected` blips at 30–45 m, all instantly recovered). Consequences:
+
+- **Flat-20 m startup gate: NOT captured AND would not have been stressed.** No `gps_startup_*` events in the file — the gate runs in the separate **onboarding** session (`startOnboarding`/`endOnboarding`, opened before the walk `TELEMETRY.start()`), and only the walk file was uploaded today (the onboarding session is absent — not uploaded or pruned-short). Even had it been captured, a device holding ≤ 14 m for 95 % of fixes clears the 20 m bar trivially. **The TEST-FIRST flat-20 m-bar validation (2026-06-10) is still owed.**
+- **A4 threshold calibration:** 0 degraded events ⇒ no histogram to tune `DEGRADED_ACCURACY_M=35` / `DEGRADED_SUSTAIN_MS=60 s`. Still owed.
+- **E1/E2/E3 at realistic weak accuracy:** got clean data at 10 m, not the weak-accuracy overshoot the gates need. Still owed.
+
+**What's actually needed:** these items require a *genuinely* weak or degrading GPS signal, not the FP4 per se. Options: (a) a different device with a worse GPS floor; (b) walk the FP4 in a GPS-hostile setting (urban canyon / dense canopy) to force avgAcc up; (c) artificial degradation. Re-tagging D3: "FP4-class weak-GPS device" → "**a walk that actually sustains avgAcc ≥ 20 m**" (device-or-environment). **Also: ensure the onboarding session is uploaded next time** — without it the startup gate is invisible regardless of accuracy.
+
+### 🔴 Correction #2 — apk 33 ships audio-simple **0.3.4**, NOT 0.3.5; the B1 diag is in NO deployed build
+
+`session_diag` reports **`audio-simple@0.3.4`** on apk 33. The B1 diagnostic (selected-decoder name, `decoder_software`, sink/init counters, `players_prepared`) shipped in **0.3.5** (`a3e9a6a`, committed 2026-06-11 23:32 — *before* the apk-33/`266b885` build on 2026-06-12 15:19), so the roadmap line "v0.3.5 … reinstalled into FlanerieCordova; needs apk 32 build" (mobile-audit.md B1) **did not take in the build** — the apk-32 and apk-33 binaries were both built against 0.3.4. The fork and `node_modules` are now at 0.3.5 (B1 code present in `platforms/android`), but `plugins/` metadata still reads 0.3.4 — a `cordova prepare`-only state, not a clean reinstall, so a build might compile the code while still reporting 0.3.4 and leaving "diag present?" unverifiable from telemetry.
+
+**Consequence: the B3 F5121 soak was blocked** — on apk 33 a 5001 would carry no `diag`. **RESOLVED 2026-06-15 (this session):** ran the `plugin-upgrade` skill (`sync-workspace-plugins.mjs --apply --plugins cordova-plugin-audio-simple`) — clean remove+add of audio-simple 0.3.5 into FlanerieCordova. Verified: `cordova plugin list` → 0.3.5, `plugin-versions.js` (the `document.PLUGIN_VERSIONS` source `session_diag` reads) → 0.3.5, B1 diag (`decoder_software`/`onAudioDecoderInitialized`) compiled into `platforms/android/.../ExoPlayerInstance.java`, `check:plugin-sources` OK. **Root cause of the skew confirmed:** the lockfile was already `0.3.5 @ a3e9a6a` (someone ran `npm install` after the apk-33 build) but the cordova plugin reinstall was never re-run, so apk 33 compiled from the stale 0.3.4 `plugins/` tree; `git status` clean (the fix only regenerated untracked `plugins/`+`platforms/` artifacts — nothing to commit). **Only remaining gate before the soak: build apk 34** (operator), then confirm `session_diag audio-simple@0.3.5`. (Moot for the FP4 walk itself — 0 audio errors regardless.)
+
+### Net roadmap impact
+
+- **apk 33 is field-proven sound** (modulo the un-exercised media downloader). The Android resilience stack is now validated on three independent no-GMS/locked-pocket walks.
+- **Still blocking the next field test:** (1) weak-GPS data (startup gate + A4 + E1/E2/E3) — needs a sustained-≥20 m walk and the onboarding session uploaded; (2) B1/B2 codec path — audio-simple 0.3.5 now cleanly reinstalled (2026-06-15, this session), so this is down to **build apk 34** → F5121 soak; (3) a real field media-pack download to validate the chunked downloader.
+
+> See also [20260615-independent-audit.md](20260615-independent-audit.md) — independent full-codebase audit + consolidated forward roadmap (adds server-security, build-provenance, and tech-debt workstreams; corrects the FGS-geofencing reading; confirms the flat-20 m bar + plugin-version coherence in source).
+
+---
+
 ## Telemetry events (current code)
 
 ### GPS / lifecycle
