@@ -106,7 +106,10 @@ TM.app = (function() {
         bindRangePair('f-hmin', 'f-hmax', 'h', 0, 24);
         bindRangePair('f-pmin', 'f-pmax', 'prog', 0, 100);
 
-        document.getElementById('f-status').addEventListener('click', function(event) {
+        // Status chips were removed from the bar; the status= URL param still
+        // filters (deep links) but has no on-page control.
+        var statusFilterEl = document.getElementById('f-status');
+        if (statusFilterEl) statusFilterEl.addEventListener('click', function(event) {
             var chip = event.target.closest('.tm-chip');
             if (!chip) return;
             var statuses = TM.state.statusSet();
