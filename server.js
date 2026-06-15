@@ -1268,9 +1268,12 @@ app.get('/edit/:file', requireAuth, (req, res) => {
   res.sendFile(path.join(__dirname, 'www', 'control', 'edit.html'));
 });
 
-// get parcours json (S1 — requireAuth: this was the one unauthenticated path-build,
-// readable via '..%2f..%2fguest_password' before the fix)
-app.get('/edit/:file/json', requireAuth, (req, res) => {
+// get parcours json — UNAUTHENTICATED by design: the client app (parcours.js
+// loadFromRemote) fetches its parcours definition here with no cookie, like the
+// public /parcours static mount. S1 keeps it public but adds the safeName()
+// traversal guard, so it can no longer escape ./parcours/ to read an arbitrary
+// .json (e.g. '..%2f..%2fguest_password'). Guest-role is still gated below.
+app.get('/edit/:file/json', (req, res) => {
   const role = getUserRole(req);
   const fileName = safeName(req.params.file);
   if (!fileName) return res.status(400).json({ error: 'Invalid name' });
