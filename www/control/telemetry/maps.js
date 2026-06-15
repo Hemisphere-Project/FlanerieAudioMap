@@ -148,9 +148,10 @@ TM.maps = (function() {
         (spots.steps || []).forEach(function(step, index) {
             var style;
             if (options.greySteps) {
-                // Neutral background context (multi-track day map): just shows
-                // where the steps are without competing with the track colours.
-                style = { color: '#adb5bd', weight: 1, opacity: 0.5, fillOpacity: 0.04 };
+                // Neutral background context (multi-track day map): visible on
+                // the light OSM tiles (hence a dark grey) but without competing
+                // with the bright track colours.
+                style = { color: '#343a40', weight: 2, opacity: 0.8, fillOpacity: 0.06 };
             } else if (options.lightSteps) {
                 style = { color: '#ffc107', weight: 1, opacity: 0.45, fillOpacity: 0.03 };
             } else {
