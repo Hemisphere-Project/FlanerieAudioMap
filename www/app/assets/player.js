@@ -869,6 +869,7 @@ class PlayerSimple extends EventEmitter
                 if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_track_reclaim', {
                     src: this._src(),
                     backend: this._backend,
+                    proactive: diag.proactive,
                     reclaimed: diag.reclaimed,
                     players_prepared: diag.players_prepared,
                     players_playing: diag.players_playing,
