@@ -855,6 +855,24 @@ class PlayerSimple extends EventEmitter
             this._logAudioTelemetry('audio_playerror', error)
             this._resolveGeoTask('playerror', { error: String(error) })
         })
+        // B2b (2026-06-15) — Android AudioTrack-exhaustion (5001) reclaim+retry happened
+        // natively for this player (any layer type). The errored layer is being retried
+        // after idle tracks were freed, so it is NOT a dropped layer — no JS state change,
+        // just telemetry so we can measure the fix (was a silent ~20×/walk layer loss on
+        // the F5121). Never fires on Howler / iOS backends. See audio-simple ≥ 0.3.6.
+        this._player.on('trackreclaim', (id, info) => {
+            let diag = (info && info.diag) || {}
+            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audio_track_reclaim', {
+                src: this._src(),
+                backend: this._backend,
+                reclaimed: diag.reclaimed,
+                players_prepared: diag.players_prepared,
+                players_playing: diag.players_playing,
+                players_total: diag.players_total,
+                decoder_software: diag.decoder_software,
+                error_code: diag.error_code,
+            })
+        })
 
         this.master(media.master)
         // console.log('PlayerSimple load:', media.src)
