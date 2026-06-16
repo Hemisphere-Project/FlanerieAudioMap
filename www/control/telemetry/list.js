@@ -82,6 +82,7 @@ TM.list = (function() {
     var trackMapModes = new Map();    // trackKey -> 'tracks' | 'accuracy'
     var trackMapHandles = [];         // destroyed on each render
     var trackMapRenderToken = 0;      // guards superseded async map builds
+    var LIVE_MAP_KEY = 'live:all';    // shared IN PROGRESS map
     var timelineView = new Map();     // tlKey -> { factor, center } (zoom state)
     var selectedIds = new Set();      // multi-selection (selective delete/archive)
     var lastCheckedId = null;         // shift-click range anchor
@@ -567,21 +568,27 @@ TM.list = (function() {
 
         document.querySelectorAll('[data-track-map]').forEach(function(mapEl) {
             var key = mapEl.dataset.trackMap;
-            var mode = trackMapModes.get(key) || 'tracks';
+            var isLiveMap = key === LIVE_MAP_KEY;
+            var mode = isLiveMap ? 'tracks' : (trackMapModes.get(key) || 'tracks');
             var sessions = filteredByKey.get(key) || [];
             // The accuracy heat reflects real-world GPS quality, so exclude
             // GPS-simulated walks (their faked fixes would distort the cells).
             if (mode === 'accuracy') sessions = sessions.filter(function(s) { return !s.isSimulation; });
-            // Track readability caps at 8; the accuracy heat aggregates, so
-            // it can take many more walks.
-            sessions = sessions.slice(0, mode === 'accuracy' ? 24 : 8);
+            // Track readability caps at 8; the live map shows the whole fleet's
+            // current positions, the accuracy heat aggregates many more.
+            sessions = sessions.slice(0, isLiveMap ? 20 : (mode === 'accuracy' ? 24 : 8));
             if (!sessions.length) return;
 
-            Promise.all(sessions.map(function(summary) {
-                return TM.api.getDetail(summary.sessionId, TM.state.archived()).then(function(data) {
-                    return { session: summary, data: data };
-                });
-            })).then(function(items) {
+            // The live map needs current data — pull each session's incremental
+            // tail (updates the cache) so the "now" markers actually advance.
+            var fetchItem = function(summary) {
+                var get = isLiveMap
+                    ? TM.api.getDetailTail(summary.sessionId, false).then(function() { return TM.api.getDetail(summary.sessionId, false); })
+                    : TM.api.getDetail(summary.sessionId, TM.state.archived());
+                return get.then(function(data) { return { session: summary, data: data }; });
+            };
+
+            Promise.all(sessions.map(fetchItem)).then(function(items) {
                 var ids = Array.from(new Set(items.map(function(item) {
                     return String(item.data.parcoursId || item.data.parcoursName || '').replace(/^onb:/, '');
                 }).filter(Boolean)));
@@ -593,6 +600,7 @@ TM.list = (function() {
                     trackMapHandles.push(TM.maps.renderGroupMap(mapEl, items, overlay, {
                         viewKey: 'tracks:' + key,
                         mode: mode,
+                        live: isLiveMap,
                         onTrackHover: previewRow,
                         onTrackClick: jumpToRow
                     }));
@@ -769,7 +777,13 @@ TM.list = (function() {
         // Pinned IN PROGRESS section (active tab only)
         var liveSessions = TM.state.archived() ? [] : filtered.filter(function(s) { return TM.api.statusOf(s) === 'live'; });
         if (liveSessions.length) {
+            var liveWalks = liveSessions.filter(function(s) { return s.kind === 'walk'; });
+            // One shared map for all live walkers' current positions + tracks.
+            var liveMapHtml = liveWalks.length
+                ? '<div class="tm-group-map tm-live-map" data-track-map="' + LIVE_MAP_KEY + '"></div>'
+                : '';
             liveSectionEl.innerHTML = '<div class="tm-live-section"><h6>● IN PROGRESS</h6>' +
+                liveMapHtml +
                 liveSessions.map(function(summary) {
                     var html = renderRow(summary, {});
                     if (TM.detail.currentSessionId() === summary.sessionId) {
@@ -816,6 +830,7 @@ TM.list = (function() {
         // Track-map data: filtered sessions grouped by track key
         var byKey = new Map();
         var isWalk = function(s) { return s.kind === 'walk'; };
+        if (liveSessions.length) byKey.set(LIVE_MAP_KEY, liveSessions.filter(isWalk));
         days.forEach(function(day) {
             day.sections.forEach(function(section) {
                 byKey.set(section.trackKey, section.sessions.filter(isWalk));

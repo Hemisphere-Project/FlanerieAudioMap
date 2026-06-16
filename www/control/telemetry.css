@@ -136,6 +136,11 @@ body.tm-body {
     font-size: 0.8rem;
     margin-bottom: 8px;
 }
+.tm-live-map {
+    height: 340px;
+    margin: 0 0 10px;
+    border: 1px solid rgba(13, 202, 240, 0.3);
+}
 
 /* ---------- Day sections ---------- */
 

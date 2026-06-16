@@ -438,13 +438,15 @@ TM.detail = (function() {
 
     function currentMapOpts() {
         var view = TM.state.mapView();
+        var summary = current && TM.api.getSession(current.sessionId, TM.state.archived());
         return {
             colored: true,
             ribbon: view === 'gps',
             problems: view === 'prog',
             fireStatus: view === 'prog',
             lightSteps: view === 'gps',
-            allZones: TM.state.allZones()
+            allZones: TM.state.allZones(),
+            live: !!(summary && TM.api.statusOf(summary) === 'live')
         };
     }
 
@@ -625,6 +627,10 @@ TM.detail = (function() {
     function liveTick() {
         if (!current || !current.data) return Promise.resolve(false);
         var sessionId = current.sessionId;
+        var slider = current.panelEl.querySelector('[data-role="scrub"]');
+        // Was the scrubber parked at the live edge? If so, keep following it.
+        var wasFollowing = slider ? Number(slider.value) >= Number(slider.max) : true;
+
         return TM.api.getDetailTail(sessionId, TM.state.archived()).then(function(fresh) {
             if (!current || current.sessionId !== sessionId || !fresh.length) return false;
             var metrics = computeMetrics(current.data);
@@ -632,8 +638,11 @@ TM.detail = (function() {
             if (grid) grid.innerHTML = renderMetricCards(metrics);
             if (current.mapHandle) current.mapHandle.appendEvents();
             var gpsEvents = TM.maps.getGpsEvents(current.data.events || []);
-            var slider = current.panelEl.querySelector('[data-role="scrub"]');
-            if (slider) slider.max = Math.max(0, gpsEvents.length - 1);
+            var lastIndex = Math.max(0, gpsEvents.length - 1);
+            if (slider) slider.max = lastIndex;
+            // Advance the blue position marker to the new latest fix so it
+            // tracks the walker instead of leaving a stale dot behind.
+            if (wasFollowing && gpsEvents.length) setScrub(lastIndex);
             renderCharts();
             if (current.eventsState) applyEventFilters();
             return true;

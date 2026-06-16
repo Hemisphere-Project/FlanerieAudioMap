@@ -296,12 +296,16 @@ TM.maps = (function() {
         });
     }
 
-    function addStartEndMarkers(group, gpsEvents, labelPrefix) {
+    function addStartEndMarkers(group, gpsEvents, labelPrefix, live) {
         if (!gpsEvents.length) return;
         var first = gpsEvents[0];
-        var last = gpsEvents[gpsEvents.length - 1];
         group.addLayer(L.circleMarker([first.data.lat, first.data.lng], { radius: 7, color: '#198754', fillOpacity: 0.8 })
             .bindTooltip((labelPrefix || '') + 'Start'));
+        // For a live walk the latest fix is the CURRENT position, shown by the
+        // blue marker (scrub marker here, live marker on the group map) — not a
+        // red "End" (which reads as a finished walk).
+        if (live) return;
+        var last = gpsEvents[gpsEvents.length - 1];
         group.addLayer(L.circleMarker([last.data.lat, last.data.lng], { radius: 7, color: '#dc3545', fillOpacity: 0.8 })
             .bindTooltip((labelPrefix || '') + 'End'));
     }
@@ -341,7 +345,7 @@ TM.maps = (function() {
      * Returns { map, refresh(newOpts), appendEvents(), setScrub(gpsIndex), destroy() }.
      */
     function renderDetailMap(containerId, data, overlay, opts) {
-        var options = Object.assign({ colored: true, ribbon: false, problems: false, fireStatus: false, lightSteps: false, allZones: false }, opts || {});
+        var options = Object.assign({ colored: true, ribbon: false, problems: false, fireStatus: false, lightSteps: false, allZones: false, live: false }, opts || {});
         var viewKey = options.viewKey || ('detail:' + data.sessionId);
 
         var map = createBaseMap(containerId);
@@ -365,7 +369,7 @@ TM.maps = (function() {
             if (options.ribbon) addAccuracyRibbon(featureGroup, gpsEvents);
             addStepFireMarkers(featureGroup, events, gpsEvents);
             if (options.problems) addProblemMarkers(featureGroup, events, gpsEvents);
-            addStartEndMarkers(featureGroup, gpsEvents);
+            addStartEndMarkers(featureGroup, gpsEvents, null, options.live);
 
             if (firstDraw) {
                 var saved = viewStates.get(viewKey);
@@ -523,9 +527,20 @@ TM.maps = (function() {
             featureGroup.addLayer(L.circleMarker(latlngs[0], {
                 radius: 5, color: color, fillColor: color, fillOpacity: 0.7, weight: 1
             }).bindTooltip('Start ' + item.session.sessionId));
-            featureGroup.addLayer(L.circleMarker(latlngs[latlngs.length - 1], {
-                radius: 5, color: '#ffffff', fillColor: color, fillOpacity: 0.95, weight: 1
-            }).bindTooltip('End ' + item.session.sessionId));
+
+            // Latest fix: a "now" position marker for the live map (larger,
+            // bright outline), else the usual end marker.
+            var lastPoint = latlngs[latlngs.length - 1];
+            var deviceName = item.session.deviceModel || item.session.sessionId;
+            if (options.live) {
+                featureGroup.addLayer(L.circleMarker(lastPoint, {
+                    radius: 8, color: '#ffffff', fillColor: color, fillOpacity: 1, weight: 3
+                }).bindTooltip(deviceName + ' · now', { permanent: false }));
+            } else {
+                featureGroup.addLayer(L.circleMarker(lastPoint, {
+                    radius: 5, color: '#ffffff', fillColor: color, fillOpacity: 0.95, weight: 1
+                }).bindTooltip('End ' + item.session.sessionId));
+            }
         });
 
         finishGroupMap(map, featureGroup, viewKey, overlayGroup);
