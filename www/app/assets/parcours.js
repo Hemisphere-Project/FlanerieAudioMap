@@ -244,20 +244,15 @@ class Parcours extends EventEmitter {
         if (typeof TELEMETRY === 'undefined') return;
 
         let currentIndex = this.state.stepIndex;
-        let nextIndex = currentIndex < 0 ? 0 : currentIndex + 1;
         let currentStep = currentIndex >= 0 ? this.find('steps', currentIndex) : null;
-        let nextStep = this.find('steps', nextIndex) || null;
 
+        // Slimmed (2026-06-16): every consumer (session.mjs / server.js / control detail.js)
+        // reads ONLY currentStep; the distance/border/next-step fields were emitted per-fix
+        // but never read by any analyzer — dropped to cut ~66% of route_probe's bytes
+        // (was ~50% of the session file) with zero loss of consumed diagnosis.
         TELEMETRY.log('route_probe', {
             acceptedForTrigger: triggerAccepted,
             currentStep: currentStep ? currentStep._index : currentIndex,
-            currentName: currentStep ? currentStep._spot.name : null,
-            currentDistanceToBorder: currentStep ? currentStep.distanceToBorder(position) : null,
-            currentDistanceToCenter: currentStep ? currentStep.distanceToCenter(position) : null,
-            nextStep: nextStep ? nextStep._index : null,
-            nextName: nextStep ? nextStep._spot.name : null,
-            nextDistanceToBorder: nextStep ? nextStep.distanceToBorder(position) : null,
-            nextDistanceToCenter: nextStep ? nextStep.distanceToCenter(position) : null,
             gpsAccuracy: position && position.coords ? Math.round(position.coords.accuracy) : null,
             source: position ? (position.simulate ? 'simulate' : (position._source || 'unknown')) : null
         });
@@ -721,12 +716,9 @@ class Parcours extends EventEmitter {
         this.state.lastUpdatedMs = Date.now();
         try {
             localStorage.setItem('currentparcours', JSON.stringify(this.export(true)));
-            if (triggerReason && typeof TELEMETRY !== 'undefined') TELEMETRY.log('parcours_store', {
-                trigger: triggerReason,
-                stepIndex: this.state.stepIndex,
-                resumeStepVoicePos: this.state.resumeStepVoicePos,
-                visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
-            })
+            // parcours_store telemetry dropped (2026-06-16): it was a strict subset of
+            // voice_snapshot (same store() call, fewer fields) and read by no consumer.
+            // The localStorage persistence above is the functional part and stays.
         }
         catch (error) { console.error('Error storing parcours:', error); }
 
