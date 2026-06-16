@@ -9,7 +9,7 @@ TM.state = (function() {
         tab: 'sessions',      // sessions | archive | parcours | beacons
         pv: '',               // parcours-view selected parcours label
         parcours: '',
-        kind: 'all',          // all | walk | onb
+        kind: 'walk',         // all | walk | onb (default: walks only)
         sim: '',              // '' include | hide | only (simulation walks)
         status: '',           // csv of live,complete,partial,interrupted ('' = all)
         dev: '',              // deviceUuid
