@@ -602,7 +602,7 @@ TM.list = (function() {
                         mode: mode,
                         live: isLiveMap,
                         onTrackHover: previewRow,
-                        onTrackClick: jumpToRow
+                        onTrackClick: openAndJump
                     }));
                 });
             }).catch(function(error) {
@@ -890,6 +890,13 @@ TM.list = (function() {
         void row.offsetWidth; // restart the animation on repeat clicks
         row.classList.add('tm-row-flash');
         setTimeout(function() { row.classList.remove('tm-row-flash'); }, 2600);
+    }
+
+    // Map track click: expand the session (if not already) then scroll+flash.
+    function openAndJump(sessionId) {
+        if (!rowFor(sessionId)) return;
+        if (TM.detail.currentSessionId() !== sessionId) openDetailFor(sessionId, {});
+        jumpToRow(sessionId);
     }
 
     // ---- Multi-selection (selective archive/delete/export) ----
