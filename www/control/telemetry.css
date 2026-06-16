@@ -130,11 +130,17 @@ body.tm-body {
     padding: 10px 14px;
     margin-bottom: 16px;
 }
+.tm-live-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+}
 .tm-live-section h6 {
     color: #0dcaf0;
     letter-spacing: 0.06em;
     font-size: 0.8rem;
-    margin-bottom: 8px;
+    margin: 0;
 }
 .tm-live-map {
     height: 340px;

@@ -778,11 +778,17 @@ TM.list = (function() {
         var liveSessions = TM.state.archived() ? [] : filtered.filter(function(s) { return TM.api.statusOf(s) === 'live'; });
         if (liveSessions.length) {
             var liveWalks = liveSessions.filter(function(s) { return s.kind === 'walk'; });
-            // One shared map for all live walkers' current positions + tracks.
-            var liveMapHtml = liveWalks.length
+            // One shared map for all live walkers' current positions + tracks,
+            // hidden by default behind a MAP toggle.
+            var liveMapShown = liveWalks.length && isTrackOpen(LIVE_MAP_KEY, false);
+            var liveMapBtn = liveWalks.length
+                ? '<button class="btn btn-outline-info btn-sm py-0 ms-auto" data-action="toggle-tracks" data-track-key="' + LIVE_MAP_KEY + '">' + (liveMapShown ? 'Hide map' : 'Map') + '</button>'
+                : '';
+            var liveMapHtml = liveMapShown
                 ? '<div class="tm-group-map tm-live-map" data-track-map="' + LIVE_MAP_KEY + '"></div>'
                 : '';
-            liveSectionEl.innerHTML = '<div class="tm-live-section"><h6>● IN PROGRESS</h6>' +
+            liveSectionEl.innerHTML = '<div class="tm-live-section">' +
+                '<div class="tm-live-head"><h6>● IN PROGRESS</h6>' + liveMapBtn + '</div>' +
                 liveMapHtml +
                 liveSessions.map(function(summary) {
                     var html = renderRow(summary, {});
