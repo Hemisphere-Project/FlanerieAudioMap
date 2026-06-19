@@ -418,7 +418,11 @@ body.tm-body {
     font-size: 0.68rem;
     color: rgba(255,255,255,0.4);
     line-height: 1;
+    cursor: pointer;
+    width: fit-content;
 }
+.tm-row-code:hover { color: #8bd3ff; text-decoration: underline; }
+.tm-row-code-copied { color: #0dcaf0; text-decoration: none; }
 .tm-row-parcours {
     overflow: hidden;
     text-overflow: ellipsis;

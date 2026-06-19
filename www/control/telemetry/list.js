@@ -349,7 +349,7 @@ TM.list = (function() {
             'data-session-id="' + esc(summary.sessionId) + '" title="' + esc(summary.sessionId + ' · ' + status + (summary.isSimulation ? ' · simulation' : '')) + '">' +
             '<div class="tm-row-checkcell"><input type="checkbox" class="form-check-input tm-row-check"' + (selectedIds.has(summary.sessionId) ? ' checked' : '') + '></div>' +
             '<div class="tm-row-time">' + esc(TM.util.formatTime(summary.startTime)) +
-                '<span class="tm-row-code">' + esc(shortCode) + '</span></div>' +
+                '<span class="tm-row-code" data-code="' + esc(shortCode) + '" title="Copy session code">' + esc(shortCode) + '</span></div>' +
             '<div class="tm-row-parcours">' + deviceHtml +
                 (options.hideParcours ? '' : esc(parcoursLabel(summary) || '-')) +
                 (summary.kind === 'onboarding' ? ' <span class="badge text-bg-dark">onb</span>' : '') +
@@ -1175,6 +1175,25 @@ TM.list = (function() {
         if (bar) {
             event.stopPropagation();
             jumpToRow(bar.dataset.timelineSession);
+            return;
+        }
+
+        // Clicking the session code copies it instead of expanding the row.
+        var codeEl = event.target.closest('.tm-row-code');
+        if (codeEl) {
+            event.stopPropagation();
+            var code = codeEl.dataset.code || codeEl.textContent;
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(code).then(function() {
+                    codeEl.classList.add('tm-row-code-copied');
+                    var prev = codeEl.textContent;
+                    codeEl.textContent = 'copied ✓';
+                    setTimeout(function() {
+                        codeEl.textContent = prev;
+                        codeEl.classList.remove('tm-row-code-copied');
+                    }, 1000);
+                }, function() {});
+            }
             return;
         }
 
