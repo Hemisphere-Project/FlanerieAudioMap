@@ -541,6 +541,38 @@ body.tm-body {
     font-weight: 500;
 }
 
+/* ---------- Glitch / Test / Phantom parking fold ---------- */
+.tm-glitch-section {
+    margin-top: 6px;
+    border-top: 1px dashed rgba(255, 193, 7, 0.25);
+}
+.tm-glitch-fold {
+    padding: 5px 12px;
+    color: rgba(255, 193, 7, 0.75);
+    font-size: 0.82rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+    user-select: none;
+}
+.tm-glitch-fold:hover { color: rgba(255, 193, 7, 0.95); }
+.tm-glitch-caret { display: inline-block; width: 0.9em; }
+.tm-glitch-count {
+    margin-left: 4px;
+    padding: 0 6px;
+    border-radius: 8px;
+    background: rgba(255, 193, 7, 0.15);
+    font-variant-numeric: tabular-nums;
+}
+.tm-glitch-section .tm-row { opacity: 0.72; }
+.tm-glitch-section .tm-row:hover { opacity: 1; }
+.tm-glitch-badge {
+    background: transparent;
+    border: 1px solid rgba(255, 193, 7, 0.55);
+    color: rgba(255, 193, 7, 0.95);
+    font-weight: 500;
+}
+
 /* ---------- Detail panel ---------- */
 
 .tm-detail {

@@ -165,6 +165,43 @@ TM.api = (function() {
         });
     }
 
+    // ---- Triage flags (glitch/test/phantom) ----
+
+    var flags = {}; // sessionId -> flag string (e.g. 'glitch')
+
+    function loadFlags() {
+        return fetchJson('/telemetry/flags').then(function(result) {
+            flags = (result.data && result.data.flags) || {};
+            return flags;
+        }).catch(function() { flags = {}; return flags; });
+    }
+
+    function getFlag(sessionId) { return flags[sessionId] || ''; }
+
+    function setFlag(sessionId, flag) {
+        return fetchJson('/telemetry/flag/' + encodeURIComponent(sessionId), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ flag: flag || null })
+        }).then(function() {
+            if (flag) flags[sessionId] = flag;
+            else delete flags[sessionId];
+        });
+    }
+
+    function setFlagBulk(sessionIds, flag) {
+        return fetchJson('/telemetry/flag-bulk', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sessionIds: sessionIds, flag: flag || null })
+        }).then(function() {
+            sessionIds.forEach(function(id) {
+                if (flag) flags[id] = flag;
+                else delete flags[id];
+            });
+        });
+    }
+
     // ---- Device registry ----
 
     function loadDevices() {
@@ -291,6 +328,10 @@ TM.api = (function() {
         loadNotes: loadNotes,
         getNote: getNote,
         saveNote: saveNote,
+        loadFlags: loadFlags,
+        getFlag: getFlag,
+        setFlag: setFlag,
+        setFlagBulk: setFlagBulk,
         loadDevices: loadDevices,
         getDevice: getDevice,
         renameDevice: renameDevice,

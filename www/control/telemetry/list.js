@@ -78,6 +78,7 @@ TM.list = (function() {
     var activeErrorPopover = null;
     var dayToggles = new Map();       // dayKey -> bool (user override: true=open)
     var onbExpanded = new Set();      // groupDomKey
+    var glitchExpanded = new Set();   // dayKey -> glitch/test/phantom fold open
     var trackMapOpen = new Map();     // trackKey -> explicit bool (overrides default)
     var trackMapModes = new Map();    // trackKey -> 'tracks' | 'accuracy'
     var trackMapHandles = [];         // destroyed on each render
@@ -233,10 +234,18 @@ TM.list = (function() {
             var daySessions = byDay.get(dayKey);
             daySessions.sort(function(a, b) { return new Date(a.startTime) - new Date(b.startTime); });
 
+            // Sessions marked glitch/test/phantom are parked in their own fold
+            // and kept out of the day's sections, stats, timelines and maps so
+            // they don't distort the real-walk picture.
+            var glitch = daySessions.filter(function(s) { return TM.api.getFlag(s.sessionId) === 'glitch'; });
+            var normal = glitch.length
+                ? daySessions.filter(function(s) { return TM.api.getFlag(s.sessionId) !== 'glitch'; })
+                : daySessions;
+
             // Split per parcours so multi-parcours days (testing) keep their
             // timelines, maps and device groups distinct.
             var byParcours = new Map();
-            daySessions.forEach(function(summary) {
+            normal.forEach(function(summary) {
                 var label = parcoursLabel(summary) || '—';
                 if (!byParcours.has(label)) byParcours.set(label, []);
                 byParcours.get(label).push(summary);
@@ -253,18 +262,18 @@ TM.list = (function() {
                 };
             }).sort(function(a, b) { return new Date(a.sessions[0].startTime) - new Date(b.sessions[0].startTime); });
 
-            var walks = daySessions.filter(function(s) { return s.kind === 'walk'; });
+            var walks = normal.filter(function(s) { return s.kind === 'walk'; });
             var stats = {
-                devices: new Set(daySessions.map(groupKeyFor)).size,
+                devices: new Set(normal.map(groupKeyFor)).size,
                 walks: walks.length,
                 complete: walks.filter(function(s) { return TM.api.statusOf(s) === 'ended-complete'; }).length,
-                onboarding: daySessions.length - walks.length,
-                anomaly: daySessions.some(function(s) {
+                onboarding: normal.length - walks.length,
+                anomaly: normal.some(function(s) {
                     return Number(s.sleepSuspects) > 0 || TM.api.statusOf(s) === 'interrupted';
                 })
             };
 
-            return { dayKey: dayKey, sessions: daySessions, sections: sections, multi: multi, stats: stats };
+            return { dayKey: dayKey, sessions: daySessions, sections: sections, multi: multi, stats: stats, glitch: glitch };
         });
     }
 
@@ -354,6 +363,7 @@ TM.list = (function() {
                 (options.hideParcours ? '' : esc(parcoursLabel(summary) || '-')) +
                 (summary.kind === 'onboarding' ? ' <span class="badge text-bg-dark">onb</span>' : '') +
                 (summary.isSimulation ? ' <span class="badge tm-sim-badge" title="GPS-simulated walk">sim</span>' : '') +
+                (TM.api.getFlag(summary.sessionId) === 'glitch' ? ' <span class="badge tm-glitch-badge" title="marked glitch / test / phantom">glitch</span>' : '') +
                 (chips.length ? ' ' + chips.join(' ') : '') + '</div>' +
             '<div class="tm-row-duration">' + esc(TM.util.formatDuration(summary.durationMs)) + '</div>' +
             '<div class="tm-row-prog">' + progressHtml(summary) + '</div>' +
@@ -516,6 +526,28 @@ TM.list = (function() {
             '<div class="tm-group-map" data-track-map="' + esc(trackKey) + '"></div>';
     }
 
+    // Parked glitch/test/phantom sessions, collapsed by default at the foot of
+    // the day. Rows are shown flat (across devices/parcours) with the device
+    // chip, since they're not nested under a device-group header here.
+    function renderGlitchFold(day) {
+        if (!day.glitch || !day.glitch.length) return '';
+        var expanded = glitchExpanded.has(day.dayKey);
+        var head = '<div class="tm-glitch-fold" data-action="toggle-glitch-fold" data-day-key="' + esc(day.dayKey) + '">' +
+            '<span class="tm-glitch-caret">' + (expanded ? '▾' : '▸') + '</span> ' +
+            '⚠ Glitch / Test / Phantom <span class="tm-glitch-count">' + day.glitch.length + '</span>' +
+        '</div>';
+        var rows = expanded
+            ? day.glitch.map(function(summary, i) {
+                var html = renderRow(summary, { alt: i % 2 === 1, showDevice: true });
+                if (TM.detail.currentSessionId() === summary.sessionId) {
+                    html += '<div class="tm-detail-host" data-host-for="' + esc(summary.sessionId) + '"></div>';
+                }
+                return html;
+              }).join('')
+            : '';
+        return '<div class="tm-glitch-section">' + head + rows + '</div>';
+    }
+
     function renderDay(day, index) {
         var open = isDayOpen(day.dayKey, index);
         var stats = day.stats;
@@ -528,9 +560,10 @@ TM.list = (function() {
             (day.multi ? '<span>' + day.sections.length + ' parcours</span>' : '') +
         '</div>';
 
-        var dayMapOpen = !day.multi && isTrackOpen(day.sections[0].trackKey, open);
+        var hasSections = day.sections.length > 0;
+        var dayMapOpen = hasSections && !day.multi && isTrackOpen(day.sections[0].trackKey, open);
         var actions = '<div class="tm-day-actions">' +
-            (day.multi ? '' : '<button class="btn btn-outline-secondary btn-sm py-0" data-action="toggle-tracks" data-track-key="' + esc(day.sections[0].trackKey) + '" title="All day tracks on one map">' + (dayMapOpen ? 'Hide map' : 'Map') + '</button>') +
+            (hasSections && !day.multi ? '<button class="btn btn-outline-secondary btn-sm py-0" data-action="toggle-tracks" data-track-key="' + esc(day.sections[0].trackKey) + '" title="All day tracks on one map">' + (dayMapOpen ? 'Hide map' : 'Map') + '</button>' : '') +
             '<div class="dropdown">' +
                 '<button class="btn btn-outline-secondary btn-sm py-0 dropdown-toggle" data-bs-toggle="dropdown">⋯</button>' +
                 '<ul class="dropdown-menu dropdown-menu-end">' +
@@ -554,7 +587,7 @@ TM.list = (function() {
                 trackHostHtml(section.trackKey, open) +
                 section.groups.map(function(group) { return renderGroup(group, day.dayKey, section.prefix); }).join('');
             return day.multi ? '<div class="tm-parcours-section">' + inner + '</div>' : inner;
-        }).join('');
+        }).join('') + renderGlitchFold(day);
 
         return '<div class="tm-day' + (open ? '' : ' collapsed') + '" data-day="' + esc(day.dayKey) + '">' +
             '<div class="tm-day-header" data-action="toggle-day" data-day-key="' + esc(day.dayKey) + '">' +
@@ -855,6 +888,11 @@ TM.list = (function() {
                 if (!day.sessions.some(function(s) { return s.sessionId === targetId; })) return;
                 if (index >= ndays) ndays = index + 1;
                 if (!isDayOpen(day.dayKey, index)) dayToggles.set(day.dayKey, true);
+                // A parked session lives in the glitch fold — open it so the
+                // row (and its detail host) actually renders.
+                if (day.glitch.some(function(s) { return s.sessionId === targetId; })) {
+                    glitchExpanded.add(day.dayKey);
+                }
             });
         }
 
@@ -968,6 +1006,16 @@ TM.list = (function() {
         var archived = TM.state.archived();
         document.getElementById('sel-archive').hidden = archived;
         document.getElementById('sel-unarchive').hidden = !archived;
+
+        // "Mark glitch" flips to "Unmark glitch" once the whole selection is
+        // already parked, mirroring the per-session toggle in the detail panel.
+        var glitchBtn = document.getElementById('sel-glitch');
+        if (glitchBtn) {
+            var ids = Array.from(selectedIds);
+            var allGlitch = ids.length > 0 && ids.every(function(id) { return TM.api.getFlag(id) === 'glitch'; });
+            glitchBtn.textContent = allGlitch ? 'Unmark glitch' : 'Mark glitch';
+            glitchBtn.classList.toggle('active', allGlitch);
+        }
     }
 
     function toggleSelect(sessionId, checked, shiftKey) {
@@ -1009,6 +1057,18 @@ TM.list = (function() {
         document.getElementById('sel-export').addEventListener('click', function() {
             var rows = Array.from(selectedIds).map(findSession).filter(Boolean).map(buildSummaryRow);
             TM.util.downloadText('telemetry-selection.csv', TM.util.toCsv(rows), 'text/csv;charset=utf-8');
+        });
+
+        document.getElementById('sel-glitch').addEventListener('click', function() {
+            var ids = Array.from(selectedIds);
+            if (!ids.length) return;
+            // Reversible toggle: if every selected session is already parked,
+            // unmark them; otherwise mark the whole selection. No confirm — it
+            // neither archives nor deletes.
+            var allGlitch = ids.every(function(id) { return TM.api.getFlag(id) === 'glitch'; });
+            TM.api.setFlagBulk(ids, allGlitch ? '' : 'glitch')
+                .then(function() { clearSelection(); render(); })
+                .catch(function(error) { alert('Failed to update flags: ' + error); });
         });
 
         document.getElementById('sel-archive').addEventListener('click', function() {
@@ -1093,6 +1153,13 @@ TM.list = (function() {
                 var onbKey = actionEl.dataset.onbKey;
                 if (onbExpanded.has(onbKey)) onbExpanded.delete(onbKey);
                 else onbExpanded.add(onbKey);
+                render();
+                return;
+            }
+            if (action === 'toggle-glitch-fold') {
+                var glitchKey = actionEl.dataset.dayKey;
+                if (glitchExpanded.has(glitchKey)) glitchExpanded.delete(glitchKey);
+                else glitchExpanded.add(glitchKey);
                 render();
                 return;
             }

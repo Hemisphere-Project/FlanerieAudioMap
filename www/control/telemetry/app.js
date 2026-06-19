@@ -438,6 +438,7 @@ TM.app = (function() {
         Promise.all([
             loadCurrentScope(true),
             TM.api.loadNotes(),
+            TM.api.loadFlags(),
             TM.api.loadDevices(),
             TM.api.loadVersion()
         ]).then(function() {

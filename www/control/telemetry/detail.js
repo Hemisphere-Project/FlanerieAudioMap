@@ -389,6 +389,7 @@ TM.detail = (function() {
         var summary = TM.api.getSession(data.sessionId, TM.state.archived());
         var archived = TM.state.archived();
         var gpsEvents = TM.maps.getGpsEvents(data.events || []);
+        var isGlitch = TM.api.getFlag(data.sessionId) === 'glitch';
 
         current.panelEl.innerHTML =
             '<div class="d-flex justify-content-between align-items-start gap-3 mb-3 flex-wrap">' +
@@ -398,6 +399,7 @@ TM.detail = (function() {
                     '<button class="btn btn-outline-secondary btn-sm" data-action="toggle-events">Events</button>' +
                     '<button class="btn btn-outline-secondary btn-sm" data-action="export-json">JSON</button>' +
                     '<button class="btn btn-outline-secondary btn-sm" data-action="export-csv">CSV</button>' +
+                    '<button class="btn btn-outline-' + (isGlitch ? 'info' : 'secondary') + ' btn-sm" data-action="toggle-glitch" title="Park as glitch / test / phantom without archiving or deleting">' + (isGlitch ? '✓ Glitch/test' : 'Mark glitch/test') + '</button>' +
                     (archived
                         ? '<button class="btn btn-outline-warning btn-sm" data-action="unarchive-session">Unarchive</button>'
                         : '<button class="btn btn-outline-warning btn-sm" data-action="archive-session">Archive</button>') +
@@ -548,6 +550,27 @@ TM.detail = (function() {
             TM.api.deleteSession(data.sessionId, archived)
                 .then(function() { close(); TM.list.render(); })
                 .catch(function(error) { alert('Failed to delete session: ' + error); });
+        });
+
+        var glitchButton = panel.querySelector('[data-action="toggle-glitch"]');
+        if (glitchButton) glitchButton.addEventListener('click', function() {
+            // Toggle the parked-as-glitch flag. The session stays put (no
+            // archive/delete); the list re-render moves the row into the day's
+            // Glitch / Test / Phantom fold, and the open panel reattaches there.
+            var nowGlitch = TM.api.getFlag(data.sessionId) !== 'glitch';
+            glitchButton.disabled = true;
+            TM.api.setFlag(data.sessionId, nowGlitch ? 'glitch' : '')
+                .then(function() {
+                    glitchButton.disabled = false;
+                    glitchButton.textContent = nowGlitch ? '✓ Glitch/test' : 'Mark glitch/test';
+                    glitchButton.classList.toggle('btn-outline-info', nowGlitch);
+                    glitchButton.classList.toggle('btn-outline-secondary', !nowGlitch);
+                    TM.list.render();
+                })
+                .catch(function(error) {
+                    glitchButton.disabled = false;
+                    alert('Failed to update flag: ' + error);
+                });
         });
 
         var archiveButton = panel.querySelector('[data-action="archive-session"]');

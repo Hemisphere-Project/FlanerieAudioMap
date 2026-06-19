@@ -977,6 +977,77 @@ app.post('/telemetry/note/:id', requireAdmin, express.json({ limit: '16kb' }), (
   res.json({ ok: true, sessionId: safeId, note: note || null });
 });
 
+// Telemetry session flags — operator triage marks kept separate from notes.
+// Currently one value, "glitch", parks glitch/test/phantom walks out of the
+// main day groups (into a collapsible section) WITHOUT archiving or deleting,
+// so they can be revisited later once more is known. Keyed by sessionId in a
+// single JSON file next to the sessions, mirroring notes.json.
+const TELEMETRY_FLAGS_FILE = path.join(TELEMETRY_DIR, 'flags.json');
+
+function _readFlagsFile() {
+  try {
+    if (!fs.existsSync(TELEMETRY_FLAGS_FILE)) return {};
+    const data = JSON.parse(fs.readFileSync(TELEMETRY_FLAGS_FILE, 'utf8'));
+    return (data && typeof data === 'object' && !Array.isArray(data)) ? data : {};
+  } catch (e) {
+    console.warn('[Telemetry] flags read failed, treating as empty:', e.message);
+    return {};
+  }
+}
+
+app.get('/telemetry/flags', requireAdmin, (req, res) => {
+  res.json({ flags: _readFlagsFile() });
+});
+
+app.post('/telemetry/flag/:id', requireAdmin, express.json({ limit: '4kb' }), (req, res) => {
+  const safeId = req.params.id.replace(/[^a-zA-Z0-9_\-]/g, '');
+  if (!safeId) return res.status(400).json({ error: 'Invalid session ID' });
+
+  // Only a known set of flags is accepted; anything else clears the flag.
+  const raw = req.body && req.body.flag;
+  const flag = raw === 'glitch' ? 'glitch' : '';
+  const flags = _readFlagsFile();
+  if (flag) flags[safeId] = flag;
+  else delete flags[safeId];
+
+  try {
+    if (!fs.existsSync(TELEMETRY_DIR)) fs.mkdirSync(TELEMETRY_DIR, { recursive: true });
+    fs.writeFileSync(TELEMETRY_FLAGS_FILE, JSON.stringify(flags, null, 2));
+  } catch (e) {
+    console.error('[Telemetry] flags write failed:', e.message);
+    return res.status(500).json({ error: 'Write failed' });
+  }
+  res.json({ ok: true, sessionId: safeId, flag: flag || null });
+});
+
+// Bulk set/clear the flag for many sessions in one read-modify-write — the
+// multi-select "Mark glitch" action. A dedicated endpoint (like archive-bulk)
+// avoids the lost-update race that parallel single POSTs would hit on the
+// shared flags.json.
+app.post('/telemetry/flag-bulk', requireAdmin, express.json({ limit: '256kb' }), (req, res) => {
+  const ids = Array.isArray(req.body && req.body.sessionIds) ? req.body.sessionIds : [];
+  const raw = req.body && req.body.flag;
+  const flag = raw === 'glitch' ? 'glitch' : '';
+  const flags = _readFlagsFile();
+  const updated = [];
+  ids.forEach(id => {
+    const safeId = String(id).replace(/[^a-zA-Z0-9_\-]/g, '');
+    if (!safeId) return;
+    if (flag) flags[safeId] = flag;
+    else delete flags[safeId];
+    updated.push(safeId);
+  });
+
+  try {
+    if (!fs.existsSync(TELEMETRY_DIR)) fs.mkdirSync(TELEMETRY_DIR, { recursive: true });
+    fs.writeFileSync(TELEMETRY_FLAGS_FILE, JSON.stringify(flags, null, 2));
+  } catch (e) {
+    console.error('[Telemetry] flags bulk write failed:', e.message);
+    return res.status(500).json({ error: 'Write failed' });
+  }
+  res.json({ ok: true, updated, flag: flag || null });
+});
+
 // Auto-archive: move active sessions whose last event is older than N days into
 // archive/ so the active-dir scan (and the page's default view) stays small.
 // Disable with TELEMETRY_AUTOARCHIVE_DAYS=0.
