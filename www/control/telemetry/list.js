@@ -350,7 +350,8 @@ TM.list = (function() {
             '<div class="tm-row-checkcell"><input type="checkbox" class="form-check-input tm-row-check"' + (selectedIds.has(summary.sessionId) ? ' checked' : '') + '></div>' +
             '<div class="tm-row-time">' + esc(TM.util.formatTime(summary.startTime)) +
                 '<span class="tm-row-code">' + esc(shortCode) + '</span></div>' +
-            '<div class="tm-row-parcours">' + deviceHtml + esc(parcoursLabel(summary) || '-') +
+            '<div class="tm-row-parcours">' + deviceHtml +
+                (options.hideParcours ? '' : esc(parcoursLabel(summary) || '-')) +
                 (summary.kind === 'onboarding' ? ' <span class="badge text-bg-dark">onb</span>' : '') +
                 (summary.isSimulation ? ' <span class="badge tm-sim-badge" title="GPS-simulated walk">sim</span>' : '') +
                 (chips.length ? ' ' + chips.join(' ') : '') + '</div>' +
@@ -797,16 +798,37 @@ TM.list = (function() {
             var liveMapHtml = liveMapShown
                 ? '<div class="tm-group-map tm-live-map" data-track-map="' + LIVE_MAP_KEY + '"></div>'
                 : '';
-            liveSectionEl.innerHTML = '<div class="tm-live-section">' +
-                '<div class="tm-live-head"><h6>● IN PROGRESS</h6>' + liveMapBtn + '</div>' +
-                liveMapHtml +
-                liveSessions.map(function(summary) {
-                    var html = renderRow(summary, { showDevice: true });
+            // Group live rows by parcours: the name moves to a per-parcours
+            // subheading so it no longer needs to repeat on every row.
+            var liveByParcours = new Map();
+            liveSessions.forEach(function(summary) {
+                var pkey = parcoursLabel(summary) || '—';
+                if (!liveByParcours.has(pkey)) liveByParcours.set(pkey, []);
+                liveByParcours.get(pkey).push(summary);
+            });
+            var liveGroupsHtml = Array.from(liveByParcours.keys()).sort(function(a, b) {
+                return a.localeCompare(b);
+            }).map(function(pname) {
+                var sessions = liveByParcours.get(pname);
+                var rows = sessions.map(function(summary) {
+                    var html = renderRow(summary, { showDevice: true, hideParcours: true });
                     if (TM.detail.currentSessionId() === summary.sessionId) {
                         html += '<div class="tm-detail-host" data-host-for="' + esc(summary.sessionId) + '"></div>';
                     }
                     return html;
-                }).join('') + '</div>';
+                }).join('');
+                return '<div class="tm-live-parcours">' +
+                    '<div class="tm-parcours-head">' +
+                        '<span class="tm-parcours-title">' + esc(pname) + '</span>' +
+                        '<span class="text-secondary small">' + sessions.length + ' live</span>' +
+                    '</div>' + rows +
+                '</div>';
+            }).join('');
+
+            liveSectionEl.innerHTML = '<div class="tm-live-section">' +
+                '<div class="tm-live-head"><h6>● IN PROGRESS</h6>' + liveMapBtn + '</div>' +
+                liveMapHtml +
+                liveGroupsHtml + '</div>';
         } else {
             liveSectionEl.innerHTML = '';
         }

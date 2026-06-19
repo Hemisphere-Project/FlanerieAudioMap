@@ -147,6 +147,11 @@ body.tm-body {
     margin: 0 0 10px;
     border: 1px solid rgba(13, 202, 240, 0.3);
 }
+.tm-live-parcours + .tm-live-parcours {
+    margin-top: 8px;
+    border-top: 1px solid rgba(13, 202, 240, 0.18);
+    padding-top: 6px;
+}
 
 /* ---------- Day sections ---------- */
 
