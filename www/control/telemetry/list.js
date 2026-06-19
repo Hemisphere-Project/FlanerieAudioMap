@@ -585,9 +585,13 @@ TM.list = (function() {
             // The accuracy heat reflects real-world GPS quality, so exclude
             // GPS-simulated walks (their faked fixes would distort the cells).
             if (mode === 'accuracy') sessions = sessions.filter(function(s) { return !s.isSimulation; });
-            // Track readability caps at 8; the live map shows the whole fleet's
-            // current positions, the accuracy heat aggregates many more.
-            sessions = sessions.slice(0, isLiveMap ? 20 : (mode === 'accuracy' ? 24 : 8));
+            // The live map shows the whole fleet's current positions and the
+            // accuracy heat aggregates many walks. The plain tracks map used to
+            // cap at 8 (one per palette colour), which hid most of a busy day's
+            // walks — lift it so a full day's fleet renders. Colours repeat past
+            // the 8-colour palette, but tracks stay distinguishable by path and
+            // hover-highlight.
+            sessions = sessions.slice(0, isLiveMap ? 20 : (mode === 'accuracy' ? 24 : 60));
             if (!sessions.length) return;
 
             // The live map needs current data — pull each session's incremental
