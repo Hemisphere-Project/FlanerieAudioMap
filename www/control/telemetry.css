@@ -421,6 +421,11 @@ body.tm-body {
     color: rgba(255,255,255,0.55);
 }
 .tm-row-parcours .badge { opacity: 0.9; }
+.tm-row-dev {
+    font-size: 0.8rem;
+    color: rgba(255, 255, 255, 0.8);
+    font-weight: 600;
+}
 .tm-row-duration {
     color: rgba(255,255,255,0.65);
     font-variant-numeric: tabular-nums;

@@ -335,12 +335,22 @@ TM.list = (function() {
 
         var shortCode = String(summary.sessionId || '').split('_').pop();
 
+        // Live rows aren't nested under a device-group header (renderGroup),
+        // so opt-in showDevice surfaces which phone — and whether it's a loan
+        // unit — right on the row.
+        var deviceHtml = '';
+        if (options.showDevice) {
+            var devLabel = deviceLabelFor(summary);
+            deviceHtml = '<span class="tm-row-dev" title="' + esc(devLabel + (summary.isLoanDevice ? ' · loan-fleet device' : '')) + '">📱 ' + esc(devLabel) + '</span>' +
+                (summary.isLoanDevice ? ' <span class="badge tm-loan-badge" title="loan-fleet device">loan</span>' : '') + ' ';
+        }
+
         return '<div class="tm-row' + (expanded ? ' active' : '') + (options.alt ? ' tm-row-alt' : '') + (summary.kind === 'onboarding' ? ' tm-row-onb' : '') + (summary.isSimulation ? ' tm-row-sim' : '') + '" ' +
             'data-session-id="' + esc(summary.sessionId) + '" title="' + esc(summary.sessionId + ' · ' + status + (summary.isSimulation ? ' · simulation' : '')) + '">' +
             '<div class="tm-row-checkcell"><input type="checkbox" class="form-check-input tm-row-check"' + (selectedIds.has(summary.sessionId) ? ' checked' : '') + '></div>' +
             '<div class="tm-row-time">' + esc(TM.util.formatTime(summary.startTime)) +
                 '<span class="tm-row-code">' + esc(shortCode) + '</span></div>' +
-            '<div class="tm-row-parcours">' + esc(parcoursLabel(summary) || '-') +
+            '<div class="tm-row-parcours">' + deviceHtml + esc(parcoursLabel(summary) || '-') +
                 (summary.kind === 'onboarding' ? ' <span class="badge text-bg-dark">onb</span>' : '') +
                 (summary.isSimulation ? ' <span class="badge tm-sim-badge" title="GPS-simulated walk">sim</span>' : '') +
                 (chips.length ? ' ' + chips.join(' ') : '') + '</div>' +
@@ -791,7 +801,7 @@ TM.list = (function() {
                 '<div class="tm-live-head"><h6>● IN PROGRESS</h6>' + liveMapBtn + '</div>' +
                 liveMapHtml +
                 liveSessions.map(function(summary) {
-                    var html = renderRow(summary, {});
+                    var html = renderRow(summary, { showDevice: true });
                     if (TM.detail.currentSessionId() === summary.sessionId) {
                         html += '<div class="tm-detail-host" data-host-for="' + esc(summary.sessionId) + '"></div>';
                     }
