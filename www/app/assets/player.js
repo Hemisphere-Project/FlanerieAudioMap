@@ -127,11 +127,17 @@ document.addEventListener('deviceready', function() {
             if (navigator.vibrate) navigator.vibrate([300, 150, 300, 150, 300]);
             let pausedCount = pauseAllPlayers();
             AUDIOFOCUS = 0;
+            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audiofocus_paused', {
+                state: focusState,
+                paused: pausedCount,
+                srcs: PAUSED_PLAYERS.map(p => p._src()),
+            });
             showResumeOverlayIfNeeded(pausedCount);
         } else if (focusState === "AUDIOFOCUS_GAIN") {
             if (navigator.vibrate) navigator.vibrate([100, 80, 100]);
             restoreDuckedPlayers();
-            resumeAllPlayers();
+            let resumedCount = resumeAllPlayers();
+            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audiofocus_resumed', {state: focusState, resumed: resumedCount});
             AUDIOFOCUS = 1;
             $('#resume-overlay').hide();
         } else if (focusState === "AUDIOFOCUS_GAIN_AVAILABLE") {
@@ -185,9 +191,15 @@ function pauseAllPlayers() {
     // Additive: do not reset PAUSED_PLAYERS — a second call (e.g. document.pause
     // then AUDIOFOCUS_LOSS for the same phone call) must not wipe the list that
     // the first call already built, or resumeAllPlayers() will have nothing to restore.
+    //
+    // isInterrupted(): on Android the audio-simple plugin pauses every ExoPlayer
+    // NATIVELY on AUDIOFOCUS_LOSS* (ExtraFocusListener, AudioSimplePlugin.java:93)
+    // before the focus string reaches JS, and its 'pause' event lands first on the
+    // Cordova bridge — so isPlaying() is already false here. Without this the voice
+    // was never queued and AUDIOFOCUS_GAIN had nothing to resume (call 2026-09-18).
     let pausedCount = 0;
     ALL_PLAYERS.forEach(player => {
-        if (player.isPlaying() && !PAUSED_PLAYERS.includes(player)) {
+        if ((player.isPlaying() || player.isInterrupted()) && !PAUSED_PLAYERS.includes(player)) {
             player.pause();
             PAUSED_PLAYERS.push(player);
             pausedCount++;
@@ -198,11 +210,13 @@ function pauseAllPlayers() {
 }
 
 function resumeAllPlayers() {
+    let resumedCount = PAUSED_PLAYERS.length;
     PAUSED_PLAYERS.forEach(player => {
         player.resume();
         console.log('Resumed player:', player._src);
     });
     PAUSED_PLAYERS = [];
+    return resumedCount;
 }
 
 function duckPlayingPlayers() {
@@ -557,6 +571,10 @@ class PlayerSimple extends EventEmitter
         this._playRequestedTimeout = null
         this._playStuckRetries = 0
         this._isActive = false
+        // App-side play intent: set by play(), cleared by every app-initiated
+        // pause/stop/end/error. A player paused underneath while this is still
+        // true was paused natively (audiofocus) — see isInterrupted().
+        this._shouldPlay = false
         this._volume = 0
         this._media = null
         this._loadError = false
@@ -763,7 +781,10 @@ class PlayerSimple extends EventEmitter
             if (!this._player) return
             console.log('PlayerSimple end:', this._player._src)
             this._playRequested = false
-            if (!this._loop) this._isActive = false  // keep active so loop's next 'play' event isn't rejected
+            if (!this._loop) {
+                this._isActive = false  // keep active so loop's next 'play' event isn't rejected
+                this._shouldPlay = false
+            }
             this.emit('end', this._player._src)
             // console.log('PlayerSimple end:', this._player._src)
         })
@@ -840,6 +861,7 @@ class PlayerSimple extends EventEmitter
             console.error('PlayerSimple loaderror:', this._player ? this._player._src : '?', error)
             this._loadError = true
             this._playRequested = false
+            this._shouldPlay = false
             clearTimeout(this._playRequestedTimeout)
             this.emit('loaderror', this._player ? this._player._src : null, error)
             this._logAudioTelemetry('audio_loaderror', error)
@@ -850,6 +872,7 @@ class PlayerSimple extends EventEmitter
             console.error('PlayerSimple playerror:', this._player ? this._player._src : '?', error)
             this._loadError = true
             this._playRequested = false
+            this._shouldPlay = false
             clearTimeout(this._playRequestedTimeout)
             this.emit('playerror', this._player ? this._player._src : null, error)
             this._logAudioTelemetry('audio_playerror', error)
@@ -896,6 +919,7 @@ class PlayerSimple extends EventEmitter
             this._player = null
             this._playRequested = false
             this._isActive = false
+            this._shouldPlay = false
             clearTimeout(this._playRequestedTimeout)
             this._loadError = false
         }
@@ -931,6 +955,7 @@ class PlayerSimple extends EventEmitter
 
         if (seek >= 0) this._player.seek(seek)
         this._playRequested = true
+        this._shouldPlay = true
         // F-A1 — measure how long it takes between requesting play() and the
         // actual 'play' event firing. Surfaces cold-load outliers on weak
         // devices (Samsung/Xiaomi A-series); a 4–8s value vs a normal 200ms
@@ -1116,6 +1141,7 @@ class PlayerSimple extends EventEmitter
         // was deliberately stopped (e.g. GPSLOST_PLAYER after recovery,
         // a step's afterplay after the next step fires).
         PAUSED_PLAYERS = PAUSED_PLAYERS.filter(p => p !== this)
+        this._shouldPlay = false
 
         if (this._playRequested) {
             console.warn('PlayerSimple stop but play requesting ...')
@@ -1129,6 +1155,7 @@ class PlayerSimple extends EventEmitter
 
     pause() {
         if (!this._player) return
+        this._shouldPlay = false
         if (this.isGoingOut) return
 
         // Cancel a queued play that hasn't started yet — otherwise the audio
@@ -1196,6 +1223,12 @@ class PlayerSimple extends EventEmitter
         return this._player && (this._player.playing() || this._playRequested) && !this.isGoingOut
     }
 
+    // Paused underneath although the app never asked for it — i.e. paused by the
+    // native layer (Android audio-simple fast-pause on AUDIOFOCUS_LOSS*).
+    isInterrupted() {
+        return !!this._player && this._shouldPlay && !this.isGoingOut && this._isUnderlyingPaused()
+    }
+
     isLoaded() {
         return (this._player !== null && !this._loadError) || (this._media && this._media.src == '-')
     }
@@ -1227,6 +1260,7 @@ class PlayerSimple extends EventEmitter
 
         // Drop any pending resume — see PlayerSimple.stop() for the rationale.
         PAUSED_PLAYERS = PAUSED_PLAYERS.filter(p => p !== this)
+        this._shouldPlay = false
 
         // Paused player (e.g. by AUDIOFOCUS_LOSS): can't fade, but must still
         // stop the underlying so a later AUDIOFOCUS_GAIN can't revive it.
@@ -1249,6 +1283,7 @@ class PlayerSimple extends EventEmitter
 
     pauseOut(d=-1) {
         if (d < 0) d = this._fadeTime
+        this._shouldPlay = false
         if (!this._player || !this._player.playing() || this.isGoingOut) return
 
         // Fade out
