@@ -180,6 +180,72 @@ function releaseAudioPluginAll(source)
     });
 }
 
+// Bridge self-heal (2026-10-05). "Error invoking exec: Java bridge method invocation
+// error" is Chromium reporting that Cordova's exec() threw — in cordova-android that is
+// only CordovaBridge.verifySecret() rejecting a stale bridge secret, which also DISABLES
+// the bridge for this page: from then on no plugin call works (GPS, audio, telemetry
+// hooks) until the page reloads. 19/06 an A54 walked 44 s deaf until relaunched. JS and
+// XHR still run, so: log it, persist the walk, reload — the resume branch restores the
+// step. audio-simple has no onReset, so the dead page's native players keep playing:
+// the next page releases them (releaseBridgeHealOrphans) before anything plays.
+// Capped so a persistent fault can't reload-loop.
+var BRIDGE_HEAL_KEY = 'flanerie_bridge_heal'
+var BRIDGE_HEAL_MAX = 2                    // reloads per window
+var BRIDGE_HEAL_WINDOW_MS = 15 * 60000
+var BRIDGE_HEAL_PENDING_MS = 5 * 60000     // a reload older than this left no orphans to release
+var bridgeHealing = false
+var bridgeHealResult = null                // logged once the next page has a telemetry session
+
+function bridgeHealHistory() {
+    try { return JSON.parse(localStorage.getItem(BRIDGE_HEAL_KEY)) || {} } catch (e) { return {} }
+}
+
+function onBridgeDead(source, message) {
+    if (bridgeHealing) return
+    if (typeof PLATFORM === 'undefined' || PLATFORM !== 'android') return
+    if (!/Java bridge method invocation error/.test(String(message || ''))) return
+    bridgeHealing = true
+
+    let now = Date.now()
+    let recent = (bridgeHealHistory().reloads || []).filter(t => now - t < BRIDGE_HEAL_WINDOW_MS)
+    let capped = recent.length >= BRIDGE_HEAL_MAX
+    if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('bridge_dead', {
+        source: source,
+        page: typeof currentPage !== 'undefined' ? currentPage : null,
+        step: (typeof PARCOURS !== 'undefined' && PARCOURS.state) ? PARCOURS.state.stepIndex : null,
+        visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
+        recent_reloads: recent.length,
+        action: capped ? 'capped' : 'reload',
+    })
+    if (capped) return   // leave it to the native watchdog / the walker
+
+    try { if (typeof PARCOURS !== 'undefined' && PARCOURS.valid()) PARCOURS.store('bridge_heal') } catch (e) {}
+    try { localStorage.setItem(BRIDGE_HEAL_KEY, JSON.stringify({ reloads: recent.concat(now), pending: now })) } catch (e) {}
+    let flushed = (typeof TELEMETRY !== 'undefined') ? Promise.resolve(TELEMETRY.flush()).catch(() => {}) : Promise.resolve()
+    Promise.race([flushed, new Promise(r => setTimeout(r, 1500))]).then(() => location.reload())
+}
+
+window.addEventListener('error', (e) => onBridgeDead('error', e && (e.message || (e.error && e.error.message))))
+window.addEventListener('unhandledrejection', (e) => onBridgeDead('rejection', e && e.reason && (e.reason.message || e.reason)))
+
+// After a self-heal reload: release the dead page's orphaned native players (needs this
+// page's live bridge) before the resumed walk starts its own.
+function releaseBridgeHealOrphans() {
+    let hist = bridgeHealHistory()
+    if (!hist.pending || Date.now() - hist.pending > BRIDGE_HEAL_PENDING_MS) return
+    try { localStorage.setItem(BRIDGE_HEAL_KEY, JSON.stringify({ reloads: hist.reloads || [] })) } catch (e) {}
+    releaseAudioPluginAll('bridge_heal').then(ok => {
+        bridgeHealResult = { released: ok, after_ms: Date.now() - hist.pending }
+        logBridgeHealResult()
+    })
+}
+
+function logBridgeHealResult() {
+    if (!bridgeHealResult || typeof TELEMETRY === 'undefined' || !TELEMETRY.hasSession()) return
+    TELEMETRY.log('bridge_heal_resumed', bridgeHealResult)
+    bridgeHealResult = null
+}
+
 // Round 22 — GPS hardware pre-warm at intro page, gated by an existing
 // authorization. The point is to wake the GPS receiver during the
 // intro / checkdata / preload phase on second+ launches (when permission was
@@ -2979,6 +3045,7 @@ PAGES['parcours'] = async () => {
     // Drain any telemetry parcours stashed before the session existed
     // (parcours_restore from build()@parse-time, etc.).
     if (typeof PARCOURS.flushPendingTelemetry === 'function') PARCOURS.flushPendingTelemetry();
+    logBridgeHealResult();
 
     // Diagnostic snapshot at parcours entry — the earliest point where TELEMETRY
     // has a session. checkbatteryopt runs before TELEMETRY.start() so anything
@@ -4279,6 +4346,7 @@ function scheduleWakeupNotification() {
 document.addEventListener('deviceready', () => {
     console.log('Device is ready');
     if (PLATFORM != 'android' && PLATFORM != 'ios') return
+    if (PLATFORM == 'android') releaseBridgeHealOrphans()
 
     // Listen for notification triggers to wake up JS context
     if (cordova && cordova.plugins && cordova.plugins.notification && cordova.plugins.notification.local) {
