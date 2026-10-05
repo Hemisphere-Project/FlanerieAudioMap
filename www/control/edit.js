@@ -59,6 +59,20 @@ function formatBytes(bytes) {
 // current file from url
 var parcoursID = window.location.pathname.split('/').filter(Boolean).pop()
 
+// Audio previews are fetched only when played: preloading decoded the whole
+// media pack (≈178 MB on flanerie_invites_v3) on every save (t-005)
+function loadPreview(player, basepath, media) {
+    if (player.loadState() === 'unloaded') player.load(basepath, media)
+}
+
+// Master gain: live on a loaded preview player, else straight into the model
+function setMaster(player, media, value) {
+    value = Math.min(1, Math.max(0, Math.round(value * 100) / 100))
+    if (player.loadState() === 'unloaded') media.master = value
+    else player.master(value)
+    return value
+}
+
 // FILL Spots
 //
 function fillZones(type, divID, mediaFolder) {
@@ -127,7 +141,10 @@ function fillZones(type, divID, mediaFolder) {
             if (zoneWarnBody) body.append(zoneWarnBody)
 
             // audio play/stop button
-            const play = $('<button>').addClass('btn btn-sm btn-secondary btn-sm p-1 me-1').html('<i class="bi bi-play btn-play"></i>').click(() => z.player.toggle() )
+            const play = $('<button>').addClass('btn btn-sm btn-secondary btn-sm p-1 me-1').html('<i class="bi bi-play btn-play"></i>').click(() => {
+                if (z.player.loadState() === 'unloaded') z.loadAudio()
+                z.player.toggle()
+            })
             z.player.on('play', () => play.html('<i class="bi bi-pause btn-play"></i>'))
             z.player.on('pause', () => play.html('<i class="bi bi-play btn-play"></i>'))
             z.player.on('stop', () => play.html('<i class="bi bi-play btn-play"></i>'))
@@ -146,10 +163,11 @@ function fillZones(type, divID, mediaFolder) {
             }))
                 
             // volume integer input
-            body.append($('<input class="input-volume float-end me-1 ">').attr('type', 'number').attr('min', 0).attr('max', 100).attr('step', 1).val(zone.media.master*100).change(() => {
-                zone.media.master = body.find('input').val()/100.0 
-                save().then(() => PARCOURS.select(type, i))
-            }))
+            const volume = $('<input class="input-volume float-end me-1 ">').attr('type', 'number').attr('min', 0).attr('max', 100).attr('step', 1).val(zone.media.master*100).change(() => {
+                setMaster(z.player, zone.media, volume.val()/100.0)
+                save(false)
+            })
+            body.append(volume)
 
             // button switch to Circle/Polygon
             body.append($('<button>').addClass('btn btn-sm btn-secondary btn-sm float-end p-1 me-1').html('<i class="bi bi-circle"></i>').click(() => z.convertToCircle()))
@@ -184,10 +202,13 @@ function fillZones(type, divID, mediaFolder) {
 
 // LOAD
 //
-// Get parcours json
+// Get parcours json — or rebuild from data already in hand (a save's response)
 var reloading = false
-function load() {
-    return PARCOURS.load(parcoursID, reloading)
+function load(data) {
+    const ready = data
+        ? new Promise(resolve => resolve(PARCOURS.build({ ...data, pID: parcoursID }, reloading)))
+        : PARCOURS.load(parcoursID, reloading)
+    return ready
             .then(() => {
 
                 // Set info
@@ -198,10 +219,9 @@ function load() {
                 document.getElementById('pCutoff').value = PARCOURS.info.cutoff !== undefined ? PARCOURS.info.cutoff : -1
                 document.getElementById('pMediaSize').textContent = formatBytes(MEDIALIST?.__stats?.totalBytes || 0)
 
-                // Editable all
+                // Editable all (audio loads on demand, see loadPreview)
                 reloading = false
                 PARCOURS.editable()
-                PARCOURS.loadAudio()
 
                 // Fill steps list
                 document.getElementById('pSteps').innerHTML = ""
@@ -255,14 +275,22 @@ function load() {
                             PARCOURS.moveSpot('steps', i, i + 1) && save().then(()=> PARCOURS.select('steps', i + 1))
                         }))
 
-                        // +/- buttons increment/ decrement each master
+                        // +/- buttons increment/ decrement each master (saved without a rebuild, so a playing preview keeps going)
+                        const stepMaster = (delta) => {
+                            mediaList.forEach(m => {
+                                const current = typeof step.media[m].master === 'number' ? step.media[m].master : 1
+                                const vol = setMaster(s.player[m], step.media[m], current + delta)
+                                media.find('.input-volume[data-media="' + m + '"]').val(Math.round(vol * 100))
+                            })
+                            save(false)
+                        }
                         body.append($('<button>').addClass('btn btn-sm btn-secondary btn-sm float-end p-1 me-1').html('<i class="bi bi-plus"></i>').click(() => {
                             if (step.media && mediaList.some(m => step.media[m].master >= 1)) return
-                            mediaList.forEach(m => s.player[m].masterInc(0.01)) && save().then(() => PARCOURS.select('steps', i))
+                            stepMaster(0.01)
                         }))
                         body.append($('<button>').addClass('btn btn-sm btn-secondary btn-sm float-end p-1 me-1').html('<i class="bi bi-dash"></i>').click(() => {
                             if (step.media && mediaList.some(m => step.media[m].master <= 0)) return
-                            mediaList.forEach(m => s.player[m].masterDec(0.01)) && save().then(() => PARCOURS.select('steps', i))
+                            stepMaster(-0.01)
                         }))
 
                         // button switch to Circle/Polygon
@@ -326,7 +354,10 @@ function load() {
 
                                 // play/pause button
                                 div.append($('<button>').addClass('btn btn-sm btn-secondary btn-sm float-end p-1 me-1 btn-preview').html('<i class="bi bi-play"></i>')
-                                                    .click(() => s.player[m].toggle() ))
+                                                    .click(() => {
+                                                        loadPreview(s.player[m], '/media/' + parcoursID + '/' + step.folder + '/', step.media[m])
+                                                        s.player[m].toggle()
+                                                    }))
                                 s.player[m].on('play', () => div.find('.btn-preview').html('<i class="bi bi-pause"></i>'))
                                 s.player[m].on('pause', () => div.find('.btn-preview').html('<i class="bi bi-play"></i>'))
                                 s.player[m].on('stop', () => div.find('.btn-preview').html('<i class="bi bi-play"></i>'))
@@ -335,10 +366,11 @@ function load() {
                                 
                                 // volume integer input
                                 div.append($('<input class="input-volume float-end me-1 ">').attr('type', 'number').attr('min', 0).attr('max', 100).attr('step', 1)
+                                    .attr('data-media', m)
                                     .val( Math.round(step.media[m].master*100) )
                                     .change(() => {
-                                        s.player[m].master(div.find('.input-volume').val()/100.0)
-                                        save().then(() => PARCOURS.select('steps', i))
+                                        setMaster(s.player[m], step.media[m], div.find('.input-volume').val()/100.0)
+                                        save(false)
                                     }))
                                 s.player[m].on('master', (vol) => div.find('.input-volume').val(Math.round(vol*100)))
                             }
@@ -375,8 +407,10 @@ $('body').on('click', (e) => {
 // SAVE
 //
 var scheduledSave = null
+var pendingReload = false   // a burst of edits is saved once; a rebuild asked by any of them is kept
 function save(reload = true) {
 
+    pendingReload = pendingReload || reload
     return new Promise((resolve, reject) => {
         if (scheduledSave) {
             clearTimeout(scheduledSave)
@@ -384,11 +418,14 @@ function save(reload = true) {
         }
         scheduledSave = setTimeout(() => {
 
-            PARCOURS.save().then(() => {
+            const doReload = pendingReload
+            pendingReload = false
+            PARCOURS.save().then((data) => {
                 toastSuccess('Sauvegardé')
-                if (reload) {
+                if (doReload) {
+                    // rebuild from the saved content the server sends back — no second download
                     reloading = true
-                    loadMediaList().then(load).then(resolve)
+                    loadMediaList().then(() => load(data)).then(resolve)
                 }
                 else resolve()
             })
@@ -399,8 +436,7 @@ function save(reload = true) {
                 reject(error)
             })
             
-        // }, 300)
-        }, 0)
+        }, 300)
     })
         
 }
@@ -631,6 +667,9 @@ function loadMediaCheck() {
 // INIT
 //
 PARCOURS.setMap(MAP)
+
+// The editor never walks: don't prewarm the first step's audio on every rebuild
+PARCOURS.prewarmUpcomingStep = () => {}
 
 // first get media list json tree
 var MEDIALIST = null
