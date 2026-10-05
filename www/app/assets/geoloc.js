@@ -880,6 +880,29 @@ class GeoLoc extends EventEmitter {
     {
         resumeAudioContext('position')
 
+        // Simulation choke point. EVERY real fix enters here (bg-geo location /
+        // stationary / keepalive / fused, navigator watch, _activeFix warmup /
+        // heartbeat). While simulating, a real fix must not touch ANY walker
+        // state — gating only the 'position' emit (P1.4) was not enough: the
+        // follow-mode map.setView() below fires the map 'move' handler setMap()
+        // binds in simulate mode, which re-injects the map centre via fakeUpdate()
+        // as a *simulated* fix → the walker teleports to the real position
+        // (Thomas 2026-10; telemetry 38b7: rdv-warmup fix → 'simulate' fix 3 ms
+        // later, nested). Log it (real trace stays visible), then drop it.
+        // Inert outside simulate mode (DEVMODE-only).
+        if (this.runMode === 'simulate' && !position.simulate) {
+            if (typeof TELEMETRY !== 'undefined') {
+                let src = telemetryMeta.source || 'unknown'
+                let vis = telemetryMeta.visibility || APP_VISIBILITY
+                TELEMETRY.log('gps_trigger_rejected', {
+                    reason: 'real_fix_during_simulate', source: src, visibility: vis,
+                    acc: position.coords ? Math.round(position.coords.accuracy) : null
+                })
+                TELEMETRY.gps(position, {source: src, visibility: vis, rejected: true, reason: 'real_fix_during_simulate'})
+            }
+            return
+        }
+
         let now = Date.now()
         // F-N3 — stamp the JS-side receive time so downstream telemetry
         // (step_fire latency in spot.js) can measure how long the JS event
@@ -995,16 +1018,6 @@ class GeoLoc extends EventEmitter {
                 }
                 // Still update lastPosition/lastTimeUpdate so callback telemetry
                 // and the visible map position reflect the incoming stream.
-            } else if (this.runMode === 'simulate' && !position.simulate) {
-                // P1.4 — in simulation mode, real GPS fixes (rdv-warmup / navigator /
-                // bg-geo keepalive) still arrive but must NOT drive triggering, else the
-                // real position "overrides" the simulated one (Baptiste 06/06). They
-                // still update lastPosition / startup readiness / telemetry below.
-                telemetryMeta.rejected = true
-                telemetryMeta.reason = 'real_fix_during_simulate'
-                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('gps_trigger_rejected', {
-                    reason: 'real_fix_during_simulate', source: source, acc: accuracy, visibility: visibility
-                })
             } else {
                 this.emit('position', position);
             }

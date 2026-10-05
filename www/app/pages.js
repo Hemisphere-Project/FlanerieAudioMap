@@ -2255,8 +2255,12 @@ PAGES['rdv'] = () => {
             .finally(() => { warmupPending = false })
     }
 
+    // Simulation skips the real-GPS startup gate (as browser does): simulated fixes
+    // never satisfy it, and DEVMODE leaves rdv without clearing this interval, so it
+    // would keep firing real rdv-warmups (+ GEO.ready()'s native getCurrentLocation)
+    // into the simulated walk — the source of the real fixes that hijacked it.
     var checkpos = setInterval(() => {
-        if (PLATFORM != 'browser' && (!GEO.ready() || !hasFreshFix())) {
+        if (PLATFORM != 'browser' && GEO.mode() != 'simulate' && (!GEO.ready() || !hasFreshFix())) {
             requestWarmup()
             let passive = warmupAttempts >= RDV_WARMUP_MAX_ATTEMPTS
             let label = startupWarmupLabel(passive)
