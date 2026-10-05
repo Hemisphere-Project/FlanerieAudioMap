@@ -1096,6 +1096,25 @@ class PlayerSimple extends EventEmitter
             }
         }
 
+        // Fade-in, deferred until the audio-simple native handle exists. Its
+        // fade() is a silent no-op while create() is still in flight (async
+        // bridge), and load() has already pushed volume 0 (master() with
+        // _volume=0) — so a player loaded and played in the same position fix
+        // looped at volume 0, and every later resume() returned early on
+        // playing(). Hit the Ambiance zone the walker already stands in at walk
+        // start (only step voices are prewarmed); later zones load one fix
+        // earlier, on 'near'. Called after _player.play(), which queued its own
+        // send on the same promise first — native order stays play → fade.
+        const _fadeIn = () => {
+            let p = this._player
+            let fade = () => {
+                if (this._player !== p || (!this._playRequested && !this._isActive)) return
+                p.fade(p.volume(), this._volume * this._media.master, this._fadeTime)
+            }
+            if (p._handle === null && p._creating) p._creating.then(fade, () => {})
+            else fade()
+        }
+
         if (!needsFocusRequest) {
             if (!this._player) return
             this._player.play()
@@ -1105,7 +1124,7 @@ class PlayerSimple extends EventEmitter
 
             if (this._fadeTime > 0) {
                 this._volume = volume
-                this._player.fade(this._player.volume(), this._volume * this._media.master, this._fadeTime)
+                _fadeIn()
             }
             else this.volume(volume)
         }
@@ -1118,7 +1137,7 @@ class PlayerSimple extends EventEmitter
 
                 if (this._fadeTime > 0) {
                     this._volume = volume
-                    this._player.fade(this._player.volume(), this._volume * this._media.master, this._fadeTime)
+                    _fadeIn()
                 }
                 else this.volume(volume)
             })
