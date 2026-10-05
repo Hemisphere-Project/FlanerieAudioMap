@@ -172,7 +172,7 @@ document.addEventListener('deviceready', function() {
     document.addEventListener('resume', function() {
         if (AUDIOFOCUS === 0 && PAUSED_PLAYERS.length > 0) {
             if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audiofocus_resume_retry', {paused: PAUSED_PLAYERS.length});
-            requestAudioFocus();
+            requestAudioFocus().catch(() => {});   // in a call: GAIN resumes later
         }
     });
 });
@@ -248,16 +248,24 @@ function requestAudioFocus() {
     return new Promise((resolve, reject) => {
         cordova.plugins.audiofocus.requestFocus(
             function() {
-                console.log('[AudioFocus] requested successfully.');
-                if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audiofocus_request_ok', {
-                    visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
-                    platform: typeof PLATFORM !== 'undefined' ? PLATFORM : 'unknown',
+                // Never resume over a phone/VoIP call: on Android the plugin's focus
+                // flag is not cleared on AUDIOFOCUS_LOSS*, so this request "succeeds"
+                // mid-call and the 60 s auto-retry / foreground retry brought the
+                // narration back over the conversation (field test 2026-10-05, mode 2).
+                // AUDIOFOCUS_GAIN still resumes when the call really ends.
+                callInProgress().then(inCall => {
+                    if (inCall) {
+                        console.warn('[AudioFocus] call in progress — not resuming yet.');
+                        if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audiofocus_request_in_call', {
+                            mode: inCall,
+                            paused: PAUSED_PLAYERS.length,
+                            visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
+                        })
+                        reject('call in progress')
+                        return
+                    }
+                    focusGranted()
                 })
-                restoreDuckedPlayers();
-                resumeAllPlayers();
-                AUDIOFOCUS = 1;  // Focus gained
-                $('#resume-overlay').hide();
-                resolve();
             },
             function(error) {
                 console.error('[AudioFocus] failed to request:', error);
@@ -272,7 +280,33 @@ function requestAudioFocus() {
                 reject(error);
             }
         );
+
+        function focusGranted() {
+            console.log('[AudioFocus] requested successfully.');
+            if (typeof TELEMETRY !== 'undefined') TELEMETRY.log('audiofocus_request_ok', {
+                visibility: typeof APP_VISIBILITY !== 'undefined' ? APP_VISIBILITY : 'unknown',
+                platform: typeof PLATFORM !== 'undefined' ? PLATFORM : 'unknown',
+            })
+            restoreDuckedPlayers();
+            resumeAllPlayers();
+            AUDIOFOCUS = 1;  // Focus gained
+            $('#resume-overlay').hide();
+            resolve();
+        }
     });
+}
+
+// Resolves the Android audio mode when a call holds the audio (1 ringtone,
+// 2 in call, 3 VoIP, …), else 0. Fails open — no plugin, iOS, error or no
+// answer within 1 s → 0 — so it can only ever hold a resume back during a call.
+function callInProgress() {
+    let af = typeof cordova !== 'undefined' && cordova.plugins && cordova.plugins.audiofocus
+    if (PLATFORM !== 'android' || !af || typeof af.getAudioSessionState !== 'function') return Promise.resolve(0)
+    let query = af.getAudioSessionState()
+        .then(state => (state && state.mode > 0) ? state.mode : 0)
+        .catch(() => 0)
+    let timeout = new Promise(resolve => setTimeout(() => resolve(0), 1000))
+    return Promise.race([query, timeout])
 }
 
 function shouldRequestAudioFocusForPlay() {
@@ -356,7 +390,7 @@ function primeHowlForBackground(howl, options) {
     return howl.__backgroundPrimingPromise
 }
 
-$('#resume-button').on('click', function() { requestAudioFocus() })
+$('#resume-button').on('click', function() { requestAudioFocus().catch(() => {}) })
 $('#resume-overlay').hide();
 
 
@@ -1144,6 +1178,9 @@ class PlayerSimple extends EventEmitter
             .catch(error => {
                 console.error('[AudioFocus] Error requesting focus:', error);
                 this._playRequested = false;
+                // Held back by a call (e.g. a step fired mid-call): queue it so
+                // AUDIOFOCUS_GAIN starts it when the call ends instead of losing it.
+                if (error === 'call in progress' && !PAUSED_PLAYERS.includes(this)) PAUSED_PLAYERS.push(this)
             });
         }
     }
