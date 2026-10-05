@@ -120,10 +120,9 @@ function fillZones(type, divID, mediaFolder) {
                             postFile('/mediaUpload/' + parcoursID + '/' + mediaFolder, formData)
                                 .then(() => {
                                     zone.media.src = file.name
-                                    save().then(() => PARCOURS.select(type, i))
-                                    loadMediaCheck().then(load)
+                                    return saveThenRecheck().then(() => PARCOURS.select(type, i))
                                 })
-                                .catch(error => console.error(error) && toastError('Erreur lors de l\'upload du fichier..'))
+                                .catch(error => { console.error(error); toastError('Erreur lors de l\'upload du fichier..') })
                                 .finally(() => input.remove())
                         })
                         input.click()
@@ -324,10 +323,9 @@ function load(data) {
                                     postFile('/mediaUpload/' + parcoursID + '/' + step.folder, formData )
                                         .then(() => {
                                             step.media[m].src = file.name
-                                            save().then(() => PARCOURS.select('steps', i))
-                                            loadMediaCheck().then(load)
+                                            return saveThenRecheck().then(() => PARCOURS.select('steps', i))
                                         })
-                                        .catch(error => console.error(error) && toastError('Erreur lors de l\'upload du fichier..'))
+                                        .catch(error => { console.error(error); toastError('Erreur lors de l\'upload du fichier..') })
                                         .finally(() => input.remove())
                                 })
                                 input.click()
@@ -657,6 +655,20 @@ function loadMediaList() {
         })
 }
 
+// Re-render from the in-memory model (fresh media-check warnings) without re-fetching:
+// a GET here can land before a pending (debounced) save, rebuild the model from the
+// server's older copy and make that save send it — the new media was then lost, and an
+// unreferenced Objets/ file deleted by the server (2026-10-05, uploads on TONKIN_V2).
+function rerender() {
+    reloading = true
+    return load(JSON.parse(JSON.stringify(PARCOURS.export())))
+}
+
+// After an upload: save first, then refresh the media check, then re-render.
+function saveThenRecheck() {
+    return save().then(loadMediaCheck).then(rerender)
+}
+
 function loadMediaCheck() {
     return get('/mediaCheck/' + parcoursID)
         .then(data => { MEDIACHECK = data; console.log('Media check loaded', data) })
@@ -674,10 +686,10 @@ PARCOURS.prewarmUpcomingStep = () => {}
 // first get media list json tree
 var MEDIALIST = null
 var MEDIACHECK = null
-loadMediaList()
+const firstLoad = loadMediaList()
     .then(load)
     .then(loadMap)
 
-// async: load media check results then refresh UI warnings
-loadMediaCheck().then(load)
+// async: load media check results then refresh UI warnings (after the first load, from the model)
+Promise.all([firstLoad, loadMediaCheck()]).then(rerender)
 
