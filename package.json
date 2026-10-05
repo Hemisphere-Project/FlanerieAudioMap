@@ -9,7 +9,8 @@
     "start": "node server.js",
     "telemetry:report": "node scripts/telemetry-report.js",
     "telemetry:analyze": "node telemetry/scripts/analyze.mjs",
-    "telemetry:session": "node telemetry/scripts/session.mjs"
+    "telemetry:session": "node telemetry/scripts/session.mjs",
+    "telemetry:live": "node telemetry/scripts/live.mjs"
   },
   "author": "",
   "license": "ISC",

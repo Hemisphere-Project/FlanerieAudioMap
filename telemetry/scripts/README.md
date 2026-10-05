@@ -7,6 +7,7 @@ JSON files. Plain Node ESM, no dependencies.
 |---|---|
 | `analyze.mjs` | Day / fleet-wide report — completion, device re-use, GPS-blackout scan, anomaly flags, build versions. |
 | `session.mjs` | Deep drill-down on one session — step timeline, GPS gaps, route progression, audio-error breakdown. |
+| `live.mjs` | Follow a field walk **live** — new sessions + build check, steps, audio/GPS/crash issues, silent phones, a FLEET line every 5 min. |
 | `common.mjs` | Shared helpers (session loading, summary metrics, GPS-gap detection). Not run directly. |
 
 The repo's existing `scripts/telemetry-report.js` (`npm run telemetry:report`) prints a
@@ -37,6 +38,12 @@ node telemetry/scripts/session.mjs 51nv
 npm run telemetry:session -- 51nv --types
 ```
 
+```sh
+# Live, during a field test (Ctrl-C to stop):
+node telemetry/scripts/live.mjs --since=1145 --expect=5d6b813
+npm run telemetry:live -- --since=1300 --poll=10 --focus     # phone-call tests
+```
+
 ### `analyze.mjs` options
 
 | Option | Meaning |
@@ -55,6 +62,18 @@ npm run telemetry:session -- 51nv --types
 | `--gap=SECONDS` | GPS-gap threshold to list (default 90). |
 | `--types` | Also print the full event-type histogram. |
 | `--dir=PATH` | Telemetry directory. |
+
+### `live.mjs` options
+
+| Option | Meaning |
+|---|---|
+| `--since=HHMM` | Only sessions started at/after this local time today (or `YYYYMMDD_HHMM`; default: the last 60 min). |
+| `--expect=COMMIT` | Flag sessions whose webapp commit differs — a phone still on the old bundle needs an app relaunch. |
+| `--poll=SECONDS` | Re-scan interval (default 30; phones push every ~30 s). |
+| `--focus` | Also print audio-focus and playback events (call / interruption tests). |
+| `--dir=PATH` | Telemetry directory. |
+
+A newer session from the same phone (walk start after onboarding) supersedes the older one, so it isn't reported as silent. If the SFTP mount drops, it prints `telemetry dir unreadable` and resumes when the mount is back.
 
 ## Field-day conventions (important for correct counts)
 
