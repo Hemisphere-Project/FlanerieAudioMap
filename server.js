@@ -17,9 +17,15 @@ import { parseFile } from 'music-metadata';
 // Simple Auth
 import { useSimpleAuth, requireAuth, requireAdmin, handleLogin, getUserRole, getGuestPassword, setGuestPassword } from './modules/simpleAuth.js';
 
+// Server event log (logs/server.log) — see modules/serverlog.js
+import { installProcessLog, installServerLog, installSocketLog, requestLog } from './modules/serverlog.js';
+installProcessLog();
+
 // Create express app
 const app = express();
 const server = http.createServer(app);
+installServerLog(server);
+app.use(requestLog);
 const upload = multer({ dest: 'media/' });
 
 // Use simple auth (cookie parser)
@@ -44,12 +50,13 @@ applyUpdater(app);
 import applyMapDownload from './modules/mapdownload.js';
 applyMapDownload(app);
 
-createStandaloneFlanerieChat({
+const chat = createStandaloneFlanerieChat({
   expressApp: app,
   httpServer: server,
   mountPath: '/chat',
   socketPath: '/chat/socket.io'
 });
+installSocketLog(chat && chat.io);
 
 // Set the static path
 app.use(express.static(path.join(__dirname, 'www')));
